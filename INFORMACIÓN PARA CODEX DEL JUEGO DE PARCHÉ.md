@@ -806,6 +806,47 @@ Regla esencial: los elementos visuales pueden cambiar de textura, forma, imagen,
   iOS 18.6 y Pixel 9 Pro XL con Android 16/API 36. El Android queda abierto en
   landscape real, con marco lógico y físico horizontales.
 
+### AdMob, consentimiento y seguridad familiar — 29 de julio de 2026
+
+- AdMob se usa exclusivamente en Android y iOS. macOS continúa usando el
+  controlador sin anuncios y no reserva espacio para banners ni ofrece
+  recompensas publicitarias.
+- Los mensajes de **Regulaciones europeas** y **Regulaciones estatales de
+  Estados Unidos** están publicados en AdMob para las dos apps móviles; cada
+  sección muestra `1 active`. Los mensajes están disponibles en inglés y
+  español latinoamericano.
+- Las unidades activas verificadas son dos banners y una recompensa por
+  plataforma. El código utiliza el banner principal y la recompensa de
+  producción correspondientes a cada sistema; las compilaciones de depuración
+  usan únicamente los IDs oficiales de prueba de Google.
+- La recompensa configurada en AdMob es de **100 monedas** tanto en Android
+  como en iOS. El juego acredita las monedas solamente cuando recibe el evento
+  que confirma que el anuncio recompensado fue completado.
+- Las dos apps quedaron limitadas a la clasificación publicitaria
+  **General Audiences (G)**. También se bloquearon las categorías de
+  procedimientos cosméticos, citas, drogas y suplementos, enriquecimiento
+  rápido, referencias sexuales, salud sexual y reproductiva, casino social y
+  pérdida de peso. Alcohol y apuestas para mayores ya estaban bloqueados.
+- La misma clasificación `G` se aplica en el código antes de inicializar el
+  SDK, después de obtener el consentimiento mediante UMP.
+- iOS contiene los 50 `SKAdNetworkIdentifier` de la lista oficial de Google,
+  sin duplicados. No se solicita ATT ni acceso al IDFA; por eso el mensaje
+  explicativo de IDFA no se publica y no se considera una función pendiente.
+- La política de privacidad pública explica Analytics, banners, recompensas,
+  consentimiento, exclusión de macOS y ausencia de rastreo IDFA.
+- El Centro de políticas de AdMob no reporta incidencias. `app-ads.txt` ya está
+  publicado y verificado en `https://liisgo.com/app-ads.txt` para las apps
+  aprobadas de la cuenta.
+- Pendiente de publicación, no de implementación: AdMob mantiene Parchese Pop
+  con `Requires review / Limited ad serving` hasta que las fichas reales de
+  Google Play y App Store estén publicadas y se añadan a las dos apps. En ese
+  momento debe usarse `liisgo.com` como sitio del desarrollador para que AdMob
+  detecte el mismo `app-ads.txt`.
+- El proyecto Firebase y la cuenta de AdMob pertenecen actualmente a dos
+  accesos de Google distintos. No se debe crear otra app Firebase duplicada.
+  El vínculo se completa después de dar acceso al proyecto Firebase a la misma
+  cuenta administradora de AdMob y de añadir las fichas de las tiendas.
+
 ### Corrección estructural completada
 
 La ruta simplificada anterior de 52 casillas fue sustituida por el tablero tradicional de 68 posiciones, siete pasos privados y meta central. La geometría visual usa una cuadrícula lógica de 20 por 20 para reproducir las casillas rectangulares, las bases, los giros y el centro de la referencia, conservando la regla local de salir con cinco.
