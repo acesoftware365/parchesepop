@@ -75,6 +75,11 @@ cosmetic content and do not provide a competitive advantage.
 - Google Play feature graphic:
   `store_assets/google_play/feature-graphic-1024x500.png`
 - Google Play icon: `store_assets/google_play/icon-512-rgba.png`
+- Google Play phone screenshots:
+  - `store_assets/google_play/phone/01-home-1080x1920.png`
+  - `store_assets/google_play/phone/02-gameplay-1080x1920.png`
+  - `store_assets/google_play/phone/03-shop-1080x1920.png`
+  - `store_assets/google_play/phone/04-traps-effects-1080x1920.png`
 - iOS screenshots:
   - `store_assets/ios/01-home-1290x2796.png`
   - `store_assets/ios/02-gameplay-1290x2796.png`
@@ -116,8 +121,10 @@ upload assets.
   términos. El correo y la categoría `Game` están preparados, pero los
   términos no se han aceptado en nombre del propietario.
 - Recursos: las capturas finales de iPhone, iPad, Google Play y macOS están en
-  `store_assets/`. Todos los PNG de entrega tienen dimensiones válidas, color
-  RGB y no contienen transparencia, anuncios ni datos personales.
+  `store_assets/`. Todas las capturas de entrega tienen dimensiones válidas,
+  color RGB y no contienen transparencia, anuncios ni datos personales. El
+  icono adaptable de Google Play conserva la transparencia que requiere ese
+  recurso.
 - Analytics: la compilación actual usa `NoopGameAnalytics`; no incluye Firebase
   ni transmite eventos de Analytics.
 - AdMob: IDs de banner y rewarded configurados solo para Android/iOS. macOS no
