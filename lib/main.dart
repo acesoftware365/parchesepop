@@ -1526,7 +1526,7 @@ class PlayHome extends StatelessWidget {
       final densePortrait =
           narrow && !compactLandscape && viewport.maxHeight < 730;
       final padding = compactLandscape
-          ? const EdgeInsets.fromLTRB(14, 8, 14, 10)
+          ? const EdgeInsets.fromLTRB(10, 6, 10, 3)
           : narrow
           ? const EdgeInsets.fromLTRB(14, 14, 14, 16)
           : const EdgeInsets.fromLTRB(24, 18, 24, 22);
@@ -1566,7 +1566,9 @@ class PlayHome extends StatelessWidget {
                 return ConstrainedBox(
                   constraints: BoxConstraints(minHeight: availableHeight),
                   child: Column(
-                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    mainAxisAlignment: compactLandscape
+                        ? MainAxisAlignment.start
+                        : MainAxisAlignment.spaceBetween,
                     crossAxisAlignment: CrossAxisAlignment.stretch,
                     children: [
                       _HomeTopBar(
@@ -1584,7 +1586,7 @@ class PlayHome extends StatelessWidget {
                       Padding(
                         padding: EdgeInsets.symmetric(
                           vertical: compactLandscape
-                              ? 8
+                              ? 5
                               : densePortrait
                               ? 10
                               : 18,
@@ -1592,8 +1594,8 @@ class PlayHome extends StatelessWidget {
                         child: Column(
                           crossAxisAlignment: CrossAxisAlignment.stretch,
                           children: [
-                            const _HomeSectionTitle(),
-                            SizedBox(height: compactLandscape ? 7 : 12),
+                            _HomeSectionTitle(compact: compactLandscape),
+                            SizedBox(height: compactLandscape ? 4 : 12),
                             if (horizontalModes)
                               Row(
                                 crossAxisAlignment: CrossAxisAlignment.start,
@@ -1666,7 +1668,7 @@ class PlayHome extends StatelessWidget {
                               ),
                             ],
                           ),
-                          SizedBox(height: compactLandscape ? 8 : 13),
+                          SizedBox(height: compactLandscape ? 2 : 13),
                         ],
                       ),
                     ],
@@ -2508,7 +2510,9 @@ class _HomePlayerCard extends StatelessWidget {
 }
 
 class _HomeSectionTitle extends StatelessWidget {
-  const _HomeSectionTitle();
+  const _HomeSectionTitle({this.compact = false});
+
+  final bool compact;
 
   @override
   Widget build(BuildContext context) => Column(
@@ -2530,7 +2534,10 @@ class _HomeSectionTitle extends StatelessWidget {
           ),
           const SizedBox(width: 12),
           Container(
-            padding: const EdgeInsets.symmetric(horizontal: 17, vertical: 7),
+            padding: EdgeInsets.symmetric(
+              horizontal: compact ? 14 : 17,
+              vertical: compact ? 5 : 7,
+            ),
             decoration: BoxDecoration(
               color: PopColors.yellow,
               borderRadius: BorderRadius.circular(30),
@@ -2543,16 +2550,20 @@ class _HomeSectionTitle extends StatelessWidget {
                 ),
               ],
             ),
-            child: const Row(
+            child: Row(
               mainAxisSize: MainAxisSize.min,
               children: [
-                Icon(Icons.stars_rounded, color: PopColors.navy, size: 18),
-                SizedBox(width: 7),
+                const Icon(
+                  Icons.stars_rounded,
+                  color: PopColors.navy,
+                  size: 18,
+                ),
+                const SizedBox(width: 7),
                 PopText(
                   'ELIGE TU PARTIDA',
                   style: TextStyle(
-                    fontSize: 13,
-                    letterSpacing: 1.1,
+                    fontSize: compact ? 11.5 : 13,
+                    letterSpacing: compact ? .8 : 1.1,
                     fontWeight: FontWeight.w900,
                     color: PopColors.navy,
                   ),
@@ -2576,16 +2587,18 @@ class _HomeSectionTitle extends StatelessWidget {
           ),
         ],
       ),
-      const SizedBox(height: 7),
-      const PopText(
-        'Elige tu partida y lleva tus cuatro fichas al centro.',
-        textAlign: TextAlign.center,
-        style: TextStyle(
-          color: Color(0xFFE7EEFF),
-          fontSize: 12,
-          fontWeight: FontWeight.w700,
+      if (!compact) ...[
+        const SizedBox(height: 7),
+        const PopText(
+          'Elige tu partida y lleva tus cuatro fichas al centro.',
+          textAlign: TextAlign.center,
+          style: TextStyle(
+            color: Color(0xFFE7EEFF),
+            fontSize: 12,
+            fontWeight: FontWeight.w700,
+          ),
         ),
-      ),
+      ],
     ],
   );
 }
@@ -2601,12 +2614,12 @@ class _HomeMenuDock extends StatelessWidget {
     key: const ValueKey('home-menu-dock'),
     width: double.infinity,
     padding: EdgeInsets.symmetric(
-      horizontal: compact ? 8 : 12,
-      vertical: compact ? 7 : 10,
+      horizontal: compact ? 6 : 12,
+      vertical: compact ? 4 : 10,
     ),
     decoration: BoxDecoration(
       color: const Color(0xFF071B40).withValues(alpha: .68),
-      borderRadius: BorderRadius.circular(26),
+      borderRadius: BorderRadius.circular(compact ? 20 : 26),
       border: Border.all(
         color: Colors.white.withValues(alpha: .28),
         width: 1.5,
@@ -2719,6 +2732,80 @@ class _RoundMenuButtonState extends State<_RoundMenuButton> {
     final foreground = widget.color == PopColors.yellow
         ? PopColors.navy
         : Colors.white;
+    if (compact) {
+      return MouseRegion(
+        onEnter: (_) => setState(() => hovered = true),
+        onExit: (_) => setState(() => hovered = false),
+        child: AnimatedScale(
+          scale: pressed ? .96 : (hovered ? 1.025 : 1),
+          duration: const Duration(milliseconds: 120),
+          curve: Curves.easeOut,
+          child: SizedBox(
+            width: 126,
+            height: 48,
+            child: Material(
+              color: Colors.white.withValues(alpha: .08),
+              borderRadius: BorderRadius.circular(15),
+              clipBehavior: Clip.antiAlias,
+              child: InkWell(
+                borderRadius: BorderRadius.circular(15),
+                onHighlightChanged: (value) => setState(() => pressed = value),
+                onTap: widget.onTap,
+                child: Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 5),
+                  child: Row(
+                    children: [
+                      Container(
+                        width: 38,
+                        height: 38,
+                        decoration: BoxDecoration(
+                          gradient: LinearGradient(
+                            begin: Alignment.topLeft,
+                            end: Alignment.bottomRight,
+                            colors: [
+                              Color.lerp(widget.color, Colors.white, .24)!,
+                              widget.color,
+                            ],
+                          ),
+                          borderRadius: BorderRadius.circular(12),
+                          border: Border.all(color: Colors.white, width: 2),
+                          boxShadow: [
+                            BoxShadow(
+                              color: widget.color.withValues(alpha: .28),
+                              blurRadius: 6,
+                              offset: const Offset(0, 3),
+                            ),
+                          ],
+                        ),
+                        child: Icon(widget.icon, color: foreground, size: 22),
+                      ),
+                      const SizedBox(width: 5),
+                      Expanded(
+                        child: _AutoFitSingleLineText(
+                          widget.label,
+                          style: const TextStyle(
+                            fontSize: 9.5,
+                            fontWeight: FontWeight.w900,
+                            color: Colors.white,
+                            shadows: [
+                              Shadow(
+                                color: Color(0x66000000),
+                                offset: Offset(0, 2),
+                                blurRadius: 4,
+                              ),
+                            ],
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            ),
+          ),
+        ),
+      );
+    }
     return MouseRegion(
       onEnter: (_) => setState(() => hovered = true),
       onExit: (_) => setState(() => hovered = false),
@@ -2727,7 +2814,7 @@ class _RoundMenuButtonState extends State<_RoundMenuButton> {
         duration: const Duration(milliseconds: 120),
         curve: Curves.easeOut,
         child: SizedBox(
-          width: compact ? 72 : 86,
+          width: compact ? 64 : 86,
           child: Material(
             color: Colors.transparent,
             child: InkWell(
@@ -2743,10 +2830,10 @@ class _RoundMenuButtonState extends State<_RoundMenuButton> {
                       alignment: Alignment.center,
                       children: [
                         Transform.translate(
-                          offset: const Offset(0, 5),
+                          offset: Offset(0, compact ? 3 : 5),
                           child: Container(
-                            width: compact ? 48 : 56,
-                            height: compact ? 48 : 56,
+                            width: compact ? 44 : 56,
+                            height: compact ? 44 : 56,
                             decoration: BoxDecoration(
                               color: Color.lerp(
                                 widget.color,
@@ -2758,8 +2845,8 @@ class _RoundMenuButtonState extends State<_RoundMenuButton> {
                           ),
                         ),
                         Container(
-                          width: compact ? 48 : 56,
-                          height: compact ? 48 : 56,
+                          width: compact ? 44 : 56,
+                          height: compact ? 44 : 56,
                           decoration: BoxDecoration(
                             gradient: LinearGradient(
                               begin: Alignment.topLeft,
@@ -2782,18 +2869,18 @@ class _RoundMenuButtonState extends State<_RoundMenuButton> {
                           child: Icon(
                             widget.icon,
                             color: foreground,
-                            size: compact ? 27 : 31,
+                            size: compact ? 24 : 31,
                           ),
                         ),
                       ],
                     ),
-                    const SizedBox(height: 8),
+                    SizedBox(height: compact ? 3 : 8),
                     _AutoFitSingleLineText(
                       widget.label,
                       alignment: Alignment.center,
                       textAlign: TextAlign.center,
                       style: TextStyle(
-                        fontSize: compact ? 10 : 11,
+                        fontSize: compact ? 9 : 11,
                         fontWeight: FontWeight.w900,
                         color: Colors.white,
                         shadows: const [
@@ -2847,7 +2934,7 @@ class _ModeCardState extends State<_ModeCard> {
     final compact = MediaQuery.sizeOf(context).height < 520;
     final narrow = MediaQuery.sizeOf(context).width < 500 && !compact;
     final minHeight = compact
-        ? 108.0
+        ? 90.0
         : widget.dense
         ? 110.0
         : narrow
@@ -2869,7 +2956,7 @@ class _ModeCardState extends State<_ModeCard> {
           curve: Curves.easeOut,
           scale: pressed ? .975 : (hovered ? 1.012 : 1),
           child: Padding(
-            padding: const EdgeInsets.only(bottom: 7),
+            padding: EdgeInsets.only(bottom: compact ? 5 : 7),
             child: Stack(
               children: [
                 Positioned.fill(
@@ -2929,7 +3016,7 @@ class _ModeCardState extends State<_ModeCard> {
                           Padding(
                             padding: EdgeInsets.all(
                               compact
-                                  ? 13
+                                  ? 9
                                   : widget.dense
                                   ? 12
                                   : narrow
@@ -2942,7 +3029,7 @@ class _ModeCardState extends State<_ModeCard> {
                                   color: widget.color,
                                   icon: widget.icon,
                                   size: compact
-                                      ? 64
+                                      ? 52
                                       : widget.dense
                                       ? 58
                                       : narrow
@@ -2965,7 +3052,7 @@ class _ModeCardState extends State<_ModeCard> {
                                         style: TextStyle(
                                           fontSize:
                                               compact || narrow || widget.dense
-                                              ? 20
+                                              ? (compact ? 18 : 20)
                                               : 24,
                                           height: .98,
                                           letterSpacing: -.45,
@@ -2985,9 +3072,9 @@ class _ModeCardState extends State<_ModeCard> {
                                         widget.subtitle,
                                         maxLines: 2,
                                         overflow: TextOverflow.ellipsis,
-                                        style: const TextStyle(
+                                        style: TextStyle(
                                           color: Color(0xFFF4F7FF),
-                                          fontSize: 11,
+                                          fontSize: compact ? 10 : 11,
                                           height: 1.18,
                                           fontWeight: FontWeight.w700,
                                         ),
@@ -2998,8 +3085,8 @@ class _ModeCardState extends State<_ModeCard> {
                                 const SizedBox(width: 7),
                                 Container(
                                   padding: EdgeInsets.symmetric(
-                                    horizontal: compact ? 8 : 11,
-                                    vertical: compact ? 7 : 9,
+                                    horizontal: compact ? 7 : 11,
+                                    vertical: compact ? 6 : 9,
                                   ),
                                   decoration: BoxDecoration(
                                     color: Colors.white.withValues(alpha: .95),
@@ -4912,6 +4999,13 @@ class _GameScreenState extends State<GameScreen> {
                             )
                             .toDouble()
                       : box.maxWidth;
+                  final availableRailWidth = sideBySide
+                      ? math.max(0.0, box.maxWidth - boardSize - railGap)
+                      : 0.0;
+                  final phoneLandscape =
+                      sideBySide &&
+                      box.maxHeight <= 430 &&
+                      availableRailWidth >= 330;
                   final rawMovePopup = _buildMovePopup();
                   final movePopup = rawMovePopup == null
                       ? null
@@ -4967,6 +5061,7 @@ class _GameScreenState extends State<GameScreen> {
                   final quickBar = _GameQuickBar(
                     chaos: engine.isChaos,
                     compact: sideBySide,
+                    phoneLandscape: phoneLandscape,
                     attached: !sideBySide,
                     elapsed: matchElapsed,
                     onBack: _returnToStart,
@@ -4990,46 +5085,122 @@ class _GameScreenState extends State<GameScreen> {
                   return KeyedSubtree(
                     key: const ValueKey('game-content-area'),
                     child: sideBySide
-                        ? Row(
-                            key: const ValueKey('game-side-layout'),
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              board,
-                              const SizedBox(width: railGap),
-                              Expanded(
-                                key: const ValueKey('game-rail-slot'),
-                                child: Column(
-                                  children: [
-                                    quickBar,
-                                    ?spectatorBar,
-                                    ?trapDiagnostics,
-                                    ?chatBanner,
-                                    ?trapAlert,
-                                    ?movePopup,
-                                    const SizedBox(height: 3),
-                                    Expanded(
-                                      child: _GameSideRail(
-                                        engine: engine,
-                                        elapsed: matchElapsed,
-                                        selectedToken: selectedToken,
-                                        onDieSelected: _moveSelectedToken,
-                                        onCancelSelection:
-                                            _cancelTokenSelection,
-                                        onShowPowers: _showPowerStatus,
-                                        onShowChat: widget.onlineSession == null
-                                            ? null
-                                            : _showSafeChatPicker,
-                                        diceStyleId: diceStyleId,
-                                        onlineSession: widget.onlineSession,
-                                        avatarIds: avatarIds,
-                                        revealTrapDetails:
-                                            trapDiagnosticsEnabled,
-                                      ),
-                                    ),
-                                  ],
+                        ? KeyedSubtree(
+                            key: phoneLandscape
+                                ? const ValueKey('phone-landscape-layout')
+                                : null,
+                            child: Row(
+                              key: const ValueKey('game-side-layout'),
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                board,
+                                const SizedBox(width: railGap),
+                                Expanded(
+                                  key: const ValueKey('game-rail-slot'),
+                                  child: phoneLandscape
+                                      ? Stack(
+                                          fit: StackFit.expand,
+                                          children: [
+                                            Column(
+                                              children: [
+                                                quickBar,
+                                                ?spectatorBar,
+                                                const SizedBox(height: 3),
+                                                Expanded(
+                                                  child: _GameSideRail(
+                                                    engine: engine,
+                                                    elapsed: matchElapsed,
+                                                    selectedToken:
+                                                        selectedToken,
+                                                    onDieSelected:
+                                                        _moveSelectedToken,
+                                                    onCancelSelection:
+                                                        _cancelTokenSelection,
+                                                    onShowPowers:
+                                                        _showPowerStatus,
+                                                    onShowChat:
+                                                        widget.onlineSession ==
+                                                            null
+                                                        ? null
+                                                        : _showSafeChatPicker,
+                                                    diceStyleId: diceStyleId,
+                                                    onlineSession:
+                                                        widget.onlineSession,
+                                                    avatarIds: avatarIds,
+                                                    revealTrapDetails:
+                                                        trapDiagnosticsEnabled,
+                                                    wideShortLandscape: true,
+                                                  ),
+                                                ),
+                                              ],
+                                            ),
+                                            if (trapDiagnostics != null)
+                                              Positioned(
+                                                top:
+                                                    49 +
+                                                    (spectatorBar == null
+                                                        ? 0
+                                                        : 40),
+                                                left: 5,
+                                                right: 66,
+                                                child: trapDiagnostics,
+                                              ),
+                                            if (movePopup ??
+                                                    trapAlert ??
+                                                    chatBanner
+                                                case final overlay?)
+                                              Positioned(
+                                                left: 5,
+                                                right: 66,
+                                                bottom: 5,
+                                                child: ConstrainedBox(
+                                                  constraints:
+                                                      const BoxConstraints(
+                                                        maxHeight: 170,
+                                                      ),
+                                                  child: SingleChildScrollView(
+                                                    child: overlay,
+                                                  ),
+                                                ),
+                                              ),
+                                          ],
+                                        )
+                                      : Column(
+                                          children: [
+                                            quickBar,
+                                            ?spectatorBar,
+                                            ?trapDiagnostics,
+                                            ?chatBanner,
+                                            ?trapAlert,
+                                            ?movePopup,
+                                            const SizedBox(height: 3),
+                                            Expanded(
+                                              child: _GameSideRail(
+                                                engine: engine,
+                                                elapsed: matchElapsed,
+                                                selectedToken: selectedToken,
+                                                onDieSelected:
+                                                    _moveSelectedToken,
+                                                onCancelSelection:
+                                                    _cancelTokenSelection,
+                                                onShowPowers: _showPowerStatus,
+                                                onShowChat:
+                                                    widget.onlineSession == null
+                                                    ? null
+                                                    : _showSafeChatPicker,
+                                                diceStyleId: diceStyleId,
+                                                onlineSession:
+                                                    widget.onlineSession,
+                                                avatarIds: avatarIds,
+                                                revealTrapDetails:
+                                                    trapDiagnosticsEnabled,
+                                              ),
+                                            ),
+                                          ],
+                                        ),
                                 ),
-                              ),
-                            ],
+                              ],
+                            ),
                           )
                         : SingleChildScrollView(
                             child: Column(
@@ -5358,6 +5529,7 @@ class _GameQuickBar extends StatelessWidget {
   const _GameQuickBar({
     required this.chaos,
     required this.compact,
+    this.phoneLandscape = false,
     required this.attached,
     required this.elapsed,
     required this.onBack,
@@ -5369,6 +5541,7 @@ class _GameQuickBar extends StatelessWidget {
 
   final bool chaos;
   final bool compact;
+  final bool phoneLandscape;
   final bool attached;
   final Duration elapsed;
   final VoidCallback onBack;
@@ -5379,8 +5552,8 @@ class _GameQuickBar extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final iconSize = compact ? 18.0 : 20.0;
-    final height = compact ? 36.0 : 42.0;
+    final iconSize = compact ? (phoneLandscape ? 19.0 : 18.0) : 20.0;
+    final height = compact ? (phoneLandscape ? 44.0 : 36.0) : 42.0;
     final borderRadius = attached
         ? const BorderRadius.only(
             bottomLeft: Radius.circular(14),
@@ -5402,6 +5575,7 @@ class _GameQuickBar extends StatelessWidget {
               tooltip: appTranslate(context, 'Volver al inicio'),
               icon: Icons.arrow_back_rounded,
               iconSize: iconSize,
+              expandedTarget: phoneLandscape,
               onPressed: onBack,
             ),
             Expanded(
@@ -5419,9 +5593,9 @@ class _GameQuickBar extends StatelessWidget {
                 ),
               ),
             ),
-            if (!compact) ...[
+            if (!compact || phoneLandscape) ...[
               const SizedBox(width: 3),
-              _MatchTimerBadge(elapsed: elapsed),
+              _MatchTimerBadge(elapsed: elapsed, compact: phoneLandscape),
               const SizedBox(width: 2),
             ],
             if (chaos)
@@ -5429,6 +5603,7 @@ class _GameQuickBar extends StatelessWidget {
                 tooltip: appTranslate(context, 'Poderes y trampas'),
                 icon: Icons.backpack_rounded,
                 iconSize: iconSize,
+                expandedTarget: phoneLandscape,
                 onPressed: onShowPowers,
               ),
             _GameQuickAction(
@@ -5436,18 +5611,21 @@ class _GameQuickBar extends StatelessWidget {
               tooltip: appTranslate(context, 'Historial de eventos'),
               icon: Icons.history_rounded,
               iconSize: iconSize,
+              expandedTarget: phoneLandscape,
               onPressed: onShowHistory,
             ),
             _GameQuickAction(
               tooltip: appTranslate(context, 'Cómo jugar'),
               icon: Icons.help_rounded,
               iconSize: iconSize,
+              expandedTarget: phoneLandscape,
               onPressed: onShowGuide,
             ),
             _GameQuickAction(
               tooltip: appTranslate(context, 'Ajustes'),
               icon: Icons.settings_rounded,
               iconSize: iconSize,
+              expandedTarget: phoneLandscape,
               onPressed: onShowSettings,
             ),
           ],
@@ -5463,12 +5641,14 @@ class _GameQuickAction extends StatelessWidget {
     required this.tooltip,
     required this.icon,
     required this.iconSize,
+    this.expandedTarget = false,
     required this.onPressed,
   });
 
   final String tooltip;
   final IconData icon;
   final double iconSize;
+  final bool expandedTarget;
   final VoidCallback onPressed;
 
   @override
@@ -5477,8 +5657,8 @@ class _GameQuickAction extends StatelessWidget {
     visualDensity: VisualDensity.compact,
     padding: EdgeInsets.zero,
     constraints: BoxConstraints.tightFor(
-      width: iconSize <= 18 ? 30 : 34,
-      height: 34,
+      width: expandedTarget ? 44 : (iconSize <= 18 ? 30 : 34),
+      height: expandedTarget ? 44 : 34,
     ),
     iconSize: iconSize,
     onPressed: onPressed,
@@ -5757,6 +5937,7 @@ class _GameSideRail extends StatefulWidget {
     this.diceStyleId,
     this.onlineSession,
     this.revealTrapDetails = false,
+    this.wideShortLandscape = false,
   });
 
   final GameEngine engine;
@@ -5770,6 +5951,7 @@ class _GameSideRail extends StatefulWidget {
   final String? diceStyleId;
   final OnlineMatchSession? onlineSession;
   final bool revealTrapDetails;
+  final bool wideShortLandscape;
 
   @override
   State<_GameSideRail> createState() => _GameSideRailState();
@@ -5791,6 +5973,145 @@ class _GameSideRailState extends State<_GameSideRail> {
   @override
   Widget build(BuildContext context) {
     final chaos = widget.engine.isChaos;
+    Widget selectedContent() => switch (selectedTab) {
+      0 =>
+        widget.wideShortLandscape
+            ? Column(
+                key: const ValueKey('game-rail-control'),
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  GameControlPanel(
+                    engine: widget.engine,
+                    selectedToken: widget.selectedToken,
+                    onDieSelected: widget.onDieSelected,
+                    onCancelSelection: widget.onCancelSelection,
+                    onShowChat: widget.onShowChat,
+                    compact: true,
+                    landscapeHud: true,
+                    diceStyleId: widget.diceStyleId,
+                    avatarIds: widget.avatarIds,
+                  ),
+                  const SizedBox(height: 5),
+                  _LandscapePlayerStrip(
+                    engine: widget.engine,
+                    onlineSession: widget.onlineSession,
+                    avatarIds: widget.avatarIds,
+                  ),
+                ],
+              )
+            : GameControlPanel(
+                key: const ValueKey('game-rail-control'),
+                engine: widget.engine,
+                selectedToken: widget.selectedToken,
+                onDieSelected: widget.onDieSelected,
+                onCancelSelection: widget.onCancelSelection,
+                onShowChat: widget.onShowChat,
+                compact: true,
+                diceStyleId: widget.diceStyleId,
+                avatarIds: widget.avatarIds,
+              ),
+      1 => PlayerRoster(
+        key: const ValueKey('game-rail-roster'),
+        engine: widget.engine,
+        onlineSession: widget.onlineSession,
+        avatarIds: widget.avatarIds,
+        revealTrapDetails: widget.revealTrapDetails,
+      ),
+      _ => _GamePowerRail(
+        key: const ValueKey('game-rail-power-panel'),
+        engine: widget.engine,
+        onShowPowers: widget.onShowPowers,
+        onlineSession: widget.onlineSession,
+        revealTrapDetails: widget.revealTrapDetails,
+      ),
+    };
+    if (widget.wideShortLandscape) {
+      return Container(
+        key: const ValueKey('game-side-rail'),
+        decoration: BoxDecoration(
+          gradient: const LinearGradient(
+            begin: Alignment.topLeft,
+            end: Alignment.bottomRight,
+            colors: [Color(0xFF214F94), PopColors.navy],
+          ),
+          borderRadius: BorderRadius.circular(18),
+          border: Border.all(color: Colors.white, width: 2),
+          boxShadow: const [
+            BoxShadow(
+              color: Color(0x4017284D),
+              blurRadius: 12,
+              offset: Offset(0, 5),
+            ),
+          ],
+        ),
+        clipBehavior: Clip.antiAlias,
+        child: Row(
+          children: [
+            Expanded(
+              child: SingleChildScrollView(
+                padding: const EdgeInsets.fromLTRB(6, 6, 5, 7),
+                child: AnimatedSwitcher(
+                  duration: const Duration(milliseconds: 260),
+                  child: selectedContent(),
+                ),
+              ),
+            ),
+            Container(
+              key: const ValueKey('phone-landscape-tab-dock'),
+              width: 62,
+              padding: const EdgeInsets.all(5),
+              decoration: BoxDecoration(
+                color: Colors.white.withValues(alpha: .12),
+                border: Border(
+                  left: BorderSide(
+                    color: Colors.white.withValues(alpha: .28),
+                    width: 1.5,
+                  ),
+                ),
+              ),
+              child: Column(
+                children: [
+                  Expanded(
+                    child: _GameRailTab(
+                      key: const ValueKey('game-rail-play'),
+                      selected: selectedTab == 0,
+                      icon: Icons.casino_rounded,
+                      label: 'Jugar',
+                      verticalDock: true,
+                      onTap: () => setState(() => selectedTab = 0),
+                    ),
+                  ),
+                  const SizedBox(height: 5),
+                  Expanded(
+                    child: _GameRailTab(
+                      key: const ValueKey('game-rail-players'),
+                      selected: selectedTab == 1,
+                      icon: Icons.groups_rounded,
+                      label: 'Jugadores',
+                      verticalDock: true,
+                      onTap: () => setState(() => selectedTab = 1),
+                    ),
+                  ),
+                  const SizedBox(height: 5),
+                  Expanded(
+                    child: _GameRailTab(
+                      key: const ValueKey('game-rail-powers'),
+                      selected: selectedTab == 2,
+                      icon: chaos
+                          ? Icons.auto_awesome_rounded
+                          : Icons.menu_book_rounded,
+                      label: chaos ? 'Trampas' : 'Reglas',
+                      verticalDock: true,
+                      onTap: () => setState(() => selectedTab = 2),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
+      );
+    }
     return Container(
       key: const ValueKey('game-side-rail'),
       decoration: BoxDecoration(
@@ -5876,33 +6197,7 @@ class _GameSideRailState extends State<_GameSideRail> {
                 padding: const EdgeInsets.fromLTRB(5, 2, 5, 7),
                 child: AnimatedSwitcher(
                   duration: const Duration(milliseconds: 260),
-                  child: switch (selectedTab) {
-                    0 => GameControlPanel(
-                      key: const ValueKey('game-rail-control'),
-                      engine: widget.engine,
-                      selectedToken: widget.selectedToken,
-                      onDieSelected: widget.onDieSelected,
-                      onCancelSelection: widget.onCancelSelection,
-                      onShowChat: widget.onShowChat,
-                      compact: true,
-                      diceStyleId: widget.diceStyleId,
-                      avatarIds: widget.avatarIds,
-                    ),
-                    1 => PlayerRoster(
-                      key: const ValueKey('game-rail-roster'),
-                      engine: widget.engine,
-                      onlineSession: widget.onlineSession,
-                      avatarIds: widget.avatarIds,
-                      revealTrapDetails: widget.revealTrapDetails,
-                    ),
-                    _ => _GamePowerRail(
-                      key: const ValueKey('game-rail-power-panel'),
-                      engine: widget.engine,
-                      onShowPowers: widget.onShowPowers,
-                      onlineSession: widget.onlineSession,
-                      revealTrapDetails: widget.revealTrapDetails,
-                    ),
-                  },
+                  child: selectedContent(),
                 ),
               ),
             ),
@@ -5920,36 +6215,50 @@ class _GameRailTab extends StatelessWidget {
     required this.icon,
     required this.label,
     required this.onTap,
+    this.verticalDock = false,
   });
 
   final bool selected;
   final IconData icon;
   final String label;
   final VoidCallback onTap;
+  final bool verticalDock;
 
   @override
   Widget build(BuildContext context) => Material(
-    color: selected ? PopColors.blue : PopColors.cloud,
+    color: selected
+        ? (verticalDock ? PopColors.yellow : PopColors.blue)
+        : (verticalDock
+              ? Colors.white.withValues(alpha: .12)
+              : PopColors.cloud),
     borderRadius: BorderRadius.circular(11),
     child: InkWell(
       borderRadius: BorderRadius.circular(11),
       onTap: onTap,
       child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 3, vertical: 7),
+        padding: EdgeInsets.symmetric(
+          horizontal: 3,
+          vertical: verticalDock ? 4 : 7,
+        ),
         child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
           mainAxisSize: MainAxisSize.min,
           children: [
             Icon(
               icon,
-              size: 18,
-              color: selected ? Colors.white : PopColors.navy,
+              size: verticalDock ? 19 : 18,
+              color: verticalDock
+                  ? (selected ? PopColors.navy : Colors.white)
+                  : (selected ? Colors.white : PopColors.navy),
             ),
             PopText(
               label,
               maxLines: 1,
               style: TextStyle(
-                color: selected ? Colors.white : PopColors.navy,
-                fontSize: 8,
+                color: verticalDock
+                    ? (selected ? PopColors.navy : Colors.white)
+                    : (selected ? Colors.white : PopColors.navy),
+                fontSize: verticalDock ? 7.5 : 8,
                 fontWeight: FontWeight.w900,
               ),
             ),
@@ -5958,6 +6267,154 @@ class _GameRailTab extends StatelessWidget {
       ),
     ),
   );
+}
+
+class _LandscapePlayerStrip extends StatelessWidget {
+  const _LandscapePlayerStrip({
+    required this.engine,
+    required this.onlineSession,
+    required this.avatarIds,
+  });
+
+  final GameEngine engine;
+  final OnlineMatchSession? onlineSession;
+  final Map<PlayerColor, String?> avatarIds;
+
+  @override
+  Widget build(BuildContext context) => Container(
+    key: const ValueKey('landscape-player-strip'),
+    padding: const EdgeInsets.all(5),
+    decoration: BoxDecoration(
+      color: Colors.white.withValues(alpha: .92),
+      borderRadius: BorderRadius.circular(13),
+      border: Border.all(color: Colors.white, width: 1.5),
+    ),
+    child: Row(
+      children: [
+        for (var index = 0; index < engine.players.length; index++) ...[
+          if (index > 0) const SizedBox(width: 4),
+          Expanded(
+            child: _LandscapePlayerMiniTile(
+              player: engine.players[index],
+              active: index == engine.currentPlayerIndex,
+              participant: onlineSession?.participantForColor(
+                engine.players[index].color,
+              ),
+              avatarId: avatarIds[engine.players[index].color],
+              engine: engine,
+            ),
+          ),
+        ],
+      ],
+    ),
+  );
+}
+
+class _LandscapePlayerMiniTile extends StatelessWidget {
+  const _LandscapePlayerMiniTile({
+    required this.player,
+    required this.active,
+    required this.participant,
+    required this.avatarId,
+    required this.engine,
+  });
+
+  final PlayerState player;
+  final bool active;
+  final OnlineParticipant? participant;
+  final String? avatarId;
+  final GameEngine engine;
+
+  @override
+  Widget build(BuildContext context) {
+    final color = _playerUiColor(player.color);
+    final completed = player.tokens.where((token) => token.finished).length;
+    final traps = engine.activeTrapsFor(player.color).length;
+    final held = player.inventory;
+    final displayName = participant?.displayName ?? player.name;
+    return Tooltip(
+      message: appTranslate(
+        context,
+        '$displayName · $completed de 4 en meta'
+        '${held == null ? '' : ' · ${engine.powerUpName(held)}'}'
+        '${traps == 0 ? '' : ' · $traps trampas'}',
+      ),
+      child: AnimatedContainer(
+        duration: const Duration(milliseconds: 220),
+        constraints: const BoxConstraints(minHeight: 38),
+        padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 3),
+        decoration: BoxDecoration(
+          color: active ? color.withValues(alpha: .16) : Colors.transparent,
+          borderRadius: BorderRadius.circular(9),
+          border: Border.all(
+            color: active ? color : color.withValues(alpha: .20),
+            width: active ? 1.5 : 1,
+          ),
+        ),
+        child: Row(
+          children: [
+            CircleAvatar(
+              radius: 11,
+              backgroundColor: color.withValues(alpha: .18),
+              child: _AvatarArt(
+                avatarId:
+                    avatarId ??
+                    participant?.avatarId ??
+                    (player.isHuman ? 'avatar_default' : 'avatar_robot'),
+                size: 20,
+                withFrame: false,
+              ),
+            ),
+            const SizedBox(width: 3),
+            Expanded(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  _AutoFitSingleLineText(
+                    displayName,
+                    style: TextStyle(
+                      color: PopColors.navy,
+                      fontSize: 8.5,
+                      fontWeight: active ? FontWeight.w900 : FontWeight.w800,
+                    ),
+                  ),
+                  Row(
+                    children: [
+                      PopText(
+                        '$completed/4',
+                        style: TextStyle(
+                          color: color,
+                          fontSize: 8,
+                          fontWeight: FontWeight.w900,
+                        ),
+                      ),
+                      if (held != null || traps > 0) ...[
+                        const SizedBox(width: 3),
+                        Icon(
+                          held == PowerUp.shield
+                              ? Icons.shield_rounded
+                              : traps > 0
+                              ? Icons.warning_amber_rounded
+                              : Icons.auto_awesome_rounded,
+                          size: 10,
+                          color: held == PowerUp.shield
+                              ? PopColors.blue
+                              : traps > 0
+                              ? PopColors.red
+                              : const Color(0xFF7B61FF),
+                        ),
+                      ],
+                    ],
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
 }
 
 class _GamePowerRail extends StatelessWidget {
@@ -10060,6 +10517,7 @@ class GameControlPanel extends StatelessWidget {
     this.onCancelSelection,
     this.onShowChat,
     this.compact = false,
+    this.landscapeHud = false,
     this.diceStyleId,
     this.avatarIds = const <PlayerColor, String?>{},
   });
@@ -10069,6 +10527,7 @@ class GameControlPanel extends StatelessWidget {
   final VoidCallback? onCancelSelection;
   final VoidCallback? onShowChat;
   final bool compact;
+  final bool landscapeHud;
   final String? diceStyleId;
   final Map<PlayerColor, String?> avatarIds;
 
@@ -10454,6 +10913,176 @@ class GameControlPanel extends StatelessWidget {
       key: const ValueKey('game-control-panel'),
       child: LayoutBuilder(
         builder: (context, box) {
+          if (landscapeHud) {
+            return Container(
+              key: const ValueKey('phone-landscape-game-hud'),
+              padding: const EdgeInsets.fromLTRB(7, 6, 7, 7),
+              decoration: BoxDecoration(
+                gradient: const LinearGradient(
+                  begin: Alignment.topLeft,
+                  end: Alignment.bottomRight,
+                  colors: [Color(0xFF2D7BE8), Color(0xFF12376F)],
+                ),
+                borderRadius: BorderRadius.circular(15),
+                border: Border.all(
+                  color: Colors.white.withValues(alpha: .90),
+                  width: 1.5,
+                ),
+                boxShadow: const [
+                  BoxShadow(
+                    color: Color(0x4D07152F),
+                    blurRadius: 8,
+                    offset: Offset(0, 4),
+                  ),
+                ],
+              ),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Row(
+                    key: const ValueKey('landscape-player-status'),
+                    children: [
+                      SizedBox(
+                        width: 30,
+                        height: 30,
+                        child: ClipOval(
+                          child: _AvatarArt(
+                            avatarId:
+                                avatarIds[engine.currentPlayer.color] ??
+                                (engine.currentPlayer.isHuman
+                                    ? 'avatar_default'
+                                    : 'avatar_robot'),
+                            size: 30,
+                            withFrame: false,
+                          ),
+                        ),
+                      ),
+                      const SizedBox(width: 6),
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            _AutoFitSingleLineText(
+                              engine.currentPlayer.name,
+                              style: const TextStyle(
+                                color: Colors.white,
+                                fontSize: 12,
+                                fontWeight: FontWeight.w900,
+                              ),
+                            ),
+                            _AutoFitSingleLineText(
+                              phaseLabel,
+                              style: TextStyle(
+                                color: bonusTwentyActive
+                                    ? PopColors.yellow
+                                    : const Color(0xFFFFD5DA),
+                                fontSize: 8.5,
+                                fontWeight: FontWeight.w800,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                      if (onShowChat != null) ...[
+                        _HudMessageButton(
+                          onPressed: onShowChat!,
+                          compact: true,
+                        ),
+                        const SizedBox(width: 4),
+                      ],
+                      Container(
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 7,
+                          vertical: 4,
+                        ),
+                        decoration: BoxDecoration(
+                          color: engine.isChaos
+                              ? const Color(0xFFFFA02F)
+                              : PopColors.yellow,
+                          borderRadius: BorderRadius.circular(16),
+                          border: Border.all(color: Colors.white, width: 1),
+                        ),
+                        child: PopText(
+                          engine.isChaos ? '⚡ CAOS' : '🏆 CLÁSICO',
+                          style: const TextStyle(
+                            color: PopColors.navy,
+                            fontSize: 8,
+                            fontWeight: FontWeight.w900,
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 5),
+                  Row(
+                    key: const ValueKey('landscape-control-main-row'),
+                    crossAxisAlignment: CrossAxisAlignment.center,
+                    children: [
+                      dice,
+                      const SizedBox(width: 7),
+                      Expanded(
+                        child: Column(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            SizedBox(height: 42, child: portraitRollAction),
+                            const SizedBox(height: 4),
+                            SizedBox(
+                              height: 38,
+                              width: double.infinity,
+                              child: portraitItem,
+                            ),
+                          ],
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 5),
+                  Container(
+                    key: const ValueKey('landscape-game-message'),
+                    width: double.infinity,
+                    constraints: const BoxConstraints(minHeight: 27),
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 7,
+                      vertical: 4,
+                    ),
+                    decoration: BoxDecoration(
+                      color: const Color(0xFFF7F9FE),
+                      borderRadius: BorderRadius.circular(10),
+                      border: Border.all(
+                        color: Colors.white.withValues(alpha: .88),
+                      ),
+                    ),
+                    child: Row(
+                      children: [
+                        const Icon(
+                          Icons.campaign_rounded,
+                          size: 14,
+                          color: PopColors.blue,
+                        ),
+                        const SizedBox(width: 5),
+                        Expanded(
+                          child: AnimatedSwitcher(
+                            duration: const Duration(milliseconds: 220),
+                            child: _AutoFitSingleLineText(
+                              panelMessage,
+                              key: ValueKey(panelMessage),
+                              style: const TextStyle(
+                                color: PopColors.navy,
+                                fontSize: 9,
+                                fontWeight: FontWeight.w800,
+                              ),
+                            ),
+                          ),
+                        ),
+                        const SizedBox(width: 5),
+                        const _GameVersionLabel(),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
+            );
+          }
           final portraitHud = !compact && box.maxWidth < 600;
           if (portraitHud) {
             return Container(

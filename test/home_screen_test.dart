@@ -50,6 +50,31 @@ Future<void> _expectReachableControl(
   expect(rect.height, greaterThanOrEqualTo(48));
 }
 
+void _expectInitiallyVisibleControl(
+  WidgetTester tester,
+  String label,
+  Size viewport,
+) {
+  final text = find.text(label);
+  expect(text, findsOneWidget);
+  final tappable = find
+      .ancestor(of: text, matching: find.byType(InkWell))
+      .first;
+  expect(tappable, findsOneWidget);
+  expect(tappable.hitTestable(), findsOneWidget);
+  final rect = tester.getRect(tappable);
+  expect(rect.left, greaterThanOrEqualTo(0));
+  expect(rect.top, greaterThanOrEqualTo(0));
+  expect(rect.right, lessThanOrEqualTo(viewport.width));
+  expect(
+    rect.bottom,
+    lessThanOrEqualTo(viewport.height),
+    reason: '$label must be completely visible before scrolling.',
+  );
+  expect(rect.width, greaterThanOrEqualTo(44));
+  expect(rect.height, greaterThanOrEqualTo(44));
+}
+
 Future<void> _expectProfileDialog(WidgetTester tester) async {
   await tester.pump();
   await tester.pump(const Duration(milliseconds: 450));
@@ -121,6 +146,35 @@ void main() {
     expect(find.textContaining('JuanPop'), findsOneWidget);
     expect(tester.takeException(), isNull);
   });
+
+  testWidgets(
+    'banner-constrained landscape shows the complete home without scrolling',
+    (tester) async {
+      _useSpanish();
+      const viewport = Size(750, 307);
+      _useViewport(tester, viewport);
+      SharedPreferences.setMockInitialValues({
+        'profile_name': 'JuanPop',
+        'profile_email': 'juan@example.com',
+        'profile_flag': '🇩🇴',
+      });
+
+      await _pumpLoadedHome(tester);
+      for (final label in const [
+        'JUGAR ONLINE',
+        'CONTRA CPU',
+        'Tienda',
+        'Mi perfil',
+        'Cómo jugar',
+        'Trampas',
+      ]) {
+        _expectInitiallyVisibleControl(tester, label, viewport);
+      }
+      final dock = tester.getRect(find.byKey(const ValueKey('home-menu-dock')));
+      expect(dock.bottom, lessThanOrEqualTo(viewport.height));
+      expect(tester.takeException(), isNull);
+    },
+  );
 
   testWidgets(
     'animated decoration is ignored by semantics and honors reduced motion',
