@@ -128,22 +128,19 @@ void main() {
     expect(tester.takeException(), isNull);
   });
 
-  testWidgets('online setup clearly offers traditional and chaos modes', (
+  testWidgets('quick match clearly offers traditional and chaos modes', (
     tester,
   ) async {
     SharedPreferences.setMockInitialValues({
       'profile_name': 'JuanPop',
       'profile_email': 'juan@example.com',
       'profile_flag': '🇩🇴',
-      'player_auth_email': 'juan@example.com',
-      'player_auth_digest': 'fixture-digest',
-      'player_auth_signed_in': true,
     });
     useViewport(tester, const Size(390, 844));
 
     await tester.pumpWidget(const ParchesePopApp());
     await tester.pumpAndSettle();
-    await tester.tap(find.text('JUGAR ONLINE'));
+    await tester.tap(find.text('PARTIDA RÁPIDA'));
     await tester.pump();
     await tester.pump(const Duration(milliseconds: 450));
 
@@ -169,54 +166,39 @@ void main() {
     expect(tester.takeException(), isNull);
   });
 
-  testWidgets('a legacy profile must protect its account before going online', (
+  testWidgets('a guest can enter quick match without an account or login', (
     tester,
   ) async {
-    SharedPreferences.setMockInitialValues({
-      'profile_name': 'JuanPop',
-      'profile_email': 'juan@example.com',
-      'profile_flag': '🇩🇴',
-    });
+    SharedPreferences.setMockInitialValues({});
     useViewport(tester, const Size(390, 844));
 
     await tester.pumpWidget(const ParchesePopApp());
     await tester.pumpAndSettle();
-    await tester.tap(find.text('JUGAR ONLINE'));
+    await tester.tap(find.text('PARTIDA RÁPIDA'));
     await tester.pump();
     await tester.pump(const Duration(milliseconds: 450));
 
-    expect(find.text('Protege tu perfil para jugar online'), findsOneWidget);
-    expect(find.byKey(const ValueKey('online-mode-step')), findsNothing);
-
-    await tester.tap(find.text('Registrarme'));
-    await tester.pumpAndSettle();
-
-    expect(find.byType(ProfileSetupScreen), findsOneWidget);
-    expect(find.byKey(const ValueKey('profile-password')), findsOneWidget);
-    expect(
-      find.byKey(const ValueKey('profile-password-confirmation')),
-      findsOneWidget,
-    );
+    expect(find.byKey(const ValueKey('online-mode-step')), findsOneWidget);
+    expect(find.byType(ProfileSetupScreen), findsNothing);
+    expect(find.textContaining('cuenta'), findsNothing);
+    expect(find.textContaining('Iniciar sesión'), findsNothing);
     expect(tester.takeException(), isNull);
   });
 
   for (final mode in GameMode.values) {
     testWidgets(
-      'online ${mode.name} choice is preserved through matchmaking and game',
+      'quick match ${mode.name} choice is preserved through setup and game',
       (tester) async {
         SharedPreferences.setMockInitialValues({
           'profile_name': 'JuanPop',
           'profile_email': 'juan@example.com',
           'profile_flag': '🇩🇴',
-          'player_auth_email': 'juan@example.com',
-          'player_auth_digest': 'fixture-digest',
-          'player_auth_signed_in': true,
         });
         useViewport(tester, const Size(390, 844));
 
         await tester.pumpWidget(const ParchesePopApp());
         await tester.pumpAndSettle();
-        await tester.tap(find.text('JUGAR ONLINE'));
+        await tester.tap(find.text('PARTIDA RÁPIDA'));
         await tester.pump();
         await tester.pump(const Duration(milliseconds: 450));
         await tester.tap(
@@ -260,7 +242,7 @@ void main() {
     await tester.pumpAndSettle();
     expect(wallet.balance, 250);
 
-    await tester.tap(find.byKey(const ValueKey('shop-add-test-balance')));
+    await tester.tap(find.byKey(const ValueKey('shop-add-balance')));
     await tester.pumpAndSettle();
     expect(find.byKey(const ValueKey('test-balance-dialog')), findsOneWidget);
     expect(find.byKey(const ValueKey('add-test-coins-10000')), findsOneWidget);
@@ -368,12 +350,14 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(find.byKey(const ValueKey('shop-add-test-balance')), findsNothing);
+    expect(find.byKey(const ValueKey('shop-add-balance')), findsOneWidget);
     expect(find.byKey(const ValueKey('add-coins')), findsNothing);
     expect(find.text('SALDO PARA PROBAR'), findsNothing);
     expect(find.byKey(const ValueKey('test-balance-dialog')), findsNothing);
 
     await tester.tap(find.byKey(const ValueKey('shop-action-theme_neon_rush')));
-    await tester.pumpAndSettle();
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 350));
 
     expect(
       find.byKey(const ValueKey('test-balance-dialog')),
@@ -382,8 +366,10 @@ void main() {
           'Insufficient funds must not expose the local test wallet in '
           'production.',
     );
+    expect(find.byType(Dialog), findsOneWidget);
     expect(wallet.balance, 250);
     expect(tester.takeException(), isNull);
+    await tester.pumpWidget(const SizedBox.shrink());
     wallet.dispose();
   });
 
@@ -538,7 +524,7 @@ void main() {
     expect(tester.takeException(), isNull);
   });
 
-  testWidgets('matchmaking uses neutral labels and passes fallback profiles', (
+  testWidgets('quick match explains local automatic seat preparation', (
     tester,
   ) async {
     SharedPreferences.setMockInitialValues({});
@@ -566,32 +552,39 @@ void main() {
       findsNothing,
     );
     expect(find.byKey(const ValueKey('matchmaking-seats')), findsOneWidget);
-    expect(find.text('Buscando jugadores · 8 segundos'), findsOneWidget);
+    expect(find.text('Preparando rivales · 8 segundos'), findsOneWidget);
+    expect(
+      find.text(
+        'Esta partida se prepara en este dispositivo. Los asientos se '
+        'completan automáticamente con rivales del juego.',
+      ),
+      findsOneWidget,
+    );
     final localName = find.text('JugadorCompleto 🇩🇴');
     expect(localName, findsOneWidget);
     expect(
       find.ancestor(of: localName, matching: find.byType(FittedBox)),
       findsOneWidget,
     );
-    expect(find.text('Buscando…'), findsNWidgets(3));
+    expect(find.text('Preparando…'), findsNWidgets(3));
     expect(find.text('RIVAL'), findsNothing);
 
     await tester.pump(const Duration(seconds: 8));
     expect(find.byType(MatchmakingScreen), findsOneWidget);
-    expect(find.text('Preparando la mesa…'), findsOneWidget);
-    expect(find.text('Buscando…'), findsNWidgets(3));
+    expect(find.text('Completando la mesa…'), findsOneWidget);
+    expect(find.text('Preparando…'), findsNWidgets(3));
     expect(find.text('RIVAL'), findsNothing);
 
     await tester.pump(const Duration(seconds: 1));
-    expect(find.text('Jugadores encontrados · 1/3'), findsOneWidget);
+    expect(find.text('Rivales listos · 1/3'), findsOneWidget);
     expect(find.text('RIVAL'), findsOneWidget);
 
     await tester.pump(const Duration(seconds: 1));
-    expect(find.text('Jugadores encontrados · 2/3'), findsOneWidget);
+    expect(find.text('Rivales listos · 2/3'), findsOneWidget);
     expect(find.text('RIVAL'), findsNWidgets(2));
 
     await tester.pump(const Duration(seconds: 1));
-    expect(find.text('Jugadores encontrados · 3/3'), findsOneWidget);
+    expect(find.text('Rivales listos · 3/3'), findsOneWidget);
     expect(find.text('RIVAL'), findsNWidgets(3));
     expect(
       find.textContaining(RegExp('virtual', caseSensitive: false)),
@@ -715,7 +708,7 @@ void main() {
 
     await tester.pumpWidget(const ParchesePopApp());
     await tester.pumpAndSettle();
-    expect(find.text('PLAY ONLINE'), findsOneWidget);
+    expect(find.text('QUICK MATCH'), findsOneWidget);
     expect(find.text('PLAY CPU'), findsOneWidget);
     expect(
       Localizations.localeOf(tester.element(find.byType(HomeScreen))),
@@ -740,7 +733,7 @@ void main() {
 
     await tester.tap(find.byKey(const ValueKey('settings-back')));
     await tester.pumpAndSettle();
-    expect(find.text('JUGAR ONLINE'), findsOneWidget);
+    expect(find.text('PARTIDA RÁPIDA'), findsOneWidget);
     expect(find.text('CONTRA CPU'), findsOneWidget);
     expect(
       Localizations.localeOf(tester.element(find.byType(HomeScreen))),
@@ -755,7 +748,7 @@ void main() {
 
     await tester.pumpWidget(const ParchesePopApp());
     await tester.pumpAndSettle();
-    expect(find.text('PLAY ONLINE'), findsOneWidget);
+    expect(find.text('QUICK MATCH'), findsOneWidget);
     expect(find.text('PLAY CPU'), findsOneWidget);
 
     await tester.ensureVisible(find.text('Shop'));

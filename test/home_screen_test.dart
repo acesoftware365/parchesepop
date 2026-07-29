@@ -105,7 +105,7 @@ void main() {
         await _pumpLoadedHome(tester);
 
         for (final label in const [
-          'JUGAR ONLINE',
+          'PARTIDA RÁPIDA',
           'CONTRA CPU',
           'Tienda',
           'Mi perfil',
@@ -161,7 +161,7 @@ void main() {
 
       await _pumpLoadedHome(tester);
       for (final label in const [
-        'JUGAR ONLINE',
+        'PARTIDA RÁPIDA',
         'CONTRA CPU',
         'Tienda',
         'Mi perfil',
@@ -209,7 +209,7 @@ void main() {
         });
         expect(isExcludedFromSemantics, isTrue);
         expect(
-          find.bySemanticsLabel(RegExp('JUGAR ONLINE')),
+          find.bySemanticsLabel(RegExp('PARTIDA RÁPIDA')),
           findsAtLeastNWidgets(1),
         );
         expect(
@@ -281,7 +281,7 @@ void main() {
 
     expect(find.byKey(const ValueKey('home-profile-dialog')), findsNothing);
     expect(find.byType(HomeScreen), findsOneWidget);
-    expect(find.text('JUGAR ONLINE'), findsOneWidget);
+    expect(find.text('PARTIDA RÁPIDA'), findsOneWidget);
     expect(tester.takeException(), isNull);
   });
 
@@ -314,7 +314,7 @@ void main() {
     );
     expect(find.byKey(const ValueKey('home-profile-dialog')), findsNothing);
     expect(find.byType(HomeScreen), findsOneWidget);
-    expect(find.text('JUGAR ONLINE').hitTestable(), findsOneWidget);
+    expect(find.text('PARTIDA RÁPIDA').hitTestable(), findsOneWidget);
     expect(tester.takeException(), isNull);
   });
 
@@ -346,7 +346,7 @@ void main() {
     );
     expect(find.byKey(const ValueKey('home-profile-dialog')), findsNothing);
     expect(find.byType(HomeScreen), findsOneWidget);
-    expect(find.text('JUGAR ONLINE').hitTestable(), findsOneWidget);
+    expect(find.text('PARTIDA RÁPIDA').hitTestable(), findsOneWidget);
     expect(tester.takeException(), isNull);
   });
 }

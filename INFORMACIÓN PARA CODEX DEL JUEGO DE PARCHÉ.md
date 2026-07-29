@@ -6,12 +6,12 @@ Este es el documento permanente de contexto del proyecto. Debe actualizarse cuan
 
 ## Concepto general
 
-Parchese es una adaptación digital de parchís para cuatro colores. Mantiene el recorrido clásico de fichas, dados, cárcel, seguros, barreras y meta, pero añade cubos sorpresa, objetos, trampas, personalización completa, tienda, partidas contra CPU y partidas rápidas online.
+Parchese es una adaptación digital de parchís para cuatro colores. Mantiene el recorrido clásico de fichas, dados, cárcel, seguros, barreras y meta, pero añade cubos sorpresa, objetos, trampas, personalización completa, tienda, partidas contra CPU y una Partida Rápida local con rivales automáticos.
 
 ## Identidad y ubicación del proyecto
 
 - Nombre de trabajo y marca principal: **Parchese Pop**.
-- Ruta oficial del proyecto: `/Users/juanpolanco/StudioProjects/parchesepop`.
+- Repositorio oficial: `https://github.com/acesoftware365/parchesepop`.
 - Tecnología actual: Flutter.
 - Plataformas incluidas: iOS, Android, Windows y macOS.
 - Tema visual principal: **Arcade Pop**, una estética colorida, moderna y familiar inspirada en la energía de los juegos arcade, sin copiar personajes, mundos, sonidos ni elementos protegidos de otras franquicias.
@@ -22,9 +22,9 @@ Parchese es una adaptación digital de parchís para cuatro colores. Mantiene el
 
 1. Bienvenida y creación de perfil.
 2. Inicio con Partida rápida y Contra CPU.
-3. Selección Tradicional/Caos para Online o Contra CPU.
+3. Selección Tradicional/Caos para Partida Rápida o Contra CPU.
 4. Selección de dificultad cuando se juega contra CPU.
-5. Búsqueda de rival con temporizador de 8 segundos.
+5. Preparación local de rivales con temporizador de 8 segundos.
 6. Partida y tablero adaptable.
 7. Tienda de temas, fichas, dados y efectos.
 8. Perfil y edición de nombre, correo y bandera.
@@ -38,10 +38,10 @@ La primera versión funcional en Flutter incluye:
 
 - Entrada como invitado sin registro obligatorio.
 - Registro opcional con nombre, correo y bandera.
-- Aviso de registro al intentar entrar al modo online.
+- Partida Rápida disponible para invitados, sin cuenta ni inicio de sesión.
 - Menú principal rediseñado como lobby Arcade Pop: fondo azul/violeta con
   motivos de parchés, entrada animada, ficha de jugador con avatar equipado,
-  nivel y bandera, botones Online/CPU con profundidad 3D y reacción al toque,
+  nivel y bandera, botones Partida Rápida/CPU con profundidad 3D y reacción al toque,
   y dock inferior para Tienda, Perfil, Cómo jugar y Trampas.
 - Tablero dibujado como parchís con bases circulares, fichas, recorrido, pasillos de meta, seguros, centro y cubos.
 - Motor local de turnos para un jugador y tres CPU.
@@ -64,7 +64,9 @@ Pendiente para producción:
 - Completar animaciones de captura, cubos, objetos, victoria y resultados.
 - Añadir sonidos, tutorial y resultados completos.
 - Backend de cuentas, base de datos, partidas online reales y reconexión.
-- Catálogo, compras y restauración de compras.
+- Validación de recibos de compras en servidor y activación de los cinco
+  productos consumibles en App Store Connect y Google Play Console. El catálogo
+  cosmético y el cliente de compras ya están implementados.
 - Validar en producción la configuración regional de consentimiento, privacidad
   y tratamiento adecuado para la edad del usuario.
 - Políticas legales definitivas y sistema de moderación en servidor.
@@ -106,6 +108,25 @@ El nombre de jugador permite entre 3 y 12 caracteres. El prototipo incluye valid
 - Las animaciones que aparecen brevemente dentro de una base de color al capturar, activar una bomba o disparar una trampa serán avisos del propio juego, no anuncios publicitarios reales ni elementos pulsables.
 - No se insertará un anuncio de red que cubra una base o el tablero durante un evento de la partida. Además de interrumpir la jugada, esa ubicación aumenta el riesgo de toques accidentales y rechazo por políticas publicitarias.
 - AdMob se utiliza solamente en Android e iOS.
+
+## Soporte, privacidad y recursos de tiendas
+
+- Correo oficial de soporte: `sales@liisgo.com`.
+- Política pública de privacidad:
+  `https://liisgo.com/#/apps/ParchesePop/privacy`.
+- Los recursos finales de Google Play están en
+  `store_assets/google_play/`: `feature-graphic-1024x500.png`,
+  `icon-512.png` e `icon-512-rgba.png`.
+- Las capturas finales de iOS son
+  `store_assets/ios/01-home-1284x2778.png`,
+  `store_assets/ios/02-gameplay-1284x2778.png` y
+  `store_assets/ios/03-shop-1284x2778.png`. Los archivos `*-source.png` de esa
+  carpeta son fuentes de trabajo y no se suben a la tienda.
+- Las capturas finales de macOS son
+  `store_assets/macos/01-settings-1440x900.png`,
+  `02-gameplay-1440x900.png`, `03-traps-1440x900.png` y
+  `04-bomb-trap-1440x900.png`.
+- Los iconos fuente seleccionados se conservan en `assets/branding/`.
 
 ## Reglas de la versión de referencia
 
@@ -208,18 +229,21 @@ cristal que las entrega, por lo que el CPU decide qué ficha intenta acercar a
 los cristales y no elige manualmente una casilla de colocación. Debe usar Turbo
 para llegar a un seguro, capturar o entrar a meta.
 
-## Partidas rápidas y online
+## Partida Rápida local y futuro online
 
 - El modo Contra CPU permite seleccionar dificultad.
-- Al pulsar `JUGAR ONLINE`, después de validar el perfil, se presenta el mismo
-  selector grande de reglas que en Contra CPU: `Tradicional` o `Caos`. Online
-  no solicita dificultad.
-- El modo seleccionado se muestra durante la búsqueda, se guarda dentro de la
-  sesión online y gobierna la partida completa. Tradicional desactiva
+- Al pulsar `PARTIDA RÁPIDA` se presenta el mismo selector grande de reglas que
+  en Contra CPU: `Tradicional` o `Caos`. No exige cuenta, inicio de sesión ni
+  dificultad.
+- La versión actual prepara toda la mesa en el dispositivo y completa
+  automáticamente los tres asientos restantes con rivales del juego. No busca
+  ni conecta jugadores por red.
+- El modo seleccionado se muestra durante la preparación, se guarda dentro de
+  la sesión local y gobierna la partida completa. Tradicional desactiva
   cristales, poderes y trampas; Caos los mantiene activos.
-- El modo Partida rápida reserva los primeros 8 segundos para buscar jugadores.
-  Durante ese período los tres asientos restantes permanecen en `Buscando…`.
-- Si quedan asientos vacíos, el respaldo automatizado comienza en el segundo 9:
+- Partida Rápida utiliza los primeros 8 segundos para preparar la mesa. Durante
+  ese período los tres asientos restantes permanecen en `Preparando…`.
+- La incorporación visual de rivales comienza en el segundo 9:
   entra un rival en el segundo 9, otro en el 10 y el último en el 11. La
   partida abre después de mostrar brevemente el tercer perfil.
 - Los rivales de respaldo pueden tener nombre, avatar, bandera, personalidad,
@@ -229,9 +253,11 @@ para llegar a un seguro, capturar o entrar a meta.
   culturalmente plausibles, incluidas opciones de diáspora como Estados
   Unidos o Canadá cuando corresponda.
 - La interfaz utiliza etiquetas neutrales: `Tú` para el jugador local y `Rival` para cualquier oponente. No muestra etiquetas técnicas sobre quién controla al rival ni afirma que sea una persona real.
-- Si un jugador abandona, el sistema toma su lugar conservando fichas, objetos, turnos, trampas y estado de la partida.
-- Si el jugador vuelve dentro del período permitido, puede recuperar el control.
-- Humanos y CPU deben utilizar la misma interfaz de decisiones para facilitar el crecimiento del multijugador real.
+- Los participantes automáticos conservan fichas, objetos, turnos, trampas,
+  perfil y estado durante toda la partida.
+- Los tipos internos conservan una frontera preparada para integrar
+  multijugador real en una versión futura, pero esa función no se anuncia en
+  la versión actual.
 
 ## Mensajes y personalidad
 
@@ -335,15 +361,16 @@ Regla esencial: los elementos visuales pueden cambiar de textura, forma, imagen,
 
 1. Definir probabilidades y rareza de cada objeto.
 2. Definir duración exacta de turnos y reconexión.
-3. Conectar los paquetes de monedas de producción con StoreKit y Google Play
-   Billing, y definir sus precios reales. El prototipo usa recargas locales
-   identificadas claramente como modo de prueba.
+3. Crear y activar en App Store Connect y Google Play Console los cinco
+   productos consumibles que ya consulta `CoinStore`, y añadir validación de
+   recibos en servidor antes del lanzamiento público. Las recargas locales
+   permanecen disponibles únicamente en modo de depuración.
 4. Definir tecnología, plataformas y arquitectura online.
 
 ## Estado jugable actual (26 de julio de 2026)
 
 - El menú principal tiene estilo arcade y permite entrar como invitado.
-- El registro es opcional; se solicitará para las funciones online.
+- El registro es opcional y Partida Rápida no lo exige.
 - El tablero, las fichas, los dados y los objetos están dibujados dentro de Flutter.
 - Se puede jugar contra tres rivales controlados por CPU.
 - Están implementadas la salida con cinco, movimiento, captura, seguros, barreras, entrada a casa, turno extra por dobles y victoria.
@@ -447,8 +474,9 @@ Regla esencial: los elementos visuales pueden cambiar de textura, forma, imagen,
   abre paquetes de moneda local para probar el ciclo completo, incluida una
   caja de 10,000. El control está protegido por el modo debug: no aparece en
   Inicio ni en una compilación publicada, y quedarse sin saldo en producción
-  nunca abre la caja de prueba. Una compra real requiere los identificadores y
-  productos oficiales de App Store y Google Play.
+  nunca abre la caja de prueba. En publicación, `CoinStore` consulta los
+  productos oficiales de App Store o Google Play, muestra el precio localizado
+  de la tienda e inicia una compra consumible.
 - Comprar descuenta el precio, agrega el artículo a la colección y lo equipa.
   Un artículo comprado puede volver a equiparse y todo persiste después de
   cerrar la aplicación.
@@ -458,10 +486,11 @@ Regla esencial: los elementos visuales pueden cambiar de textura, forma, imagen,
   44 puntos y la compra abre un panel temático con vista previa, saldo actual,
   saldo restante y confirmación explícita.
 - Todos los temas, dados y fichas del catálogo se reflejan dentro de la partida.
-  En online, el tablero conserva el tema local, los dados cambian según el
+  En Partida Rápida, el tablero conserva el tema local, los dados cambian según el
   jugador del turno y cada color conserva su propio diseño de ficha. El avatar
   equipado aparece en inicio, perfil, búsqueda y paneles de la partida.
-- `online_match.dart` crea una sola sesión estable desde la búsqueda hasta la
+- `online_match.dart` conserva el nombre interno histórico y crea una sola sesión
+  local estable desde la preparación hasta la
   partida, la victoria y la revancha. Cada participante conserva nombre,
   bandera, avatar, nivel, color y su propia combinación de tema, dados y fichas
   del catálogo.
@@ -470,18 +499,16 @@ Regla esencial: los elementos visuales pueden cambiar de textura, forma, imagen,
   `MohammedPlay` con banderas plausibles del norte de África, Medio Oriente o
   su diáspora. Las pruebas recorren 240 perfiles generados y rechazan cualquier
   combinación de nombre y bandera que no pertenezca al mismo perfil curado.
-- La búsqueda admite jugadores humanos parciales y completa únicamente los
-  asientos vacíos con perfiles de respaldo variados. En toda la interfaz,
-  cualquier oponente se identifica solamente como `Rival`.
-- Si una persona se desconecta, el sistema conserva exactamente su identidad,
-  fichas, nivel y cosméticos mientras el juego continúa.
+- La versión publicada completa los tres asientos con perfiles automáticos
+  variados. En toda la interfaz, cualquier oponente se identifica solamente
+  como `Rival`.
 - Los cosméticos se aplican por participante: cada jugador puede tener sus
   propias fichas, y los dados visibles cambian según el perfil cuyo turno está
-  activo. Los nombres online sustituyen las etiquetas genéricas CPU 1, CPU 2 y
+  activo. Los nombres de Partida Rápida sustituyen las etiquetas genéricas CPU 1, CPU 2 y
   CPU 3 en el tablero y en el panel de jugadores.
-- La búsqueda online usa dos fases visibles: segundos 1–8 de búsqueda y
+- La preparación local usa dos fases visibles: segundos 1–8 de preparación y
   ocupación progresiva de los asientos restantes desde el segundo 9. Los tres
-  asientos permanecen en `Buscando…` durante toda la primera fase; después
+  asientos permanecen en `Preparando…` durante toda la primera fase; después
   entran uno por uno.
 - Los nombres nunca se abrevian con puntos suspensivos. En búsqueda, roster,
   panel de poderes, encabezado y bases del tablero se conserva el nombre
@@ -589,12 +616,12 @@ Regla esencial: los elementos visuales pueden cambiar de textura, forma, imagen,
 - Se verificó visualmente el lobby Arcade Pop rediseñado en el simulador
   iPhone 14 y en macOS, incluyendo el avatar del jugador, los botones 3D, el
   dock y el fondo animado. También se verificaron: inicio, tienda,
-  ajustes, guía Caos, búsqueda con perfiles online y partida tanto vertical
+  ajustes, guía Caos, preparación con perfiles de Partida Rápida y partida tanto vertical
   como horizontal con el tablero al máximo tamaño seguro, además del nuevo HUD
   vertical de turno. También se verificó la partida en macOS con tablero de
   altura completa y panel contextual. El selector de idioma cambia
   inmediatamente entre español e inglés y quedó seleccionado
-  `Idioma del sistema`. La vista online también fue revisada con perfiles
+  `Idioma del sistema`. La vista de Partida Rápida también fue revisada con perfiles
   curados como `MohammedPlay 🇨🇦`, `LucPixel 🇫🇷` y `ChloePlay 🇦🇺`; los nombres
   aparecen completos, sin puntos suspensivos.
 - El panel compacto de perfil y sus rutas de salida se verificaron visualmente
@@ -607,7 +634,7 @@ Regla esencial: los elementos visuales pueden cambiar de textura, forma, imagen,
   tres estados de idioma, incluso en la vista `home`. El arranque normal
   continúa en `main.dart`.
 
-### Actualización de partida online, cuenta y tienda — 28 de julio de 2026
+### Actualización de Partida Rápida, cuenta y tienda — 28 de julio de 2026
 
 - Al activar una trampa se muestra una franja rectangular entre el tablero y
   el HUD con el nombre exacto y la consecuencia: Pegamento, Retroceso, Cárcel,
@@ -619,18 +646,17 @@ Regla esencial: los elementos visuales pueden cambiar de textura, forma, imagen,
   Tocar una zona vacía, una ficha que no puede moverse, cualquier otra ficha o
   cualquier área de la interfaz fuera del tablero y del selector cancela o
   sustituye la selección sin gastar dados.
-- La victoria online ofrece `SEGUIR VIENDO LA PARTIDA`. Al usarlo se conserva
+- La victoria de Partida Rápida ofrece `SEGUIR VIENDO LA PARTIDA`. Al usarlo se conserva
   el ganador y el orden de llegada, se saltan automáticamente los jugadores
   que ya terminaron y los demás continúan hasta completar la clasificación.
   Cuando llega el cuarto jugador se presenta el cierre final de la partida.
   El botón depende de que queden jugadores por terminar, no de una etiqueta
-  de sesión; por eso también aparece cuando la mesa online está usando los
-  oponentes de respaldo.
+  de sesión; por eso aparece en la mesa local con rivales automáticos.
 - El regreso automático al inicio se programa únicamente cuando los cuatro
   puestos de la clasificación están completos. Ganar primero y elegir
   `SEGUIR VIENDO LA PARTIDA` nunca reinicia el tablero ni abre una partida
   nueva. El panel final muestra `Volviendo al inicio…` antes de cerrar la mesa.
-- Las partidas online tienen un botón de mensajes rápidos. No existe entrada
+- Las partidas rápidas tienen un botón de mensajes rápidos. No existe entrada
   de texto libre: solamente se pueden enviar doce frases curadas en español e
   inglés, con límite de frecuencia. Las respuestas automáticas también se
   limitan al mismo catálogo seguro.
@@ -641,11 +667,10 @@ Regla esencial: los elementos visuales pueden cambiar de textura, forma, imagen,
   y Apple; en Android admite Correo y Google. Google, Apple y el envío real de
   correos permanecen desactivados de forma explícita hasta conectar las
   credenciales y el backend de autenticación de producción; nunca se simula un
-  inicio de sesión externo exitoso. La entrada online comprueba una cuenta
-  autenticada, no solamente que el perfil tenga un correo; los perfiles
-  antiguos deben crear su clave antes de entrar.
+  inicio de sesión externo exitoso. Crear una cuenta sigue siendo opcional y
+  Partida Rápida nunca bloquea a un invitado ni exige autenticación.
 - Los avatares equipados ya aparecen también en el HUD de turno, el roster y
-  la celebración de victoria. Los perfiles de la sesión online conservan su
+  la celebración de victoria. Los perfiles de la sesión rápida conservan su
   avatar propio.
 - Las barras de estado de poder y trampa usan un fondo claro opaco, texto
   azul marino de alto contraste y borde visible. Esto incluye el estado
@@ -668,32 +693,45 @@ Regla esencial: los elementos visuales pueden cambiar de textura, forma, imagen,
   preview y compra sin recorte en iPhone 14, aplicación de cosméticos y la
   regresión completa de reglas.
 
-### Google Analytics — 28 de julio de 2026
+### Paquetes consumibles de monedas — 29 de julio de 2026
 
-- Firebase usa el proyecto `parchese-pop`, vinculado a la propiedad
-  `parchese-pop` de la cuenta `Liisgo Analytics`.
-- La propiedad de Google Analytics es `547490103`. Sus flujos activos son
-  Android `15342233573` y Apple `15342224234`; iOS y macOS comparten el flujo
-  Apple mientras utilicen el mismo bundle `com.liisgo.parchesepop`.
-- Cada partida iniciada registra exactamente uno de estos eventos:
-  `online_match_started` o `cpu_match_started`. Así, la lista de eventos de
-  Analytics permite comparar directamente cuál tipo de partida se usa más.
-- Ambos eventos incluyen el modo `traditional` o `chaos`, si fue una revancha
-  y el origen `home` o `rematch`. La partida contra CPU añade la dificultad.
-  La partida online añade el tiempo de búsqueda y los conteos de rivales
-  conectados, de respaldo o sustituidos.
-- El evento se envía al abrir realmente la mesa, no al tocar el botón del
-  lobby ni durante una búsqueda que se cancela. Cada revancha cuenta como una
-  partida nueva.
-- Analytics no recibe nombre, correo, mensajes, bandera, avatar ni otra
-  identidad del jugador. La política de privacidad en español e inglés ya
-  informa esta medición anónima.
-- Android, iOS y macOS inicializan Firebase. Windows y las plataformas no
-  configuradas mantienen un servicio sin envío para que el juego siga
-  funcionando sin incorporar secretos.
-- Verificación: 267 pruebas aprobadas, análisis estático limpio y
-  compilaciones correctas para iPhone Simulator, Android Debug y macOS
-  Release.
+- `CoinStore` utiliza `in_app_purchase` para consultar precios e iniciar
+  compras consumibles en App Store o Google Play. Los mismos identificadores se
+  usan en ambas tiendas:
+
+  | Identificador | Monedas | Precio de referencia |
+  |---|---:|---:|
+  | `com.liisgo.parchesepop.coins.500` | 500 | USD 0.99 |
+  | `com.liisgo.parchesepop.coins.1200` | 1,200 | USD 1.99 |
+  | `com.liisgo.parchesepop.coins.3000` | 3,000 | USD 4.99 |
+  | `com.liisgo.parchesepop.coins.7000` | 7,000 | USD 9.99 |
+  | `com.liisgo.parchesepop.coins.16000` | 16,000 | USD 19.99 |
+
+- El precio localizado devuelto por cada tienda es la fuente de verdad para la
+  interfaz. Los precios anteriores son valores de respaldo y referencia.
+- Al confirmarse la compra, el paquete acredita su cantidad al saldo local y la
+  transacción consumible se completa. La validación de recibos en servidor
+  continúa pendiente para producción.
+- Las monedas solo desbloquean cosméticos y no conceden ventajas competitivas.
+- El diálogo de monedas de prueba es independiente, se limita a compilaciones
+  de depuración y nunca realiza un cobro.
+
+### Telemetría y Analytics — 29 de julio de 2026
+
+- `game_analytics.dart` conserva los identificadores internos históricos
+  `online_match_started` y `cpu_match_started`; el primero representa Partida
+  Rápida en la versión actual. Esto permite probar cuándo se
+  solicitaría una medición sin acoplar la partida a un proveedor.
+- La compilación actual inicializa siempre `NoopGameAnalytics`. No incluye los
+  paquetes de Firebase, no carga una configuración Firebase y no transmite
+  eventos ni datos de Analytics.
+- Las pruebas pueden inyectar un grabador en memoria para verificar el tipo de
+  partida, modo, revancha, dificultad y métricas de búsqueda. Esa grabación
+  existe únicamente dentro de la prueba y no representa recopilación en la
+  aplicación publicada.
+- Si se activa un proveedor de analíticas en el futuro, primero deben
+  actualizarse la política pública, las declaraciones de privacidad de las
+  tiendas y el flujo de consentimiento correspondiente.
 
 ### Temas dinámicos completos — 28 de julio de 2026
 
@@ -752,14 +790,14 @@ Regla esencial: los elementos visuales pueden cambiar de textura, forma, imagen,
 - El mismo dibujo vectorial se utiliza en la tienda y en la partida. Los cinco
   motivos son circuito de neón, escarabajo solar, máscara selvática, nave
   pixelada y cristal de aurora.
-- Los perfiles preparados para completar una partida online reciben una
+- Los perfiles preparados para completar una Partida Rápida reciben una
   combinación coherente de tema y fichas. La herramienta de vista previa usa
   también la ficha compañera del tema seleccionado.
 - Los nombres, descripciones y mensajes de compra están disponibles en español
   e inglés; el mensaje inglés traduce también el nombre del artículo.
 - Verificación terminada con vistas reales de tienda a tamaño iPhone 14,
   compra, equipamiento, persistencia, aplicación dentro de `GameScreen`,
-  coordinación online y 267 pruebas aprobadas. El análisis estático no reporta
+  coordinación de Partida Rápida y 267 pruebas aprobadas. El análisis estático no reporta
   incidencias.
 
 ### Rotación libre de pantalla — 28 de julio de 2026
@@ -832,8 +870,9 @@ Regla esencial: los elementos visuales pueden cambiar de textura, forma, imagen,
 - iOS contiene los 50 `SKAdNetworkIdentifier` de la lista oficial de Google,
   sin duplicados. No se solicita ATT ni acceso al IDFA; por eso el mensaje
   explicativo de IDFA no se publica y no se considera una función pendiente.
-- La política de privacidad pública explica Analytics, banners, recompensas,
-  consentimiento, exclusión de macOS y ausencia de rastreo IDFA.
+- La política de privacidad pública explica que Analytics está desactivado en
+  la compilación actual, además de banners, recompensas, compras, consentimiento,
+  exclusión de macOS y ausencia de rastreo IDFA.
 - El Centro de políticas de AdMob no reporta incidencias. `app-ads.txt` ya está
   publicado y verificado en `https://liisgo.com/app-ads.txt` para las apps
   aprobadas de la cuenta.
@@ -842,10 +881,9 @@ Regla esencial: los elementos visuales pueden cambiar de textura, forma, imagen,
   Google Play y App Store estén publicadas y se añadan a las dos apps. En ese
   momento debe usarse `liisgo.com` como sitio del desarrollador para que AdMob
   detecte el mismo `app-ads.txt`.
-- El proyecto Firebase y la cuenta de AdMob pertenecen actualmente a dos
-  accesos de Google distintos. No se debe crear otra app Firebase duplicada.
-  El vínculo se completa después de dar acceso al proyecto Firebase a la misma
-  cuenta administradora de AdMob y de añadir las fichas de las tiendas.
+- Firebase no forma parte de la compilación actual. No debe documentarse ni
+  declararse recopilación mediante Firebase Analytics mientras
+  `initializeGameAnalytics()` continúe devolviendo el servicio `no-op`.
 
 ### Corrección estructural completada
 

@@ -458,6 +458,34 @@ class WalletController extends ChangeNotifier {
     return EquipResult.equipped;
   }
 
+  Future<void> reset() async {
+    await _ensureInitialized();
+    await Future.wait([
+      _preferences!.remove(_balanceKey),
+      _preferences!.remove(_ownedKey),
+      for (final category in CosmeticCategory.values)
+        _preferences!.remove('$_equippedPrefix${category.name}'),
+    ]);
+    _balance = initialBalance;
+    _ownedProductIds
+      ..clear()
+      ..addAll(
+        walletCatalog
+            .where((product) => product.price == 0)
+            .map((product) => product.id),
+      );
+    _equippedProductIds.clear();
+    for (final category in CosmeticCategory.values) {
+      for (final product in walletCatalog) {
+        if (product.category == category && product.price == 0) {
+          _equippedProductIds[category] = product.id;
+          break;
+        }
+      }
+    }
+    notifyListeners();
+  }
+
   Future<void> _ensureInitialized() async {
     if (!_initialized) await initialize();
   }

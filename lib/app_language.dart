@@ -97,7 +97,7 @@ String appTranslate(BuildContext context, String source) =>
 const _legacyPrivacyDescription =
     'El prototipo guarda localmente el perfil, las monedas, las compras cosméticas y las preferencias. Antes de publicar se documentarán el servicio de cuenta, analíticas, publicidad y cualquier dato que salga del dispositivo.';
 const _privacyDescription =
-    'La aplicación guarda localmente el perfil, las monedas, las compras cosméticas y las preferencias. Google Analytics recopila eventos anónimos de uso, como el inicio de una partida online o contra CPU, el modo y la dificultad. No enviamos el nombre, el correo, los mensajes, la bandera ni el avatar.';
+    'La aplicación guarda localmente el perfil, las monedas, las compras cosméticas y las preferencias. Android y iOS pueden mostrar anuncios de Google AdMob y solicitar el consentimiento correspondiente. La aplicación no envía el nombre, el correo, los mensajes, la bandera ni el avatar a un servicio de analíticas.';
 
 String translateForLanguage(String source, String languageCode) {
   if (source == _legacyPrivacyDescription) source = _privacyDescription;
@@ -114,12 +114,12 @@ String _translateDynamic(String source) {
       (match) => 'Hi, ${match.group(1)}! ${match.group(2)}',
     ),
     (
-      RegExp(r'^Buscando jugadores · (\d+) segundos$'),
-      (match) => 'Finding players · ${match.group(1)} seconds',
+      RegExp(r'^Preparando rivales · (\d+) segundos$'),
+      (match) => 'Preparing rivals · ${match.group(1)} seconds',
     ),
     (
-      RegExp(r'^Jugadores encontrados · (.+)$'),
-      (match) => 'Players found · ${match.group(1)}',
+      RegExp(r'^Rivales listos · (.+)$'),
+      (match) => 'Rivals ready · ${match.group(1)}',
     ),
     (
       RegExp(r'^Nivel (\d+) · (.+)$'),
@@ -326,6 +326,7 @@ String _translateDynamic(String source) {
       (match) => 'You added ${match.group(1)} test coins.',
     ),
     (RegExp(r'^\+([\d,]+) monedas$'), (match) => '+${match.group(1)} coins'),
+    (RegExp(r'^([\d,]+) MONEDAS$'), (match) => '${match.group(1)} COINS'),
     (
       RegExp(r'^SALDO ACTUAL · ([\d,]+)$'),
       (match) => 'CURRENT BALANCE · ${match.group(1)}',
@@ -526,7 +527,6 @@ const _english = <String, String>{
   'Crear perfil': 'Create profile',
   'Guardar cambios': 'Save changes',
   'Crea tu perfil de jugador': 'Create your player profile',
-  'Crea tu perfil para jugar online': 'Create a profile to play online',
   'Nombre de jugador': 'Player name',
   'Ej. JuanPop': 'E.g. JuanPop',
   'Correo electrónico': 'Email address',
@@ -553,8 +553,8 @@ const _english = <String, String>{
   'Contraseña actualizada.': 'Password updated.',
   'Revisa tu correo para cambiar la contraseña.':
       'Check your email to change your password.',
-  'La contraseña nunca se guarda como texto. Google y Apple se activarán al conectar las credenciales del servicio.':
-      'Your password is never stored as plain text. Google and Apple activate when service credentials are connected.',
+  'La contraseña se protege con un hash y la sesión queda guardada en este dispositivo.':
+      'Your password is protected with a hash and the session stays saved on this device.',
   'Elige tu bandera': 'Choose your flag',
   'Usa entre 3 y 12 caracteres.': 'Use 3 to 12 characters.',
   'Usa letras, números, espacios, _ o -.':
@@ -570,8 +570,9 @@ const _english = <String, String>{
   'Elige tu partida y lleva tus cuatro fichas al centro.':
       'Choose a game and race all four pieces to the center.',
   'ELIGE TU PARTIDA': 'CHOOSE YOUR GAME',
-  'JUGAR ONLINE': 'PLAY ONLINE',
-  'Reta jugadores y sube de nivel': 'Challenge players and level up',
+  'PARTIDA RÁPIDA': 'QUICK MATCH',
+  'Mesa local con rivales automáticos':
+      'Local table with automatic game rivals',
   'CONTRA CPU': 'PLAY CPU',
   'Practica y domina el tablero': 'Practice and master the board',
   'Tienda': 'Shop',
@@ -579,11 +580,9 @@ const _english = <String, String>{
   'CÓMO JUGAR': 'HOW TO PLAY',
   'Trampas': 'Traps',
   'PUBLICIDAD': 'ADVERTISEMENT',
-  'Puedes jugar contra el CPU sin registrarte. Para partidas online necesitamos un nombre y un correo para guardar tu progreso.':
-      'You can play the CPU without signing up. Online games need a name and email so your progress can be saved.',
   'Elige cómo jugar': 'Choose how to play',
-  'Elige las reglas para tu partida online':
-      'Choose the rules for your online match',
+  'Elige las reglas para tu partida rápida':
+      'Choose the rules for your quick match',
   'Elige la dificultad': 'Choose difficulty',
   'Paso 1 de 2 · modo de partida': 'Step 1 of 2 · game mode',
   'Paso 2 de 2 · nivel del CPU': 'Step 2 of 2 · CPU level',
@@ -606,15 +605,15 @@ const _english = <String, String>{
   '⚡ Modo Caos seleccionado': '⚡ Chaos Mode selected',
   '🏆 Modo Tradicional seleccionado': '🏆 Traditional Mode selected',
 
-  // Matchmaking and online.
-  'Buscando…': 'Searching…',
-  'Buscando jugadores': 'Finding players',
-  'Preparando la mesa…': 'Preparing the table…',
-  'Armando tu mesa…': 'Setting up your table…',
+  // Device-local quick match.
+  'Preparando…': 'Preparing…',
+  'Preparando rivales': 'Preparing rivals',
+  'Completando la mesa…': 'Completing the table…',
+  'Preparando partida rápida…': 'Preparing quick match…',
   'Jugadores': 'Players',
-  'Jugadores encontrados': 'Players found',
-  'Buscamos jugadores durante 8 segundos. Desde el segundo 9 completamos los asientos restantes y preparamos la partida.':
-      'We look for players for 8 seconds. Starting at second 9, we fill the remaining seats and prepare the game.',
+  'Rivales listos': 'Rivals ready',
+  'Esta partida se prepara en este dispositivo. Los asientos se completan automáticamente con rivales del juego.':
+      'This match is prepared on this device. Seats are completed automatically with game rivals.',
   'Rival': 'Opponent',
   'Tú': 'You',
   'TÚ': 'YOU',
@@ -939,6 +938,8 @@ const _english = <String, String>{
   'Sonido': 'Sound',
   'Dados, fichas, capturas y efectos': 'Dice, pieces, captures, and effects',
   'Música': 'Music',
+  'Probar sonido': 'Test sound',
+  'Escucha el efecto de los dados': 'Listen to the dice sound effect',
   'Menú y música de partida': 'Menu and game music',
   'Vibración': 'Vibration',
   'Respuesta al lanzar y capturar': 'Feedback when rolling and capturing',
@@ -964,10 +965,18 @@ const _english = <String, String>{
   'Opciones de privacidad de anuncios': 'Ad privacy options',
   'Eliminar cuenta y datos': 'Delete account and data',
   'Eliminar datos': 'Delete data',
+  'Eliminar definitivamente': 'Delete permanently',
+  'Se borrarán de este dispositivo el perfil, la sesión, las monedas, los cosméticos y las preferencias. Esta acción no se puede deshacer.':
+      'Your profile, session, coins, cosmetics, and preferences will be deleted from this device. This action cannot be undone.',
+  'La cuenta y los datos locales fueron eliminados.':
+      'The account and local data were deleted.',
+  'No se pudieron eliminar los datos.': 'The data could not be deleted.',
   _privacyDescription:
-      'The app stores the profile, coins, cosmetic purchases, and preferences locally. Google Analytics collects anonymous usage events, such as whether a match starts online or against the CPU, the mode, and the difficulty. We do not send the name, email, messages, flag, or avatar.',
-  'Parchese Pop es un juego de entretenimiento. Las monedas de esta versión son de prueba, no tienen valor monetario y no otorgan ventajas competitivas.':
-      'Parchese Pop is an entertainment game. Coins in this version are for testing, have no monetary value, and do not provide competitive advantages.',
+      'The app stores the profile, coins, cosmetic purchases, and preferences locally. Android and iOS may show Google AdMob ads and request the applicable consent. The app does not send the name, email, messages, flag, or avatar to an analytics service.',
+  'Parchese Pop guarda localmente el perfil, la sesión, las monedas, los cosméticos y las preferencias. Android y iOS pueden mostrar anuncios de Google AdMob con las opciones de consentimiento aplicables. Consulta la política completa en https://liisgo.com/#/apps/ParchesePop/privacy.':
+      'Parchese Pop stores the profile, session, coins, cosmetics, and preferences locally. Android and iOS may show Google AdMob ads with the applicable consent options. Read the complete policy at https://liisgo.com/#/apps/ParchesePop/privacy.',
+  'Parchese Pop es un juego de entretenimiento. Las monedas pueden obtenerse mediante anuncios recompensados o compras consumibles. Solo desbloquean contenido cosmético, no tienen valor monetario ni otorgan ventajas competitivas.':
+      'Parchese Pop is an entertainment game. Coins can be obtained through rewarded ads or consumable purchases. They only unlock cosmetic content, have no cash value, and provide no competitive advantage.',
   'No se permiten nombres ofensivos, amenazas, acoso ni contenido sexual. Los mensajes durante la partida se limitarán a frases preaprobadas.':
       'Offensive names, threats, harassment, and sexual content are not allowed. In-game messages are limited to preapproved phrases.',
   'En Android y iOS se muestran banners adaptables en la parte inferior y anuncios recompensados voluntarios en la tienda. El premio se entrega únicamente al completar el anuncio. La aplicación solicita consentimiento cuando corresponde y ofrece opciones para administrar la privacidad publicitaria. macOS no muestra banners ni anuncios recompensados.':

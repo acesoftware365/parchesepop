@@ -5,6 +5,9 @@
 This Privacy Policy explains how Parchese Pop handles information when you use
 the game on Android, iOS, macOS, or another supported platform.
 
+Public policy URL:
+[https://liisgo.com/#/apps/ParchesePop/privacy](https://liisgo.com/#/apps/ParchesePop/privacy)
+
 ## Information stored on your device
 
 Parchese Pop stores game information locally on your device, including:
@@ -12,22 +15,20 @@ Parchese Pop stores game information locally on your device, including:
 - your optional player profile, such as display name, email, flag, and avatar;
 - coins, cosmetic purchases, equipped items, level, and game progress;
 - language, sound, music, vibration, and other preferences; and
-- local account credentials when the prototype email account option is used.
+- local account credentials when the email account option is used.
 
-Raw passwords are not stored. The local prototype stores a salted password
-digest. You may play against the CPU without creating a profile.
+Raw passwords are not stored. The app stores a salted password digest on the
+device. You may play against the CPU without creating a profile.
 
 ## Analytics
 
-Parchese Pop uses Google Firebase Analytics to understand how the game is used
-and improve its design. Analytics events may include whether a match was started
-online or against the CPU, the selected game mode, and CPU difficulty. The game
-does not intentionally include your display name, email, chat messages, flag, or
-avatar in these analytics events.
+The current release does not include Firebase Analytics or another third-party
+analytics service. The code contains an internal match-telemetry interface for
+future development, but the release implementation is a local `no-op`: it does
+not transmit match events or analytics data.
 
-Google may process technical information such as device identifiers, app
-instance information, approximate location derived from IP address, operating
-system, and interaction data according to Google's policies.
+If analytics is enabled in a future release, this policy and the applicable
+store disclosures will be updated before that collection begins.
 
 ## Advertising
 
@@ -56,29 +57,43 @@ For more information about how Google handles data, see:
 - [How Google uses information from sites or apps that use its services](https://policies.google.com/technologies/partner-sites)
 - [Google Privacy Policy](https://policies.google.com/privacy)
 
-## Online play and messages
+## In-app purchases
 
-Online play may use player names, flags, avatars, levels, equipped cosmetic
-items, game actions, and preapproved messages to operate and display a match.
-Free-form in-game chat is not provided. If a real player is unavailable, the
-game may continue with a computer-controlled opponent.
+The Android and iOS versions may offer consumable coin packs through Google Play
+or Apple's App Store. The platform store processes payment information. Parchese
+Pop receives purchase status and the product identifier needed to deliver the
+coins; it does not receive your full payment-card details. The resulting coin
+balance is stored locally on your device.
+
+Apple or Google may process purchase, account, device, and diagnostic
+information under their respective terms and privacy policies.
+
+## Quick Match and messages
+
+The current Quick Match experience is generated on the device. Player
+names, flags, avatars, levels, equipped cosmetic items, game actions, and
+preapproved messages are used locally to display and operate the match; they are
+not sent to a Parchese Pop game server in the current release. Free-form in-game
+chat is not provided.
 
 ## Data sharing
 
 Parchese Pop does not sell personal information. Information may be processed
-by service providers used to operate the app, including Google Firebase
-Analytics and Google AdMob, subject to their own privacy terms and your
-available consent choices. Information may also be disclosed when required by
-law or to protect users, the service, or legal rights.
+by service providers used to operate the app, including Google AdMob and, when
+you make a purchase, Apple or Google Play, subject to their own privacy terms
+and your available consent choices. The current release does not send data to
+Firebase Analytics. Information may also be disclosed when required by law or
+to protect users, the service, or legal rights.
 
 ## Retention and deletion
 
 Local profile, preferences, progress, coins, and cosmetic data remain on the
 device until you remove them, clear the app's storage, or uninstall the app.
 Available advertising consent choices can be changed from the privacy screen.
-You may use the account and data deletion option in the app when available.
+The **Delete account and data** action in the app removes the local profile,
+session, coins, cosmetics, progress, and preferences from that device.
 
-Analytics and advertising providers retain information according to their own
+Advertising and app-store providers retain information according to their own
 policies and legal obligations.
 
 ## Security
@@ -107,11 +122,11 @@ date at the top of this page identifies the latest revision.
 
 ## Contact
 
-For privacy or data requests, contact the developer through the support channel
-listed for Parchese Pop in its app-store listing or through the project's public
-repository:
+For privacy or data requests, contact
+[sales@liisgo.com](mailto:sales@liisgo.com).
 
-[https://github.com/acesoftware365/parchesepop](https://github.com/acesoftware365/parchesepop)
+Public privacy policy:
+[https://liisgo.com/#/apps/ParchesePop/privacy](https://liisgo.com/#/apps/ParchesePop/privacy)
 
 ---
 
@@ -122,6 +137,9 @@ repository:
 Esta Política de privacidad explica cómo Parchese Pop maneja la información
 cuando utilizas el juego en Android, iOS, macOS u otra plataforma compatible.
 
+Dirección pública de la política:
+[https://liisgo.com/#/apps/ParchesePop/privacy](https://liisgo.com/#/apps/ParchesePop/privacy)
+
 ## Información guardada en tu dispositivo
 
 Parchese Pop guarda localmente en tu dispositivo:
@@ -129,24 +147,22 @@ Parchese Pop guarda localmente en tu dispositivo:
 - tu perfil opcional, como nombre visible, correo electrónico, bandera y avatar;
 - monedas, compras cosméticas, artículos equipados, nivel y progreso;
 - idioma, sonido, música, vibración y otras preferencias; y
-- credenciales locales cuando se utiliza la opción de cuenta por correo del
-  prototipo.
+- credenciales locales cuando se utiliza la opción de cuenta por correo.
 
-Las contraseñas no se guardan en texto plano. El prototipo local conserva un
-resumen cifrado con sal. Puedes jugar contra el CPU sin crear un perfil.
+Las contraseñas no se guardan en texto plano. La aplicación conserva en el
+dispositivo un resumen cifrado con sal. Puedes jugar contra el CPU sin crear un
+perfil.
 
 ## Analíticas
 
-Parchese Pop utiliza Google Firebase Analytics para comprender cómo se usa el
-juego y mejorar su diseño. Los eventos pueden indicar si una partida comenzó
-online o contra CPU, el modo seleccionado y la dificultad. El juego no incluye
-intencionalmente tu nombre visible, correo, mensajes, bandera ni avatar en estos
-eventos de analíticas.
+La versión actual no incluye Firebase Analytics ni otro servicio externo de
+analíticas. El código contiene una interfaz interna de telemetría de partidas
+para desarrollo futuro, pero la implementación publicada es local y `no-op`: no
+transmite eventos de partidas ni datos de analíticas.
 
-Google puede procesar información técnica, como identificadores del dispositivo,
-información de la instancia de la aplicación, ubicación aproximada derivada de
-la dirección IP, sistema operativo y datos de interacción, conforme a sus
-políticas.
+Si se habilitan analíticas en una versión futura, esta política y las
+declaraciones correspondientes de las tiendas se actualizarán antes de comenzar
+esa recopilación.
 
 ## Publicidad
 
@@ -176,20 +192,34 @@ Para conocer cómo Google maneja los datos, consulta:
 - [Cómo usa Google la información de sitios o aplicaciones que utilizan sus servicios](https://policies.google.com/technologies/partner-sites?hl=es)
 - [Política de privacidad de Google](https://policies.google.com/privacy?hl=es)
 
-## Juego online y mensajes
+## Compras dentro de la aplicación
 
-El juego online puede utilizar nombres, banderas, avatares, niveles, cosméticos
-equipados, acciones de la partida y mensajes preaprobados para operar y mostrar
-la partida. No se ofrece chat libre. Si no hay disponible un jugador real, la
-partida puede continuar con un oponente controlado por computadora.
+Las versiones de Android e iOS pueden ofrecer paquetes consumibles de monedas
+mediante Google Play o App Store. La tienda de la plataforma procesa la
+información de pago. Parchese Pop recibe el estado de la compra y el
+identificador del producto necesarios para entregar las monedas; no recibe los
+datos completos de tu tarjeta. El saldo resultante se guarda localmente en tu
+dispositivo.
+
+Apple o Google pueden procesar información de compra, cuenta, dispositivo y
+diagnóstico conforme a sus propias condiciones y políticas de privacidad.
+
+## Partida Rápida y mensajes
+
+La experiencia de Partida Rápida de la versión actual se genera en el
+dispositivo. Los nombres, banderas, avatares, niveles, cosméticos equipados,
+acciones de la partida y mensajes preaprobados se utilizan localmente para
+mostrar y operar la partida; no se envían a un servidor de juego de Parchese Pop
+en la versión actual. No se ofrece chat libre.
 
 ## Intercambio de información
 
 Parchese Pop no vende información personal. La información puede ser procesada
-por proveedores utilizados para operar la aplicación, incluidos Google Firebase
-Analytics y Google AdMob, conforme a sus condiciones y a tus opciones de
-consentimiento. También se puede divulgar información cuando la ley lo exija o
-para proteger a los usuarios, el servicio o derechos legales.
+por proveedores utilizados para operar la aplicación, incluidos Google AdMob y,
+cuando realizas una compra, Apple o Google Play, conforme a sus condiciones y a
+tus opciones de consentimiento. La versión actual no envía datos a Firebase
+Analytics. También se puede divulgar información cuando la ley lo exija o para
+proteger a los usuarios, el servicio o derechos legales.
 
 ## Retención y eliminación
 
@@ -197,11 +227,12 @@ El perfil local, las preferencias, el progreso, las monedas y los cosméticos
 permanecen en el dispositivo hasta que los elimines, borres los datos de la
 aplicación o desinstales la aplicación. Las opciones disponibles de
 consentimiento publicitario pueden cambiarse desde la pantalla de privacidad.
-Puedes utilizar la opción de eliminación de cuenta y datos cuando esté
-disponible en la aplicación.
+La acción **Eliminar cuenta y datos** dentro de la aplicación borra de ese
+dispositivo el perfil local, la sesión, las monedas, los cosméticos, el progreso
+y las preferencias.
 
-Los proveedores de analíticas y publicidad conservan información de acuerdo con
-sus propias políticas y obligaciones legales.
+Los proveedores de publicidad y de las tiendas de aplicaciones conservan
+información de acuerdo con sus propias políticas y obligaciones legales.
 
 ## Seguridad
 
@@ -231,7 +262,8 @@ fecha al principio de esta página identifica la revisión más reciente.
 
 ## Contacto
 
-Para solicitudes de privacidad o datos, utiliza el canal de soporte indicado
-para Parchese Pop en su ficha de la tienda o el repositorio público del proyecto:
+Para solicitudes de privacidad o datos, escribe a
+[sales@liisgo.com](mailto:sales@liisgo.com).
 
-[https://github.com/acesoftware365/parchesepop](https://github.com/acesoftware365/parchesepop)
+Política de privacidad pública:
+[https://liisgo.com/#/apps/ParchesePop/privacy](https://liisgo.com/#/apps/ParchesePop/privacy)

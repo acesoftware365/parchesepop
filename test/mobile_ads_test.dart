@@ -171,7 +171,7 @@ void main() {
       expect(dock.bottom, lessThanOrEqualTo(banner.top));
 
       for (final label in const [
-        'JUGAR ONLINE',
+        'PARTIDA RÁPIDA',
         'CONTRA CPU',
         'Tienda',
         'Mi perfil',

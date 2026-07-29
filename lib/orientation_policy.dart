@@ -1,15 +1,12 @@
 import 'package:flutter/services.dart';
 
-/// Phone orientations supported by Parchese Pop.
+/// Phone orientation supported by Parchese Pop.
 ///
-/// The game never forces landscape: the operating system can move freely
-/// between portrait and either landscape direction as the player rotates the
-/// device.
+/// The board and its controls are designed as a single, touch-friendly
+/// vertical experience. Keeping portrait avoids the cramped landscape HUD.
 const supportedAppOrientations = <DeviceOrientation>[
   DeviceOrientation.portraitUp,
-  DeviceOrientation.landscapeLeft,
-  DeviceOrientation.landscapeRight,
 ];
 
-Future<void> enableFlexibleOrientation() =>
+Future<void> enablePortraitOrientation() =>
     SystemChrome.setPreferredOrientations(supportedAppOrientations);

@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- The board is deliberately used as the adaptive-icon background so Android
+     does not shrink it inside the legacy white launcher circle. -->
+<bitmap xmlns:android="http://schemas.android.com/apk/res/android"
+    android:gravity="fill"
+    android:src="@drawable/ic_launcher_board" />

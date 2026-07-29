@@ -205,7 +205,8 @@ void main() {
       expect(engine.currentPlayer.color, expectedColor);
       _finishCurrentPlayer(engine);
     }
-    await tester.pump(const Duration(milliseconds: 1800));
+    // Let the longest scheduled CPU think delay finish after standings close.
+    await tester.pump(const Duration(milliseconds: 2100));
 
     expect(engine.finishOrder, PlayerColor.values);
     expect(find.byKey(const ValueKey('final-ranking')), findsOneWidget);

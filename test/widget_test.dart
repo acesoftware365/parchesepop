@@ -240,7 +240,7 @@ void main() {
     expect(subtitle, findsOneWidget);
     expect(find.byKey(const ValueKey('shop-back')), findsOneWidget);
     expect(find.byKey(const ValueKey('shop-balance-card')), findsOneWidget);
-    expect(find.byKey(const ValueKey('shop-add-test-balance')), findsOneWidget);
+    expect(find.byKey(const ValueKey('shop-add-balance')), findsOneWidget);
     expect(find.byKey(const ValueKey('shop-filters')), findsOneWidget);
     expect(find.byType(Card), findsNWidgets(featuredProducts.length));
     for (final product in featuredProducts) {

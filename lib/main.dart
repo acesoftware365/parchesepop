@@ -10,8 +10,10 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'app_language.dart';
 import 'cosmetic_visuals.dart';
 import 'game_analytics.dart';
+import 'coin_store.dart';
 import 'game_engine.dart';
 import 'game_guide.dart';
+import 'game_sounds.dart';
 import 'mobile_ads.dart';
 import 'online_match.dart';
 import 'orientation_policy.dart';
@@ -21,10 +23,11 @@ import 'wallet.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
-  await enableFlexibleOrientation();
+  await enablePortraitOrientation();
   final analytics = await initializeGameAnalytics();
   final adsController = createAppAdsController();
   runApp(ParchesePopApp(analytics: analytics, adsController: adsController));
+  unawaited(gameSounds.initialize());
 }
 
 class PopColors {
@@ -501,6 +504,15 @@ class _ParchesePopAppState extends State<ParchesePopApp> {
     await store.setInt('profile_level', value.level);
   }
 
+  Future<void> _deleteAccountAndData() async {
+    await authGateway?.deleteAccount();
+    final store = await SharedPreferences.getInstance();
+    await store.clear();
+    await wallet.reset();
+    await language.select(AppLanguagePreference.system);
+    if (mounted) setState(() => profile = null);
+  }
+
   @override
   Widget build(BuildContext context) {
     return MobileAdsScope(
@@ -642,10 +654,12 @@ class ProfileSetupScreen extends StatefulWidget {
     required this.onSaved,
     this.initial,
     this.authGateway,
+    this.startInSignInMode = false,
   });
-  final ValueChanged<PlayerProfile> onSaved;
+  final Future<void> Function(PlayerProfile) onSaved;
   final PlayerProfile? initial;
   final PlayerAuthGateway? authGateway;
+  final bool startInSignInMode;
 
   @override
   State<ProfileSetupScreen> createState() => _ProfileSetupScreenState();
@@ -664,6 +678,7 @@ class _ProfileSetupScreenState extends State<ProfileSetupScreen> {
   String flag = '🇩🇴';
   bool obscurePassword = true;
   bool submitting = false;
+  bool signInMode = false;
   static const flags = [
     '🇩🇴',
     '🇺🇸',
@@ -682,6 +697,7 @@ class _ProfileSetupScreenState extends State<ProfileSetupScreen> {
   void initState() {
     super.initState();
     flag = widget.initial?.flag ?? flag;
+    signInMode = widget.startInSignInMode;
   }
 
   @override
@@ -693,9 +709,13 @@ class _ProfileSetupScreenState extends State<ProfileSetupScreen> {
     super.dispose();
   }
 
-  bool get needsAccountRegistration =>
+  bool get requiresEmailCredentials =>
       widget.authGateway != null &&
-      (widget.initial == null || widget.authGateway?.currentAccount == null);
+      (widget.startInSignInMode ||
+          widget.initial == null ||
+          widget.authGateway?.currentAccount == null);
+
+  bool get needsAccountRegistration => requiresEmailCredentials && !signInMode;
 
   String? _validateName(BuildContext context, String? value) {
     final clean = (value ?? '').trim();
@@ -713,7 +733,12 @@ class _ProfileSetupScreenState extends State<ProfileSetupScreen> {
   }
 
   String? _validatePassword(BuildContext context, String? value) {
-    if (!needsAccountRegistration) return null;
+    if (!requiresEmailCredentials) return null;
+    if (signInMode) {
+      return (value ?? '').isEmpty
+          ? appTranslate(context, 'Escribe tu contraseña.')
+          : null;
+    }
     final issues = PlayerCredentialValidator.validatePassword(
       value ?? '',
       confirmation: passwordConfirmation.text,
@@ -754,21 +779,30 @@ class _ProfileSetupScreenState extends State<ProfileSetupScreen> {
     if (submitting || !formKey.currentState!.validate()) return;
     setState(() => submitting = true);
     try {
-      if (needsAccountRegistration && widget.authGateway != null) {
-        await widget.authGateway!.registerWithEmail(
-          email: email.text,
-          password: password.text,
-        );
+      AuthenticatedPlayerAccount? account;
+      if (requiresEmailCredentials && widget.authGateway != null) {
+        account = signInMode
+            ? await widget.authGateway!.signInWithEmail(
+                email: email.text,
+                password: password.text,
+              )
+            : await widget.authGateway!.registerWithEmail(
+                email: email.text,
+                password: password.text,
+              );
       }
       if (!mounted) return;
-      widget.onSaved(
+      await widget.onSaved(
         PlayerProfile(
-          name: name.text.trim(),
-          email: email.text.trim().toLowerCase(),
+          name: signInMode
+              ? (widget.initial?.name ?? account!.email.split('@').first.trim())
+              : name.text.trim(),
+          email: account?.email ?? email.text.trim().toLowerCase(),
           flag: flag,
           level: widget.initial?.level ?? 1,
         ),
       );
+      if (!mounted) return;
       Navigator.pop(context);
     } catch (error) {
       _showAuthError(error);
@@ -792,7 +826,7 @@ class _ProfileSetupScreenState extends State<ProfileSetupScreen> {
           ? await widget.authGateway!.signInWithApple()
           : await widget.authGateway!.signInWithGoogle();
       if (!mounted) return;
-      widget.onSaved(
+      await widget.onSaved(
         PlayerProfile(
           name: name.text.trim(),
           email: account.email,
@@ -800,6 +834,7 @@ class _ProfileSetupScreenState extends State<ProfileSetupScreen> {
           level: widget.initial?.level ?? 1,
         ),
       );
+      if (!mounted) return;
       Navigator.pop(context);
     } catch (error) {
       _showAuthError(error);
@@ -810,7 +845,9 @@ class _ProfileSetupScreenState extends State<ProfileSetupScreen> {
 
   @override
   Widget build(BuildContext context) {
-    final authMethods = PlayerAuthPolicy.methodsFor(_authPlatform);
+    final authMethods = widget.authGateway is LocalPlayerAuthGateway
+        ? const <PlayerAuthMethod>[]
+        : PlayerAuthPolicy.methodsFor(_authPlatform);
     return Scaffold(
       backgroundColor: PopColors.navy,
       body: _HomeArcadeBackdrop(
@@ -871,7 +908,9 @@ class _ProfileSetupScreenState extends State<ProfileSetupScreen> {
                           ),
                           const SizedBox(height: 8),
                           PopText(
-                            widget.initial == null
+                            signInMode
+                                ? 'Inicia sesión para recuperar tu perfil'
+                                : widget.initial == null
                                 ? 'Crea tu perfil de jugador'
                                 : 'Edita tu perfil',
                             textAlign: TextAlign.center,
@@ -882,21 +921,54 @@ class _ProfileSetupScreenState extends State<ProfileSetupScreen> {
                             ),
                           ),
                           const SizedBox(height: 24),
-                          TextFormField(
-                            controller: name,
-                            validator: (value) => _validateName(context, value),
-                            maxLength: 12,
-                            decoration: InputDecoration(
-                              labelText: appTranslate(
-                                context,
-                                'Nombre de jugador',
+                          if (requiresEmailCredentials) ...[
+                            OutlinedButton.icon(
+                              key: ValueKey(
+                                signInMode
+                                    ? 'profile-create-account-mode'
+                                    : 'profile-sign-in-mode',
                               ),
-                              hintText: appTranslate(context, 'Ej. JuanPop'),
-                              prefixIcon: const Icon(Icons.person_rounded),
-                              border: const OutlineInputBorder(),
+                              onPressed: submitting
+                                  ? null
+                                  : () => setState(() {
+                                      signInMode = !signInMode;
+                                      password.clear();
+                                      passwordConfirmation.clear();
+                                    }),
+                              icon: Icon(
+                                signInMode
+                                    ? Icons.person_add_alt_1_rounded
+                                    : Icons.login_rounded,
+                              ),
+                              label: PopText(
+                                signInMode
+                                    ? 'Crear una cuenta nueva'
+                                    : 'Ya tengo una cuenta · Iniciar sesión',
+                                style: const TextStyle(
+                                  fontWeight: FontWeight.w900,
+                                ),
+                              ),
                             ),
-                          ),
-                          const SizedBox(height: 12),
+                            const SizedBox(height: 16),
+                          ],
+                          if (!signInMode) ...[
+                            TextFormField(
+                              controller: name,
+                              validator: (value) =>
+                                  _validateName(context, value),
+                              maxLength: 12,
+                              decoration: InputDecoration(
+                                labelText: appTranslate(
+                                  context,
+                                  'Nombre de jugador',
+                                ),
+                                hintText: appTranslate(context, 'Ej. JuanPop'),
+                                prefixIcon: const Icon(Icons.person_rounded),
+                                border: const OutlineInputBorder(),
+                              ),
+                            ),
+                            const SizedBox(height: 12),
+                          ],
                           TextFormField(
                             controller: email,
                             keyboardType: TextInputType.emailAddress,
@@ -926,7 +998,7 @@ class _ProfileSetupScreenState extends State<ProfileSetupScreen> {
                               border: const OutlineInputBorder(),
                             ),
                           ),
-                          if (needsAccountRegistration) ...[
+                          if (requiresEmailCredentials) ...[
                             const SizedBox(height: 12),
                             TextFormField(
                               key: const ValueKey('profile-password'),
@@ -955,61 +1027,67 @@ class _ProfileSetupScreenState extends State<ProfileSetupScreen> {
                                 border: const OutlineInputBorder(),
                               ),
                             ),
-                            const SizedBox(height: 12),
-                            TextFormField(
-                              key: const ValueKey(
-                                'profile-password-confirmation',
-                              ),
-                              controller: passwordConfirmation,
-                              obscureText: obscurePassword,
-                              validator: (value) {
-                                if ((value ?? '') != password.text) {
-                                  return appTranslate(
+                            if (!signInMode) ...[
+                              const SizedBox(height: 12),
+                              TextFormField(
+                                key: const ValueKey(
+                                  'profile-password-confirmation',
+                                ),
+                                controller: passwordConfirmation,
+                                obscureText: obscurePassword,
+                                validator: (value) {
+                                  if ((value ?? '') != password.text) {
+                                    return appTranslate(
+                                      context,
+                                      'Las contraseñas no coinciden.',
+                                    );
+                                  }
+                                  return null;
+                                },
+                                autofillHints: const [
+                                  AutofillHints.newPassword,
+                                ],
+                                decoration: InputDecoration(
+                                  labelText: appTranslate(
                                     context,
-                                    'Las contraseñas no coinciden.',
-                                  );
-                                }
-                                return null;
-                              },
-                              autofillHints: const [AutofillHints.newPassword],
-                              decoration: InputDecoration(
-                                labelText: appTranslate(
-                                  context,
-                                  'Confirmar contraseña',
+                                    'Confirmar contraseña',
+                                  ),
+                                  prefixIcon: const Icon(
+                                    Icons.verified_user_rounded,
+                                  ),
+                                  border: const OutlineInputBorder(),
                                 ),
-                                prefixIcon: const Icon(
-                                  Icons.verified_user_rounded,
-                                ),
-                                border: const OutlineInputBorder(),
                               ),
+                            ],
+                          ],
+                          if (!signInMode) ...[
+                            const SizedBox(height: 20),
+                            const PopText(
+                              'Elige tu bandera',
+                              style: TextStyle(
+                                fontWeight: FontWeight.w800,
+                                fontSize: 16,
+                              ),
+                            ),
+                            const SizedBox(height: 10),
+                            Wrap(
+                              spacing: 8,
+                              runSpacing: 8,
+                              children: flags
+                                  .map(
+                                    (item) => ChoiceChip(
+                                      label: PopText(
+                                        item,
+                                        style: const TextStyle(fontSize: 25),
+                                      ),
+                                      selected: flag == item,
+                                      onSelected: (_) =>
+                                          setState(() => flag = item),
+                                    ),
+                                  )
+                                  .toList(),
                             ),
                           ],
-                          const SizedBox(height: 20),
-                          const PopText(
-                            'Elige tu bandera',
-                            style: TextStyle(
-                              fontWeight: FontWeight.w800,
-                              fontSize: 16,
-                            ),
-                          ),
-                          const SizedBox(height: 10),
-                          Wrap(
-                            spacing: 8,
-                            runSpacing: 8,
-                            children: flags
-                                .map(
-                                  (item) => ChoiceChip(
-                                    label: PopText(
-                                      item,
-                                      style: const TextStyle(fontSize: 25),
-                                    ),
-                                    selected: flag == item,
-                                    onSelected: (_) =>
-                                        setState(() => flag = item),
-                                  ),
-                                )
-                                .toList(),
-                          ),
                           const SizedBox(height: 24),
                           FilledButton.icon(
                             key: const ValueKey('profile-email-submit'),
@@ -1023,12 +1101,16 @@ class _ProfileSetupScreenState extends State<ProfileSetupScreen> {
                                   )
                                 : const Icon(Icons.check_circle_rounded),
                             label: PopText(
-                              widget.initial == null
+                              signInMode
+                                  ? 'Iniciar sesión'
+                                  : needsAccountRegistration
+                                  ? 'Crear cuenta y guardar sesión'
+                                  : widget.initial == null
                                   ? 'Crear cuenta con correo'
                                   : 'Guardar cambios',
                             ),
                           ),
-                          if (needsAccountRegistration &&
+                          if (requiresEmailCredentials &&
                               (authMethods.contains(PlayerAuthMethod.google) ||
                                   authMethods.contains(
                                     PlayerAuthMethod.apple,
@@ -1091,7 +1173,7 @@ class _ProfileSetupScreenState extends State<ProfileSetupScreen> {
                           ],
                           const SizedBox(height: 10),
                           const PopText(
-                            'La contraseña nunca se guarda como texto. Google y Apple se activarán al conectar las credenciales del servicio.',
+                            'La contraseña se protege con un hash y la sesión queda guardada en este dispositivo.',
                             textAlign: TextAlign.center,
                             style: TextStyle(
                               fontSize: 12,
@@ -1122,7 +1204,7 @@ class HomeScreen extends StatefulWidget {
     this.analytics = const NoopGameAnalytics(),
   });
   final PlayerProfile profile;
-  final ValueChanged<PlayerProfile> onProfileChanged;
+  final Future<void> Function(PlayerProfile) onProfileChanged;
   final WalletController wallet;
   final PlayerAuthGateway authGateway;
   final GameAnalytics analytics;
@@ -1512,7 +1594,7 @@ class PlayHome extends StatelessWidget {
     this.analytics = const NoopGameAnalytics(),
   });
   final PlayerProfile profile;
-  final ValueChanged<PlayerProfile> onProfileChanged;
+  final Future<void> Function(PlayerProfile) onProfileChanged;
   final WalletController wallet;
   final PlayerAuthGateway authGateway;
   final GameAnalytics analytics;
@@ -1546,12 +1628,12 @@ class PlayHome extends StatelessWidget {
                 final modeCards = [
                   _ModeCard(
                     color: PopColors.blue,
-                    icon: Icons.public_rounded,
-                    title: 'JUGAR ONLINE',
-                    subtitle: 'Reta jugadores y sube de nivel',
+                    icon: Icons.bolt_rounded,
+                    title: 'PARTIDA RÁPIDA',
+                    subtitle: 'Mesa local con rivales automáticos',
                     dense: densePortrait,
                     expanded: horizontalModes && !compactLandscape,
-                    onTap: () => _startOnline(context),
+                    onTap: () => _startQuickMatch(context),
                   ),
                   _ModeCard(
                     color: PopColors.red,
@@ -1696,7 +1778,7 @@ class PlayHome extends StatelessWidget {
       return;
     }
 
-    final editRequested = await showDialog<bool>(
+    final profileAction = await showDialog<_ProfileDialogAction>(
       context: context,
       barrierColor: const Color(0xCC071A3D),
       builder: (_) => _HomeProfileDialog(
@@ -1705,7 +1787,7 @@ class PlayHome extends StatelessWidget {
         authGateway: authGateway,
       ),
     );
-    if (!context.mounted || editRequested != true) return;
+    if (!context.mounted || profileAction == null) return;
     await Navigator.push<void>(
       context,
       PageRouteBuilder<void>(
@@ -1716,6 +1798,7 @@ class PlayHome extends StatelessWidget {
               initial: profile,
               onSaved: onProfileChanged,
               authGateway: authGateway,
+              startInSignInMode: profileAction == _ProfileDialogAction.signIn,
             ),
         transitionsBuilder: (context, animation, secondaryAnimation, child) =>
             FadeTransition(
@@ -1729,55 +1812,7 @@ class PlayHome extends StatelessWidget {
     );
   }
 
-  Future<void> _startOnline(BuildContext context) async {
-    final hasAuthenticatedAccount = authGateway.currentAccount != null;
-    if (profile.isGuest || !hasAuthenticatedAccount) {
-      await showDialog<void>(
-        context: context,
-        builder: (dialogContext) => AlertDialog(
-          icon: const Icon(
-            Icons.public_rounded,
-            size: 44,
-            color: PopColors.blue,
-          ),
-          title: PopText(
-            profile.isGuest
-                ? 'Crea tu cuenta para jugar online'
-                : 'Protege tu perfil para jugar online',
-          ),
-          content: PopText(
-            profile.isGuest
-                ? 'Puedes jugar contra el CPU sin registrarte. Para partidas online necesitas un nombre, correo y contraseña.'
-                : 'Este perfil fue creado antes del sistema de cuentas. Crea una contraseña para protegerlo y entrar online.',
-            textAlign: TextAlign.center,
-          ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.pop(dialogContext),
-              child: const PopText('Ahora no'),
-            ),
-            FilledButton(
-              onPressed: () {
-                Navigator.pop(dialogContext);
-                Navigator.push(
-                  context,
-                  MaterialPageRoute(
-                    builder: (_) => ProfileSetupScreen(
-                      initial: profile.isGuest ? null : profile,
-                      onSaved: onProfileChanged,
-                      authGateway: authGateway,
-                    ),
-                  ),
-                );
-              },
-              child: const PopText('Registrarme'),
-            ),
-          ],
-        ),
-      );
-      return;
-    }
-
+  Future<void> _startQuickMatch(BuildContext context) async {
     final mode = await showDialog<GameMode>(
       context: context,
       builder: (_) => const _OnlineModeDialog(),
@@ -1865,7 +1900,7 @@ class _OnlineModeDialog extends StatelessWidget {
                           ),
                         ),
                         PopText(
-                          'Elige las reglas para tu partida online',
+                          'Elige las reglas para tu partida rápida',
                           style: TextStyle(
                             color: Color(0xFF667085),
                             fontWeight: FontWeight.w700,
@@ -3149,7 +3184,7 @@ class _ModeArtwork extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final online = icon == Icons.public_rounded;
+    final quickMatch = icon == Icons.bolt_rounded;
     return SizedBox(
       width: size,
       height: size,
@@ -3158,7 +3193,7 @@ class _ModeArtwork extends StatelessWidget {
         children: [
           Positioned.fill(
             child: Transform.rotate(
-              angle: online ? -.07 : .07,
+              angle: quickMatch ? -.07 : .07,
               child: Container(
                 decoration: BoxDecoration(
                   color: Colors.white.withValues(alpha: .96),
@@ -3181,11 +3216,13 @@ class _ModeArtwork extends StatelessWidget {
           ),
           for (final entry in [
             (
-              alignment: online ? Alignment.topRight : Alignment.bottomLeft,
+              alignment: quickMatch ? Alignment.topRight : Alignment.bottomLeft,
               tokenColor: PopColors.yellow,
             ),
             (
-              alignment: online ? Alignment.bottomRight : Alignment.topRight,
+              alignment: quickMatch
+                  ? Alignment.bottomRight
+                  : Alignment.topRight,
               tokenColor: PopColors.green,
             ),
           ])
@@ -3206,7 +3243,7 @@ class _ModeArtwork extends StatelessWidget {
                     ),
                   ],
                 ),
-                child: online
+                child: quickMatch
                     ? null
                     : Center(
                         child: Container(
@@ -3443,6 +3480,132 @@ Future<void> _showAddCoinsDialog(
   );
 }
 
+Future<void> _showCoinStoreDialog(BuildContext context, CoinStore store) async {
+  await showDialog<void>(
+    context: context,
+    builder: (dialogContext) => AnimatedBuilder(
+      animation: store,
+      builder: (context, _) => Dialog(
+        insetPadding: const EdgeInsets.all(18),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(28)),
+        child: ConstrainedBox(
+          constraints: const BoxConstraints(maxWidth: 480),
+          child: Padding(
+            padding: const EdgeInsets.all(20),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                Row(
+                  children: [
+                    const Icon(
+                      Icons.monetization_on_rounded,
+                      color: Color(0xFFF4AE00),
+                      size: 32,
+                    ),
+                    const SizedBox(width: 10),
+                    const Expanded(
+                      child: PopText(
+                        'Monedas',
+                        style: TextStyle(
+                          color: PopColors.navy,
+                          fontSize: 24,
+                          fontWeight: FontWeight.w900,
+                        ),
+                      ),
+                    ),
+                    IconButton(
+                      onPressed: () => Navigator.pop(dialogContext),
+                      icon: const Icon(Icons.close_rounded),
+                    ),
+                  ],
+                ),
+                const PopText(
+                  'Compra monedas para desbloquear artículos cosméticos. No dan ventajas competitivas.',
+                  style: TextStyle(
+                    color: Color(0xFF667085),
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+                const SizedBox(height: 14),
+                if (store.loading)
+                  const Center(
+                    child: Padding(
+                      padding: EdgeInsets.all(22),
+                      child: CircularProgressIndicator(),
+                    ),
+                  )
+                else if (!store.available)
+                  const PopText(
+                    'La tienda no está disponible en este dispositivo todavía.',
+                    textAlign: TextAlign.center,
+                    style: TextStyle(
+                      color: Color(0xFF667085),
+                      fontWeight: FontWeight.w700,
+                    ),
+                  )
+                else ...[
+                  for (final pack in coinPacks)
+                    Padding(
+                      padding: const EdgeInsets.only(bottom: 9),
+                      child: FilledButton(
+                        onPressed: store.productFor(pack) == null
+                            ? null
+                            : () => store.buy(pack),
+                        style: FilledButton.styleFrom(
+                          backgroundColor: PopColors.blue,
+                          foregroundColor: Colors.white,
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 16,
+                            vertical: 14,
+                          ),
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(16),
+                          ),
+                        ),
+                        child: Row(
+                          children: [
+                            const Icon(Icons.add_circle_rounded),
+                            const SizedBox(width: 9),
+                            Expanded(
+                              child: PopText(
+                                '+${_formatCoins(pack.coins)} monedas',
+                                style: const TextStyle(
+                                  fontWeight: FontWeight.w900,
+                                ),
+                              ),
+                            ),
+                            PopText(
+                              store.productFor(pack)?.price ??
+                                  pack.fallbackPrice,
+                              style: const TextStyle(
+                                fontWeight: FontWeight.w900,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
+                  if (store.error != null)
+                    PopText(
+                      store.error!,
+                      textAlign: TextAlign.center,
+                      style: const TextStyle(
+                        color: PopColors.red,
+                        fontSize: 12,
+                        fontWeight: FontWeight.w700,
+                      ),
+                    ),
+                ],
+              ],
+            ),
+          ),
+        ),
+      ),
+    ),
+  );
+}
+
 class _CoinPill extends StatelessWidget {
   const _CoinPill({required this.wallet});
 
@@ -3530,7 +3693,7 @@ class _ShopBalanceCard extends StatelessWidget {
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 const PopText(
-                  'SALDO PARA PROBAR',
+                  'TU SALDO',
                   maxLines: 1,
                   style: TextStyle(
                     color: PopColors.navy,
@@ -3554,7 +3717,7 @@ class _ShopBalanceCard extends StatelessWidget {
           ),
           const SizedBox(width: 8),
           FilledButton.icon(
-            key: const ValueKey('shop-add-test-balance'),
+            key: const ValueKey('shop-add-balance'),
             onPressed: onAdd,
             icon: const Icon(Icons.add_circle_rounded, size: 20),
             label: const PopText('+ MONEDAS'),
@@ -3713,9 +3876,9 @@ class MatchmakingScreen extends StatefulWidget {
 }
 
 class _MatchmakingScreenState extends State<MatchmakingScreen> {
-  static const humanSearchSeconds = 8;
-  static const firstVirtualJoinSecond = 9;
-  static const virtualSeatColors = [
+  static const tablePreparationSeconds = 8;
+  static const firstRivalJoinSecond = 9;
+  static const rivalSeatColors = [
     PlayerColor.green,
     PlayerColor.yellow,
     PlayerColor.blue,
@@ -3768,10 +3931,10 @@ class _MatchmakingScreenState extends State<MatchmakingScreen> {
   void _advanceSearch() {
     if (!mounted || openingGame) return;
     final nextSecond = elapsedSeconds + 1;
-    if (nextSecond == firstVirtualJoinSecond) {
+    if (nextSecond == firstRivalJoinSecond) {
       _prepareVirtualFallback();
     }
-    final gameStartSecond = firstVirtualJoinSecond + virtualSeatColors.length;
+    final gameStartSecond = firstRivalJoinSecond + rivalSeatColors.length;
     if (nextSecond >= gameStartSecond) {
       elapsedSeconds = nextSecond;
       _openGame();
@@ -3781,22 +3944,21 @@ class _MatchmakingScreenState extends State<MatchmakingScreen> {
   }
 
   int get revealedOpponents {
-    final joined = elapsedSeconds - humanSearchSeconds;
+    final joined = elapsedSeconds - tablePreparationSeconds;
     if (joined <= 0) return 0;
     if (joined >= opponents.length) return opponents.length;
     return joined;
   }
 
   String get searchStatus {
-    final remaining = humanSearchSeconds - elapsedSeconds;
+    final remaining = tablePreparationSeconds - elapsedSeconds;
     if (remaining > 0) {
-      return 'Buscando jugadores · $remaining segundos';
+      return 'Preparando rivales · $remaining segundos';
     }
-    if (elapsedSeconds < firstVirtualJoinSecond) {
-      return 'Preparando la mesa…';
+    if (elapsedSeconds < firstRivalJoinSecond) {
+      return 'Completando la mesa…';
     }
-    return 'Jugadores encontrados · '
-        '$revealedOpponents/${virtualSeatColors.length}';
+    return 'Rivales listos · $revealedOpponents/${rivalSeatColors.length}';
   }
 
   void _openGame() {
@@ -3850,7 +4012,7 @@ class _MatchmakingScreenState extends State<MatchmakingScreen> {
                   ),
                   const SizedBox(height: 22),
                   const PopText(
-                    'Armando tu mesa…',
+                    'Preparando partida rápida…',
                     textAlign: TextAlign.center,
                     style: TextStyle(fontSize: 28, fontWeight: FontWeight.w900),
                   ),
@@ -3905,14 +4067,14 @@ class _MatchmakingScreenState extends State<MatchmakingScreen> {
                       ),
                       for (
                         var index = 0;
-                        index < virtualSeatColors.length;
+                        index < rivalSeatColors.length;
                         index++
                       )
                         _MatchmakingSeat(
                           participant: index < opponents.length
                               ? opponents[index]
                               : null,
-                          color: virtualSeatColors[index],
+                          color: rivalSeatColors[index],
                           revealed: index < revealedOpponents,
                         ),
                     ],
@@ -3938,9 +4100,9 @@ class _MatchmakingScreenState extends State<MatchmakingScreen> {
                         SizedBox(width: 8),
                         Expanded(
                           child: PopText(
-                            'Buscamos jugadores durante 8 segundos. Desde el '
-                            'segundo 9 completamos los asientos restantes y '
-                            'preparamos la partida.',
+                            'Esta partida se prepara en este dispositivo. '
+                            'Los asientos se completan automáticamente con '
+                            'rivales del juego.',
                             style: TextStyle(
                               fontSize: 11,
                               color: Color(0xFF667085),
@@ -3988,7 +4150,7 @@ class _MatchmakingSeat extends StatelessWidget {
       key: ValueKey('matchmaking-seat-${color.name}'),
       duration: const Duration(milliseconds: 420),
       width: 132,
-      height: 126,
+      height: 132,
       padding: const EdgeInsets.all(10),
       decoration: BoxDecoration(
         color: revealed
@@ -4071,7 +4233,7 @@ class _MatchmakingSeat extends StatelessWidget {
                   ),
                   SizedBox(height: 10),
                   PopText(
-                    'Buscando…',
+                    'Preparando…',
                     style: TextStyle(
                       color: Color(0xFF98A2B3),
                       fontWeight: FontWeight.w800,
@@ -4131,6 +4293,7 @@ class _GameScreenState extends State<GameScreen> {
   Duration matchElapsed = Duration.zero;
   bool victoryQueued = false;
   bool showVictory = false;
+  int lastSoundEventSequence = -1;
   final Object moveSelectionTapGroup = Object();
   SafeChatController? safeChat;
   SafeChatMessage? visibleChatMessage;
@@ -4235,6 +4398,11 @@ class _GameScreenState extends State<GameScreen> {
 
   void _onGameChanged() {
     if (!mounted) return;
+    final events = engine.eventHistory;
+    if (events.isNotEmpty && events.last.sequence != lastSoundEventSequence) {
+      lastSoundEventSequence = events.last.sequence;
+      unawaited(gameSounds.playForEvent(events.last));
+    }
     if (selectedToken != null &&
         (engine.gameOver ||
             !engine.currentPlayer.isHuman ||
@@ -12363,6 +12531,7 @@ class _ShopScreenState extends State<ShopScreen> {
   ];
 
   late final WalletController wallet;
+  late final CoinStore coinStore;
   late final bool ownsWallet;
   String selectedCategory = categories.first;
 
@@ -12374,7 +12543,9 @@ class _ShopScreenState extends State<ShopScreen> {
     super.initState();
     ownsWallet = widget.wallet == null;
     wallet = widget.wallet ?? WalletController();
+    coinStore = CoinStore(wallet);
     wallet.initialize().then((_) {
+      unawaited(coinStore.initialize());
       if (mounted) setState(() {});
     });
   }
@@ -12382,6 +12553,7 @@ class _ShopScreenState extends State<ShopScreen> {
   @override
   void dispose() {
     if (ownsWallet) wallet.dispose();
+    coinStore.dispose();
     super.dispose();
   }
 
@@ -12577,9 +12749,7 @@ class _ShopScreenState extends State<ShopScreen> {
       if (testCoinControlsVisible) {
         await _showAddCoinsDialog(context, wallet);
       } else {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: PopText('No tienes monedas suficientes.')),
-        );
+        await _showCoinStoreDialog(context, coinStore);
       }
       return;
     }
@@ -12884,6 +13054,13 @@ class _ShopScreenState extends State<ShopScreen> {
                 _ShopBalanceCard(
                   wallet: wallet,
                   onAdd: () => _showAddCoinsDialog(context, wallet),
+                ),
+              ],
+              if (!testCoinControlsVisible) ...[
+                const SizedBox(height: 10),
+                _ShopBalanceCard(
+                  wallet: wallet,
+                  onAdd: () => _showCoinStoreDialog(context, coinStore),
                 ),
               ],
               if (ads?.supported == true) ...[
@@ -14707,6 +14884,8 @@ class _AvatarArtPainter extends CustomPainter {
       oldDelegate.style != style;
 }
 
+enum _ProfileDialogAction { edit, signIn, register }
+
 class _HomeProfileDialog extends StatelessWidget {
   const _HomeProfileDialog({
     required this.profile,
@@ -14717,26 +14896,6 @@ class _HomeProfileDialog extends StatelessWidget {
   final PlayerProfile profile;
   final WalletController wallet;
   final PlayerAuthGateway authGateway;
-
-  Future<void> _requestPasswordReset(BuildContext context) async {
-    try {
-      await authGateway.sendPasswordReset(email: profile.email);
-      if (!context.mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: PopText('Revisa tu correo para cambiar la contraseña.'),
-        ),
-      );
-    } catch (error) {
-      if (!context.mounted) return;
-      final message = error is PlayerAuthException
-          ? error.message
-          : 'No se pudo solicitar el cambio de contraseña.';
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(SnackBar(content: PopText(message)));
-    }
-  }
 
   @override
   Widget build(BuildContext context) => AnimatedBuilder(
@@ -14840,7 +14999,7 @@ class _HomeProfileDialog extends StatelessWidget {
                                 ),
                                 foregroundColor: Colors.white,
                               ),
-                              onPressed: () => Navigator.pop(context, false),
+                              onPressed: () => Navigator.pop(context),
                               icon: const Icon(Icons.close_rounded),
                             ),
                           ],
@@ -14997,43 +15156,55 @@ class _HomeProfileDialog extends StatelessWidget {
                             ),
                           ),
                           const SizedBox(height: 10),
-                          Row(
-                            children: [
-                              Expanded(
-                                child: OutlinedButton.icon(
-                                  key: const ValueKey(
-                                    'profile-change-password',
-                                  ),
-                                  style: OutlinedButton.styleFrom(
-                                    foregroundColor: Colors.white,
-                                    side: const BorderSide(color: Colors.white),
-                                  ),
-                                  onPressed: () => showDialog<void>(
-                                    context: context,
-                                    builder: (_) => _ChangePasswordDialog(
-                                      authGateway: authGateway,
-                                    ),
-                                  ),
-                                  icon: const Icon(Icons.password_rounded),
-                                  label: const PopText('Cambiar clave'),
-                                ),
+                          OutlinedButton.icon(
+                            key: const ValueKey('profile-change-password'),
+                            style: OutlinedButton.styleFrom(
+                              foregroundColor: Colors.white,
+                              side: const BorderSide(color: Colors.white),
+                            ),
+                            onPressed: () => showDialog<void>(
+                              context: context,
+                              builder: (_) => _ChangePasswordDialog(
+                                authGateway: authGateway,
                               ),
-                              const SizedBox(width: 8),
-                              Expanded(
-                                child: TextButton(
-                                  key: const ValueKey('profile-reset-password'),
-                                  style: TextButton.styleFrom(
-                                    foregroundColor: Colors.white,
-                                  ),
-                                  onPressed: () =>
-                                      _requestPasswordReset(context),
-                                  child: const PopText('Olvidé mi clave'),
-                                ),
-                              ),
-                            ],
+                            ),
+                            icon: const Icon(Icons.password_rounded),
+                            label: const PopText('Cambiar clave'),
                           ),
                           const SizedBox(height: 10),
                         ],
+                        if (authGateway.currentAccount == null)
+                          OutlinedButton.icon(
+                            key: ValueKey(
+                              authGateway.hasRegisteredAccount
+                                  ? 'home-profile-login'
+                                  : 'home-profile-create-account',
+                            ),
+                            style: OutlinedButton.styleFrom(
+                              foregroundColor: Colors.white,
+                              side: const BorderSide(color: Colors.white),
+                            ),
+                            onPressed: () => Navigator.pop(
+                              context,
+                              authGateway.hasRegisteredAccount
+                                  ? _ProfileDialogAction.signIn
+                                  : _ProfileDialogAction.register,
+                            ),
+                            icon: Icon(
+                              authGateway.hasRegisteredAccount
+                                  ? Icons.login_rounded
+                                  : Icons.person_add_alt_1_rounded,
+                            ),
+                            label: PopText(
+                              authGateway.hasRegisteredAccount
+                                  ? 'LOGIN · usar una cuenta existente'
+                                  : 'CREAR ACCESO · guardar mi perfil',
+                              style: const TextStyle(
+                                fontWeight: FontWeight.w900,
+                              ),
+                            ),
+                          ),
+                        const SizedBox(height: 9),
                         FilledButton.icon(
                           key: const ValueKey('home-profile-edit'),
                           style: FilledButton.styleFrom(
@@ -15046,7 +15217,8 @@ class _HomeProfileDialog extends StatelessWidget {
                             elevation: 8,
                             shadowColor: const Color(0x66000000),
                           ),
-                          onPressed: () => Navigator.pop(context, true),
+                          onPressed: () =>
+                              Navigator.pop(context, _ProfileDialogAction.edit),
                           icon: const Icon(Icons.edit_rounded),
                           label: const PopText(
                             'Editar perfil',
@@ -15203,7 +15375,7 @@ class ProfileView extends StatelessWidget {
     required this.onChanged,
   });
   final PlayerProfile profile;
-  final ValueChanged<PlayerProfile> onChanged;
+  final Future<void> Function(PlayerProfile) onChanged;
 
   @override
   Widget build(BuildContext context) => _PopRouteScaffold(
@@ -15447,6 +15619,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   onChanged: (value) {
                     setState(() => sound = value);
                     _setPreference('settings_sound', value);
+                    gameSounds.setEffectsEnabled(value);
                   },
                   title: const PopText('Sonido'),
                   subtitle: const PopText('Dados, fichas, capturas y efectos'),
@@ -15458,10 +15631,30 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   onChanged: (value) {
                     setState(() => music = value);
                     _setPreference('settings_music', value);
+                    gameSounds.setMusicEnabled(value);
                   },
                   title: const PopText('Música'),
                   subtitle: const PopText('Menú y música de partida'),
                   secondary: const Icon(Icons.music_note_rounded),
+                ),
+                ListTile(
+                  key: const ValueKey('settings-sound-preview'),
+                  enabled: sound,
+                  leading: const Icon(Icons.play_circle_fill_rounded),
+                  title: const PopText('Probar sonido'),
+                  subtitle: const PopText('Escucha el efecto de los dados'),
+                  trailing: const Icon(Icons.volume_up_rounded),
+                  onTap: sound
+                      ? () {
+                          unawaited(gameSounds.playPreview());
+                          ScaffoldMessenger.of(context).showSnackBar(
+                            const SnackBar(
+                              content: Text('Reproduciendo sonido de dados'),
+                              duration: Duration(seconds: 2),
+                            ),
+                          );
+                        }
+                      : null,
                 ),
                 SwitchListTile(
                   key: const ValueKey('settings-vibration'),
@@ -15589,6 +15782,54 @@ class _LanguageChoiceTile extends StatelessWidget {
 class PoliciesScreen extends StatelessWidget {
   const PoliciesScreen({super.key});
 
+  Future<void> _confirmDeleteAccount(BuildContext context) async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        icon: const Icon(
+          Icons.delete_forever_rounded,
+          color: PopColors.red,
+          size: 44,
+        ),
+        title: const PopText('Eliminar cuenta y datos'),
+        content: const PopText(
+          'Se borrarán de este dispositivo el perfil, la sesión, las monedas, '
+          'los cosméticos y las preferencias. Esta acción no se puede deshacer.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(dialogContext, false),
+            child: const PopText('Cancelar'),
+          ),
+          FilledButton.icon(
+            style: FilledButton.styleFrom(backgroundColor: PopColors.red),
+            onPressed: () => Navigator.pop(dialogContext, true),
+            icon: const Icon(Icons.delete_forever_rounded),
+            label: const PopText('Eliminar definitivamente'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true || !context.mounted) return;
+
+    final appState = context.findAncestorStateOfType<_ParchesePopAppState>();
+    if (appState == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: PopText('No se pudieron eliminar los datos.')),
+      );
+      return;
+    }
+    final navigator = Navigator.of(context);
+    await appState._deleteAccountAndData();
+    if (!appState.mounted) return;
+    navigator.popUntil((route) => route.isFirst);
+    ScaffoldMessenger.maybeOf(appState.context)?.showSnackBar(
+      const SnackBar(
+        content: PopText('La cuenta y los datos locales fueron eliminados.'),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final ads = MobileAdsScope.maybeOf(context);
@@ -15604,10 +15845,11 @@ class PoliciesScreen extends StatelessWidget {
             onTap: () => _openPolicy(
               context,
               'Política de privacidad',
-              'El prototipo guarda localmente el perfil, las monedas, las '
-                  'compras cosméticas y las preferencias. Antes de publicar se '
-                  'documentarán el servicio de cuenta, analíticas, publicidad '
-                  'y cualquier dato que salga del dispositivo.',
+              'Parchese Pop guarda localmente el perfil, la sesión, las '
+                  'monedas, los cosméticos y las preferencias. Android y iOS '
+                  'pueden mostrar anuncios de Google AdMob con las opciones de '
+                  'consentimiento aplicables. Consulta la política completa en '
+                  'https://liisgo.com/#/apps/ParchesePop/privacy.',
             ),
           ),
           ListTile(
@@ -15616,9 +15858,10 @@ class PoliciesScreen extends StatelessWidget {
             onTap: () => _openPolicy(
               context,
               'Términos de uso',
-              'Parchese Pop es un juego de entretenimiento. Las monedas de esta '
-                  'versión son de prueba, no tienen valor monetario y no '
-                  'otorgan ventajas competitivas.',
+              'Parchese Pop es un juego de entretenimiento. Las monedas pueden '
+                  'obtenerse mediante anuncios recompensados o compras '
+                  'consumibles. Solo desbloquean contenido cosmético, no tienen '
+                  'valor monetario ni otorgan ventajas competitivas.',
             ),
           ),
           ListTile(
@@ -15653,15 +15896,14 @@ class PoliciesScreen extends StatelessWidget {
               onTap: ads.showPrivacyOptions,
             ),
           ListTile(
+            key: const ValueKey('delete-account-and-data'),
+            leading: const Icon(
+              Icons.delete_forever_rounded,
+              color: PopColors.red,
+            ),
             title: const PopText('Eliminar cuenta y datos'),
             trailing: const Icon(Icons.chevron_right),
-            onTap: () => _openPolicy(
-              context,
-              'Eliminar datos',
-              'El perfil actual vive en el dispositivo. El flujo definitivo '
-                  'permitirá borrar tanto los datos locales como la cuenta '
-                  'online cuando el servicio de autenticación esté conectado.',
-            ),
+            onTap: () => _confirmDeleteAccount(context),
           ),
         ],
       ),

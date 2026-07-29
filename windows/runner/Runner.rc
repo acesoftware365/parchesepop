@@ -90,12 +90,12 @@ BEGIN
         BLOCK "040904e4"
         BEGIN
             VALUE "CompanyName", "com.liisgo" "\0"
-            VALUE "FileDescription", "parchesepop" "\0"
+            VALUE "FileDescription", "Parchese Pop" "\0"
             VALUE "FileVersion", VERSION_AS_STRING "\0"
             VALUE "InternalName", "parchesepop" "\0"
             VALUE "LegalCopyright", "Copyright (C) 2026 com.liisgo. All rights reserved." "\0"
             VALUE "OriginalFilename", "parchesepop.exe" "\0"
-            VALUE "ProductName", "parchesepop" "\0"
+            VALUE "ProductName", "Parchese Pop" "\0"
             VALUE "ProductVersion", VERSION_AS_STRING "\0"
         END
     END

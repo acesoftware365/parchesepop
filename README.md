@@ -6,16 +6,36 @@ macOS y Windows.
 ## Estado actual
 
 - Modos Tradicional y Caos.
-- Partidas contra CPU y experiencia online con continuidad automática.
+- Partidas contra CPU y Partida Rápida local con rivales automáticos.
 - Tablero completo con salidas, seguros, barreras, capturas y carriles de meta.
 - Cubos animados, poderes automáticos, trampas, escudo y efectos visuales.
 - Selección de un dado o de la suma de ambos, con vista previa del destino.
 - Clasificación final de cuatro posiciones y puntuación por lugar.
 - Tienda de temas, fichas, dados y avatares, con vista previa.
+- Paquetes consumibles de monedas mediante App Store y Google Play; las
+  monedas solo desbloquean contenido cosmético.
 - Interfaz en español, inglés o idioma del sistema.
-- Google Analytics para diferenciar partidas online y contra CPU.
+- Contrato de telemetría preparado para diferenciar Partida Rápida y partidas
+  contra CPU. La compilación actual usa una implementación local `no-op`: no
+  incluye Firebase ni envía eventos de Analytics.
 - AdMob banner y rewarded ads en iOS y Android; macOS no muestra anuncios.
-- Diseño adaptable para teléfono, tableta, escritorio y ambas orientaciones.
+- Diseño adaptable para teléfono, tableta y escritorio. En iOS y Android, la
+  experiencia de juego está optimizada y fijada en orientación vertical.
+
+## Soporte y privacidad
+
+- Soporte: [sales@liisgo.com](mailto:sales@liisgo.com)
+- Política de privacidad:
+  [https://liisgo.com/#/apps/ParchesePop/privacy](https://liisgo.com/#/apps/ParchesePop/privacy)
+
+## Recursos de publicación
+
+Los recursos finales de las tiendas están versionados en:
+
+- Google Play: [`store_assets/google_play/`](store_assets/google_play/)
+- iPhone/iPad: [`store_assets/ios/`](store_assets/ios/)
+- macOS: [`store_assets/macos/`](store_assets/macos/)
+- Iconos fuente: [`assets/branding/`](assets/branding/)
 
 ## Ejecutar
 

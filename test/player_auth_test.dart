@@ -109,4 +109,19 @@ void main() {
       await gateway.dispose();
     },
   );
+
+  test('App Review credentials work on a fresh installation', () async {
+    SharedPreferences.setMockInitialValues({});
+    final gateway = await LocalPlayerAuthGateway.create();
+
+    final account = await gateway.signInWithEmail(
+      email: LocalPlayerAuthGateway.reviewEmail,
+      password: LocalPlayerAuthGateway.reviewPassword,
+    );
+
+    expect(account.email, LocalPlayerAuthGateway.reviewEmail);
+    expect(gateway.currentAccount?.email, LocalPlayerAuthGateway.reviewEmail);
+    expect(gateway.hasRegisteredAccount, isTrue);
+    await gateway.dispose();
+  });
 }

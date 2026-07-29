@@ -156,16 +156,9 @@ void main() {
     binding.platformDispatcher.clearLocaleTestValue();
   });
 
-  test('the app allows portrait and both landscape directions', () {
-    expect(
-      supportedAppOrientations,
-      containsAll(const [
-        DeviceOrientation.portraitUp,
-        DeviceOrientation.landscapeLeft,
-        DeviceOrientation.landscapeRight,
-      ]),
-    );
-    expect(supportedAppOrientations, hasLength(3));
+  test('the mobile app is locked to portrait', () {
+    expect(supportedAppOrientations, const [DeviceOrientation.portraitUp]);
+    expect(supportedAppOrientations, hasLength(1));
   });
 
   testWidgets('the active game survives portrait-landscape-portrait rotation', (

@@ -36,7 +36,7 @@ Future<void> main() async {
       languagePreference.storedValue,
     );
   }
-  await enableFlexibleOrientation();
+  await enablePortraitOrientation();
   if (preview == 'home') {
     runApp(const app.ParchesePopApp());
     return;
@@ -45,7 +45,7 @@ Future<void> main() async {
   await language.initialize();
   final previewLocalPlayer = OnlineParticipant(
     id: 'preview-local',
-    displayName: 'JuanPop',
+    displayName: 'Player Pop',
     flag: '🇩🇴',
     avatarId: 'avatar_ninja',
     level: 18,
@@ -97,8 +97,8 @@ Future<void> main() async {
     'guide' => const GameGuideScreen(initialMode: GameGuideMode.chaos),
     'matchmaking' => const app.MatchmakingScreen(
       profile: app.PlayerProfile(
-        name: 'JuanPop',
-        email: 'juan@example.com',
+        name: 'Player Pop',
+        email: 'player@parchesepop.game',
         flag: '🇩🇴',
         level: 18,
       ),
