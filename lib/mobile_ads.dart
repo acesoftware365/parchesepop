@@ -1,0 +1,465 @@
+import 'dart:async';
+
+import 'package:flutter/foundation.dart';
+import 'package:flutter/material.dart';
+import 'package:google_mobile_ads/google_mobile_ads.dart';
+
+const _androidBannerTestId = 'ca-app-pub-3940256099942544/9214589741';
+const _iosBannerTestId = 'ca-app-pub-3940256099942544/2435281174';
+const _androidRewardedTestId = 'ca-app-pub-3940256099942544/5224354917';
+const _iosRewardedTestId = 'ca-app-pub-3940256099942544/1712485313';
+
+const _androidBannerReleaseId = 'ca-app-pub-8588489900323524/5419059196';
+const _iosBannerReleaseId = 'ca-app-pub-8588489900323524/2792895853';
+const _androidRewardedReleaseId = 'ca-app-pub-8588489900323524/9654506032';
+const _iosRewardedReleaseId = 'ca-app-pub-8588489900323524/2250538595';
+
+bool supportsMobileAds(TargetPlatform platform, {bool isWeb = false}) =>
+    !isWeb &&
+    (platform == TargetPlatform.android || platform == TargetPlatform.iOS);
+
+abstract class AppAdsController extends ChangeNotifier {
+  bool get supported;
+  bool get adsReady;
+  bool get rewardedReady;
+  bool get privacyOptionsRequired;
+
+  Future<void> initialize();
+  Future<bool> showRewarded();
+  Future<void> showPrivacyOptions();
+  Widget buildBanner(BuildContext context);
+}
+
+AppAdsController createAppAdsController() {
+  if (!supportsMobileAds(defaultTargetPlatform, isWeb: kIsWeb)) {
+    return NoopAppAdsController();
+  }
+  return GoogleMobileAdsController(platform: defaultTargetPlatform);
+}
+
+class NoopAppAdsController extends AppAdsController {
+  @override
+  bool get supported => false;
+
+  @override
+  bool get adsReady => false;
+
+  @override
+  bool get rewardedReady => false;
+
+  @override
+  bool get privacyOptionsRequired => false;
+
+  @override
+  Future<void> initialize() async {}
+
+  @override
+  Future<bool> showRewarded() async => false;
+
+  @override
+  Future<void> showPrivacyOptions() async {}
+
+  @override
+  Widget buildBanner(BuildContext context) => const SizedBox.shrink();
+}
+
+class GoogleMobileAdsController extends AppAdsController {
+  GoogleMobileAdsController({required this.platform})
+    : assert(supportsMobileAds(platform));
+
+  final TargetPlatform platform;
+  RewardedAd? _rewardedAd;
+  Timer? _rewardRetryTimer;
+  bool _initializing = false;
+  bool _initialized = false;
+  bool _adsReady = false;
+  bool _rewardLoading = false;
+  bool _rewardShowing = false;
+  bool _privacyOptionsRequired = false;
+  bool _disposed = false;
+
+  void _notify() {
+    if (!_disposed) notifyListeners();
+  }
+
+  String get _bannerAdUnitId {
+    if (platform == TargetPlatform.android) {
+      return kDebugMode ? _androidBannerTestId : _androidBannerReleaseId;
+    }
+    return kDebugMode ? _iosBannerTestId : _iosBannerReleaseId;
+  }
+
+  String get _rewardedAdUnitId {
+    if (platform == TargetPlatform.android) {
+      return kDebugMode ? _androidRewardedTestId : _androidRewardedReleaseId;
+    }
+    return kDebugMode ? _iosRewardedTestId : _iosRewardedReleaseId;
+  }
+
+  @override
+  bool get supported => true;
+
+  @override
+  bool get adsReady => _adsReady;
+
+  @override
+  bool get rewardedReady => _rewardedAd != null && !_rewardShowing;
+
+  @override
+  bool get privacyOptionsRequired => _privacyOptionsRequired;
+
+  @override
+  Future<void> initialize() async {
+    if (_initializing || _initialized) return;
+    _initializing = true;
+    final completed = Completer<void>();
+
+    Future<void> finishConsentFlow() async {
+      await _refreshPrivacyOptionsRequirement();
+      await _startAdsIfAllowed();
+      if (!completed.isCompleted) completed.complete();
+    }
+
+    ConsentInformation.instance.requestConsentInfoUpdate(
+      ConsentRequestParameters(),
+      () {
+        ConsentForm.loadAndShowConsentFormIfRequired((formError) {
+          if (formError != null) {
+            debugPrint(
+              'AdMob consent form error '
+              '${formError.errorCode}: ${formError.message}',
+            );
+          }
+          unawaited(finishConsentFlow());
+        });
+      },
+      (formError) {
+        debugPrint(
+          'AdMob consent update error '
+          '${formError.errorCode}: ${formError.message}',
+        );
+        unawaited(finishConsentFlow());
+      },
+    );
+
+    await completed.future;
+    _initializing = false;
+    _initialized = true;
+  }
+
+  Future<void> _refreshPrivacyOptionsRequirement() async {
+    final status = await ConsentInformation.instance
+        .getPrivacyOptionsRequirementStatus();
+    final required = status == PrivacyOptionsRequirementStatus.required;
+    if (_privacyOptionsRequired == required) return;
+    _privacyOptionsRequired = required;
+    _notify();
+  }
+
+  Future<void> _startAdsIfAllowed() async {
+    if (_disposed || _adsReady) return;
+    final canRequestAds = await ConsentInformation.instance.canRequestAds();
+    if (!canRequestAds) return;
+    await MobileAds.instance.initialize();
+    if (_disposed) return;
+    _adsReady = true;
+    _notify();
+    _loadRewarded();
+  }
+
+  void _loadRewarded() {
+    if (_disposed ||
+        !_adsReady ||
+        _rewardLoading ||
+        _rewardShowing ||
+        _rewardedAd != null) {
+      return;
+    }
+    _rewardRetryTimer?.cancel();
+    _rewardLoading = true;
+    _notify();
+    RewardedAd.load(
+      adUnitId: _rewardedAdUnitId,
+      request: const AdRequest(),
+      rewardedAdLoadCallback: RewardedAdLoadCallback(
+        onAdLoaded: (ad) {
+          if (_disposed) {
+            ad.dispose();
+            return;
+          }
+          _rewardLoading = false;
+          _rewardedAd = ad;
+          _notify();
+        },
+        onAdFailedToLoad: (error) {
+          if (_disposed) return;
+          _rewardLoading = false;
+          debugPrint('AdMob rewarded load error: $error');
+          _notify();
+          _rewardRetryTimer = Timer(const Duration(seconds: 30), _loadRewarded);
+        },
+      ),
+    );
+  }
+
+  @override
+  Future<bool> showRewarded() async {
+    final ad = _rewardedAd;
+    if (ad == null || _rewardShowing) {
+      _loadRewarded();
+      return false;
+    }
+
+    final completed = Completer<bool>();
+    var earnedReward = false;
+    _rewardedAd = null;
+    _rewardShowing = true;
+    _notify();
+
+    void finish(bool earned) {
+      if (!completed.isCompleted) completed.complete(earned);
+      if (_disposed) return;
+      _rewardShowing = false;
+      _notify();
+      _loadRewarded();
+    }
+
+    ad.fullScreenContentCallback = FullScreenContentCallback(
+      onAdDismissedFullScreenContent: (closedAd) {
+        closedAd.dispose();
+        finish(earnedReward);
+      },
+      onAdFailedToShowFullScreenContent: (failedAd, error) {
+        debugPrint('AdMob rewarded show error: $error');
+        failedAd.dispose();
+        finish(false);
+      },
+    );
+    ad.show(
+      onUserEarnedReward: (_, _) {
+        earnedReward = true;
+      },
+    );
+    return completed.future;
+  }
+
+  @override
+  Future<void> showPrivacyOptions() async {
+    final completed = Completer<void>();
+    ConsentForm.showPrivacyOptionsForm((formError) {
+      if (formError != null) {
+        debugPrint(
+          'AdMob privacy options error '
+          '${formError.errorCode}: ${formError.message}',
+        );
+      }
+      unawaited(
+        _refreshPrivacyOptionsRequirement().then((_) => _startAdsIfAllowed()),
+      );
+      if (!completed.isCompleted) completed.complete();
+    });
+    return completed.future;
+  }
+
+  @override
+  Widget buildBanner(BuildContext context) => AdaptiveMobileBanner(
+    key: const ValueKey('mobile-ad-banner'),
+    adUnitId: _bannerAdUnitId,
+  );
+
+  @override
+  void dispose() {
+    _disposed = true;
+    _rewardRetryTimer?.cancel();
+    _rewardedAd?.dispose();
+    super.dispose();
+  }
+}
+
+class MobileAdsScope extends InheritedNotifier<AppAdsController> {
+  const MobileAdsScope({
+    super.key,
+    required AppAdsController controller,
+    required super.child,
+  }) : super(notifier: controller);
+
+  static AppAdsController of(BuildContext context) {
+    final scope = context.dependOnInheritedWidgetOfExactType<MobileAdsScope>();
+    assert(scope != null, 'MobileAdsScope is missing above this context.');
+    return scope!.notifier!;
+  }
+
+  static AppAdsController? maybeOf(BuildContext context) =>
+      context.dependOnInheritedWidgetOfExactType<MobileAdsScope>()?.notifier;
+}
+
+class MobileAdShell extends StatelessWidget {
+  const MobileAdShell({
+    super.key,
+    required this.controller,
+    required this.child,
+  });
+
+  final AppAdsController controller;
+  final Widget child;
+
+  @override
+  Widget build(BuildContext context) {
+    if (!controller.supported) return child;
+    return AnimatedBuilder(
+      animation: controller,
+      builder: (context, _) {
+        final keyboardOpen = MediaQuery.viewInsetsOf(context).bottom > 0;
+        if (!controller.adsReady || keyboardOpen) return child;
+        return Column(
+          children: [
+            Expanded(
+              child: MediaQuery.removePadding(
+                context: context,
+                removeBottom: true,
+                child: child,
+              ),
+            ),
+            SafeArea(
+              top: false,
+              left: false,
+              right: false,
+              minimum: const EdgeInsets.only(top: 2),
+              child: controller.buildBanner(context),
+            ),
+          ],
+        );
+      },
+    );
+  }
+}
+
+class AdaptiveMobileBanner extends StatefulWidget {
+  const AdaptiveMobileBanner({super.key, required this.adUnitId});
+
+  final String adUnitId;
+
+  @override
+  State<AdaptiveMobileBanner> createState() => _AdaptiveMobileBannerState();
+}
+
+class _AdaptiveMobileBannerState extends State<AdaptiveMobileBanner> {
+  BannerAd? _banner;
+  Timer? _retryTimer;
+  AdSize? _size;
+  int? _requestedWidth;
+  bool _loadScheduled = false;
+
+  @override
+  void didUpdateWidget(covariant AdaptiveMobileBanner oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.adUnitId == widget.adUnitId) return;
+    _disposeBanner();
+    _requestedWidth = null;
+  }
+
+  void _scheduleLoad(int width) {
+    if (width <= 0 || _requestedWidth == width || _loadScheduled) return;
+    _loadScheduled = true;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _loadScheduled = false;
+      if (mounted) unawaited(_load(width));
+    });
+  }
+
+  Future<void> _load(int width) async {
+    _requestedWidth = width;
+    _retryTimer?.cancel();
+    _disposeBanner();
+    final size = width >= AdSize.fullBanner.width
+        ? AdSize.fullBanner
+        : AdSize.banner;
+    if (!mounted || _requestedWidth != width) return;
+
+    final banner = BannerAd(
+      adUnitId: widget.adUnitId,
+      request: const AdRequest(),
+      size: size,
+      listener: BannerAdListener(
+        onAdLoaded: (ad) {
+          if (!mounted || ad != _banner) {
+            ad.dispose();
+            return;
+          }
+          setState(() => _size = size);
+        },
+        onAdFailedToLoad: (ad, error) {
+          debugPrint('AdMob banner load error: $error');
+          ad.dispose();
+          if (!mounted || ad != _banner) return;
+          setState(() {
+            _banner = null;
+            _size = null;
+            _requestedWidth = width;
+          });
+          _retryTimer = Timer(const Duration(seconds: 30), () {
+            if (mounted) {
+              setState(() => _requestedWidth = null);
+            }
+          });
+        },
+      ),
+    );
+    _banner = banner;
+    await banner.load();
+  }
+
+  void _disposeBanner() {
+    _banner?.dispose();
+    _banner = null;
+    _size = null;
+  }
+
+  @override
+  void dispose() {
+    _retryTimer?.cancel();
+    _disposeBanner();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final width = constraints.maxWidth.floor();
+        _scheduleLoad(width);
+        final size = _size;
+        final banner = _banner;
+        final height = size?.height.toDouble() ?? 50;
+        return AnimatedContainer(
+          duration: const Duration(milliseconds: 220),
+          key: const ValueKey('mobile-ad-banner-slot'),
+          width: double.infinity,
+          height: height,
+          alignment: Alignment.center,
+          color: const Color(0xFFF4F7FC),
+          child: size != null && banner != null
+              ? SizedBox(
+                  width: size.width.toDouble(),
+                  height: size.height.toDouble(),
+                  child: AdWidget(ad: banner),
+                )
+              : Semantics(
+                  label: 'Publicidad',
+                  child: Center(
+                    child: Text(
+                      'PUBLICIDAD',
+                      style: TextStyle(
+                        color: Color(0xFF667085),
+                        fontSize: 10,
+                        fontWeight: FontWeight.w800,
+                        letterSpacing: 1.2,
+                      ),
+                    ),
+                  ),
+                ),
+        );
+      },
+    );
+  }
+}
