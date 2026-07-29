@@ -1,6 +1,6 @@
 # Parchese Pop Privacy Policy
 
-**Effective date: July 28, 2026**
+**Effective date: July 29, 2026**
 
 This Privacy Policy explains how Parchese Pop handles information when you use
 the game on Android, iOS, macOS, or another supported platform.
@@ -39,6 +39,10 @@ The Android and iOS versions use Google AdMob:
 
 The macOS version does not request or display AdMob banner or rewarded
 advertisements.
+
+Parchese Pop currently does not request permission to track activity across
+other companies' apps or websites and does not request access to Apple's
+Advertising Identifier (IDFA).
 
 Depending on your region and consent choices, Google and its advertising
 partners may process device identifiers, IP address, diagnostic data, ad
@@ -113,7 +117,7 @@ repository:
 
 # Política de privacidad de Parchese Pop
 
-**Fecha de vigencia: 28 de julio de 2026**
+**Fecha de vigencia: 29 de julio de 2026**
 
 Esta Política de privacidad explica cómo Parchese Pop maneja la información
 cuando utilizas el juego en Android, iOS, macOS u otra plataforma compatible.
@@ -154,6 +158,10 @@ Las versiones de Android e iOS utilizan Google AdMob:
 
 La versión de macOS no solicita ni muestra banners o anuncios recompensados de
 AdMob.
+
+Actualmente, Parchese Pop no solicita permiso para rastrear actividad entre
+aplicaciones o sitios web de otras compañías ni solicita acceso al
+identificador de publicidad de Apple (IDFA).
 
 Según tu región y tus decisiones de consentimiento, Google y sus socios
 publicitarios pueden procesar identificadores del dispositivo, dirección IP,

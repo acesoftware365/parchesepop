@@ -18,6 +18,9 @@ bool supportsMobileAds(TargetPlatform platform, {bool isWeb = false}) =>
     !isWeb &&
     (platform == TargetPlatform.android || platform == TargetPlatform.iOS);
 
+RequestConfiguration familySafeAdRequestConfiguration() =>
+    RequestConfiguration(maxAdContentRating: MaxAdContentRating.g);
+
 abstract class AppAdsController extends ChangeNotifier {
   bool get supported;
   bool get adsReady;
@@ -160,6 +163,9 @@ class GoogleMobileAdsController extends AppAdsController {
     if (_disposed || _adsReady) return;
     final canRequestAds = await ConsentInformation.instance.canRequestAds();
     if (!canRequestAds) return;
+    await MobileAds.instance.updateRequestConfiguration(
+      familySafeAdRequestConfiguration(),
+    );
     await MobileAds.instance.initialize();
     if (_disposed) return;
     _adsReady = true;

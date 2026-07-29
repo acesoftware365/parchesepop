@@ -23,6 +23,14 @@ void main() {
     });
   });
 
+  test('mobile ad requests allow only general-audience content', () {
+    final configuration = familySafeAdRequestConfiguration();
+
+    expect(configuration.maxAdContentRating, 'G');
+    expect(configuration.tagForChildDirectedTreatment, isNull);
+    expect(configuration.tagForUnderAgeOfConsent, isNull);
+  });
+
   group('MobileAdShell', () {
     testWidgets('shows exactly one bottom banner when mobile ads are ready', (
       tester,
