@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "895089276635",
+    "project_id": "parchese-pop",
+    "storage_bucket": "parchese-pop.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:895089276635:android:49314843600407edcabefe",
+        "android_client_info": {
+          "package_name": "com.liisgo.parchesepop"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyCJ6zSbOsY2KSHuyp2vvV4ksNMrO4UtVfc"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
