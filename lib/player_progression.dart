@@ -549,6 +549,28 @@ class PlayerProgressionController extends ChangeNotifier {
         .fold<int>(0, (total, transaction) => total + transaction.amount);
   }
 
+  /// Coins already credited for playing [matchId], excluding the optional
+  /// rewarded-ad bonus. Used to reconstruct a restored result screen.
+  int matchCoinsAwarded(String matchId) {
+    _validateExternalId(matchId, 'matchId');
+    return _transactions
+        .where(
+          (transaction) =>
+              transaction.matchId == matchId &&
+              transaction.source != ProgressionTransactionSource.rewardedDouble,
+        )
+        .fold<int>(0, (total, transaction) => total + transaction.amount);
+  }
+
+  /// Whether the optional rewarded-ad bonus for [matchId] was already paid.
+  ///
+  /// This lets restored result screens preserve the claimed state instead of
+  /// offering an advertisement that can no longer grant another reward.
+  bool rewardedDoubleClaimed(String matchId) {
+    _validateExternalId(matchId, 'matchId');
+    return _hasTransaction(_rewardedDoubleTransactionId(matchId));
+  }
+
   Future<T> _enqueue<T>(Future<T> Function() operation) {
     final result = _mutationTail.then<T>((_) => operation());
     _mutationTail = result.then<void>(

@@ -5677,6 +5677,7 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
     }
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted) return;
+      if (engine.gameOver) unawaited(_settleMatchRewards());
       unawaited(_saveMatchCheckpoint());
       // A restored checkpoint can open directly on a CPU turn without a fresh
       // engine notification. Kick the existing CPU driver once after mount.
@@ -6192,13 +6193,23 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
     }
     await _creditProgression(update.transactions);
     matchBasePayout = progression.matchPayout(matchId);
-    matchRewardCoinsAwarded += update.coinsAwarded;
+    endMatchRewardClaimed = progression.rewardedDoubleClaimed(matchId);
+    if (endMatchRewardClaimed) rewardedDecisionAnalyticsLogged = true;
+    if (update.coinsAwarded > 0) {
+      matchRewardCoinsAwarded += update.coinsAwarded;
+    } else if (matchRewardCoinsAwarded == 0) {
+      matchRewardCoinsAwarded = progression.matchCoinsAwarded(matchId);
+    }
     _logRewardedOfferIfEligible();
     if (mounted) setState(() {});
   }
 
   void _logRewardedOfferIfEligible() {
-    if (rewardedOfferAnalyticsLogged) return;
+    if (rewardedOfferAnalyticsLogged ||
+        endMatchRewardClaimed ||
+        widget.wallet == null) {
+      return;
+    }
     final ads = MobileAdsScope.maybeOf(context);
     final reward = widget.progression == null
         ? (engine.standingsComplete ? 100 : 0)
@@ -6304,7 +6315,8 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
   Future<void> _watchEndMatchRewarded() async {
     if (endMatchRewardInProgress ||
         endMatchRewardClaimed ||
-        postVictoryNavigationInProgress) {
+        postVictoryNavigationInProgress ||
+        widget.wallet == null) {
       return;
     }
     final ads = MobileAdsScope.maybeOf(context);
@@ -8052,7 +8064,8 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
                             ? _continueWatching
                             : null,
                         onWatchRewarded:
-                            (widget.progression == null
+                            widget.wallet != null &&
+                                (widget.progression == null
                                     ? engine.standingsComplete
                                     : matchPlacementRewardSettled &&
                                           matchBasePayout > 0) &&
@@ -10431,8 +10444,8 @@ class _VictoryCelebrationState extends State<_VictoryCelebration>
               label: PopText(
                 widget.rewardInProgress
                     ? 'CARGANDO ANUNCIO…'
-                    : 'VER ANUNCIO · DUPLICAR\n'
-                          '+${widget.doubleRewardCoins} MONEDAS',
+                    : 'VER ANUNCIO\n'
+                          '+${widget.doubleRewardCoins} MONEDAS EXTRA',
                 textAlign: TextAlign.center,
                 style: const TextStyle(
                   fontSize: 12,
@@ -10459,7 +10472,7 @@ class _VictoryCelebrationState extends State<_VictoryCelebration>
                   const SizedBox(width: 7),
                   Flexible(
                     child: PopText(
-                      '+${widget.doubleRewardCoins} MONEDAS DUPLICADAS',
+                      '+${widget.doubleRewardCoins} MONEDAS EXTRA RECIBIDAS',
                       textAlign: TextAlign.center,
                       style: const TextStyle(
                         color: PopColors.green,
@@ -10473,6 +10486,242 @@ class _VictoryCelebrationState extends State<_VictoryCelebration>
             ),
         ],
       ),
+    );
+  }
+
+  Widget? _buildPinnedRewardSummary(
+    BuildContext context, {
+    required bool stacked,
+  }) {
+    if (widget.rewardCoins <= 0 &&
+        widget.onWatchRewarded == null &&
+        !widget.rewardClaimed) {
+      return null;
+    }
+    final english = appLanguageCodeOf(context) == 'en';
+    final earnedKey = ValueKey(
+      widget.standingsComplete
+          ? 'victory-earned-reward'
+          : 'victory-early-earned-reward',
+    );
+    final rewardedKey = ValueKey(
+      widget.standingsComplete
+          ? 'victory-rewarded-ad'
+          : 'victory-early-rewarded-ad',
+    );
+
+    Widget? earned;
+    if (widget.rewardCoins > 0) {
+      earned = Semantics(
+        label: english
+            ? 'Reward credited: ${widget.rewardCoins} coins'
+            : 'Recompensa acreditada: ${widget.rewardCoins} monedas',
+        excludeSemantics: true,
+        child: Container(
+          key: earnedKey,
+          height: 56,
+          padding: const EdgeInsets.symmetric(horizontal: 8),
+          decoration: BoxDecoration(
+            color: PopColors.yellow.withValues(alpha: .18),
+            borderRadius: BorderRadius.circular(16),
+            border: Border.all(color: PopColors.yellow.withValues(alpha: .72)),
+          ),
+          child: Row(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              const Icon(
+                Icons.monetization_on_rounded,
+                color: Color(0xFFC58C00),
+                size: 21,
+              ),
+              const SizedBox(width: 5),
+              Flexible(
+                child: Column(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    PopText(
+                      '+${widget.rewardCoins} MONEDAS',
+                      maxLines: 1,
+                      style: const TextStyle(
+                        color: PopColors.navy,
+                        fontSize: 14,
+                        height: 1,
+                        fontWeight: FontWeight.w900,
+                      ),
+                    ),
+                    const SizedBox(height: 3),
+                    const PopText(
+                      'POR JUGAR',
+                      maxLines: 1,
+                      style: TextStyle(
+                        color: Color(0xFF6A5830),
+                        fontSize: 9.5,
+                        height: 1,
+                        fontWeight: FontWeight.w900,
+                        letterSpacing: .25,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+        ),
+      );
+    }
+
+    Widget? extra;
+    if (widget.onWatchRewarded != null) {
+      final onPressed = widget.rewardInProgress || widget.navigationInProgress
+          ? null
+          : widget.onWatchRewarded;
+      extra = Semantics(
+        label: english
+            ? 'Optional. Watch an ad to receive '
+                  '${widget.doubleRewardCoins} extra coins'
+            : 'Opcional. Ver anuncio para recibir '
+                  '${widget.doubleRewardCoins} monedas extra',
+        button: true,
+        enabled: onPressed != null,
+        onTap: onPressed,
+        excludeSemantics: true,
+        child: SizedBox(
+          height: 56,
+          child: FilledButton.icon(
+            key: rewardedKey,
+            onPressed: onPressed,
+            style: FilledButton.styleFrom(
+              backgroundColor: const Color(0xFFE4F7EC),
+              foregroundColor: const Color(0xFF09663E),
+              disabledBackgroundColor: const Color(0xFFE9EFEA),
+              disabledForegroundColor: const Color(0xFF66746B),
+              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+              side: const BorderSide(color: Color(0xFF178552), width: 1.5),
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(16),
+              ),
+            ),
+            icon: widget.rewardInProgress
+                ? const SizedBox.square(
+                    dimension: 17,
+                    child: CircularProgressIndicator(
+                      strokeWidth: 2,
+                      color: Color(0xFF09663E),
+                    ),
+                  )
+                : const Icon(Icons.play_circle_fill_rounded, size: 21),
+            label: widget.rewardInProgress
+                ? const PopText(
+                    'CARGANDO…',
+                    maxLines: 1,
+                    style: TextStyle(fontSize: 11, fontWeight: FontWeight.w900),
+                  )
+                : Column(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      PopText(
+                        '+${widget.doubleRewardCoins} EXTRA',
+                        maxLines: 1,
+                        style: const TextStyle(
+                          fontSize: 14,
+                          height: 1,
+                          fontWeight: FontWeight.w900,
+                        ),
+                      ),
+                      const SizedBox(height: 3),
+                      const PopText(
+                        'VER ANUNCIO',
+                        maxLines: 1,
+                        style: TextStyle(
+                          fontSize: 9.5,
+                          height: 1,
+                          fontWeight: FontWeight.w900,
+                          letterSpacing: .15,
+                        ),
+                      ),
+                    ],
+                  ),
+          ),
+        ),
+      );
+    } else if (widget.rewardClaimed) {
+      extra = Semantics(
+        label: english
+            ? '${widget.doubleRewardCoins} extra coins received'
+            : '${widget.doubleRewardCoins} monedas extra recibidas',
+        excludeSemantics: true,
+        child: Container(
+          height: 56,
+          padding: const EdgeInsets.symmetric(horizontal: 8),
+          decoration: BoxDecoration(
+            color: PopColors.green.withValues(alpha: .12),
+            borderRadius: BorderRadius.circular(16),
+            border: Border.all(color: PopColors.green.withValues(alpha: .38)),
+          ),
+          child: Row(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              const Icon(
+                Icons.check_circle_rounded,
+                color: Color(0xFF09663E),
+                size: 20,
+              ),
+              const SizedBox(width: 5),
+              Flexible(
+                child: Column(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    PopText(
+                      '+${widget.doubleRewardCoins} MONEDAS',
+                      maxLines: 1,
+                      style: const TextStyle(
+                        color: Color(0xFF09663E),
+                        fontSize: 13,
+                        height: 1,
+                        fontWeight: FontWeight.w900,
+                      ),
+                    ),
+                    const SizedBox(height: 3),
+                    const PopText(
+                      'EXTRA RECIBIDAS',
+                      maxLines: 1,
+                      style: TextStyle(
+                        color: Color(0xFF09663E),
+                        fontSize: 9,
+                        height: 1,
+                        fontWeight: FontWeight.w900,
+                        letterSpacing: .1,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+        ),
+      );
+    }
+
+    final children = <Widget>[
+      if (earned != null) Expanded(child: earned),
+      if (earned != null && extra != null) const SizedBox(width: 8),
+      if (extra != null) Expanded(child: extra),
+    ];
+    if (stacked) {
+      return Column(
+        key: const ValueKey('victory-pinned-reward'),
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          if (earned != null) SizedBox(width: double.infinity, child: earned),
+          if (earned != null && extra != null) const SizedBox(height: 8),
+          if (extra != null) SizedBox(width: double.infinity, child: extra),
+        ],
+      );
+    }
+
+    return Row(
+      key: const ValueKey('victory-pinned-reward'),
+      children: children,
     );
   }
 
@@ -10658,9 +10907,20 @@ class _VictoryCelebrationState extends State<_VictoryCelebration>
               builder: (context, viewport) {
                 final pinActions =
                     viewport.maxWidth <= 600 && viewport.maxHeight < 820;
-                final actionDockHeight = widget.onContinueWatching == null
-                    ? 68.0
-                    : 124.0;
+                final stackPinnedReward = viewport.maxWidth < 350;
+                final pinnedReward = pinActions
+                    ? _buildPinnedRewardSummary(
+                        context,
+                        stacked: stackPinnedReward,
+                      )
+                    : null;
+                final actionDockHeight =
+                    (widget.onContinueWatching == null ? 68.0 : 124.0) +
+                    (pinnedReward == null
+                        ? 0.0
+                        : stackPinnedReward
+                        ? 128.0
+                        : 64.0);
                 return Stack(
                   key: const ValueKey('victory-celebration'),
                   children: [
@@ -10755,8 +11015,8 @@ class _VictoryCelebrationState extends State<_VictoryCelebration>
                                               ) *
                                               .035,
                                           child: Container(
-                                            width: pinActions ? 58 : 92,
-                                            height: pinActions ? 58 : 92,
+                                            width: pinActions ? 52 : 92,
+                                            height: pinActions ? 52 : 92,
                                             decoration: BoxDecoration(
                                               shape: BoxShape.circle,
                                               gradient: const LinearGradient(
@@ -10784,11 +11044,11 @@ class _VictoryCelebrationState extends State<_VictoryCelebration>
                                             child: Icon(
                                               Icons.emoji_events_rounded,
                                               color: Colors.white,
-                                              size: pinActions ? 34 : 54,
+                                              size: pinActions ? 31 : 54,
                                             ),
                                           ),
                                         ),
-                                        SizedBox(height: pinActions ? 8 : 14),
+                                        SizedBox(height: pinActions ? 6 : 14),
                                         PopText(
                                           title,
                                           key: const ValueKey('victory-title'),
@@ -10805,7 +11065,7 @@ class _VictoryCelebrationState extends State<_VictoryCelebration>
                                             letterSpacing: .3,
                                           ),
                                         ),
-                                        SizedBox(height: pinActions ? 8 : 12),
+                                        SizedBox(height: pinActions ? 6 : 12),
                                         if (widget.standingsComplete) ...[
                                           PopText(
                                             'La partida terminó. Estos son los resultados.',
@@ -10825,7 +11085,8 @@ class _VictoryCelebrationState extends State<_VictoryCelebration>
                                             compact: pinActions,
                                           ),
                                           SizedBox(height: pinActions ? 8 : 12),
-                                          if (widget.rewardCoins > 0) ...[
+                                          if (!pinActions &&
+                                              widget.rewardCoins > 0) ...[
                                             Container(
                                               key: const ValueKey(
                                                 'victory-earned-reward',
@@ -10857,7 +11118,8 @@ class _VictoryCelebrationState extends State<_VictoryCelebration>
                                             ),
                                             const SizedBox(height: 10),
                                           ],
-                                          if (widget.onWatchRewarded != null)
+                                          if (!pinActions &&
+                                              widget.onWatchRewarded != null)
                                             SizedBox(
                                               width: double.infinity,
                                               child: FilledButton.icon(
@@ -10894,8 +11156,8 @@ class _VictoryCelebrationState extends State<_VictoryCelebration>
                                                 label: PopText(
                                                   widget.rewardInProgress
                                                       ? 'CARGANDO ANUNCIO…'
-                                                      : 'VER ANUNCIO · DUPLICAR\n'
-                                                            '+${widget.doubleRewardCoins} MONEDAS',
+                                                      : 'VER ANUNCIO\n'
+                                                            '+${widget.doubleRewardCoins} MONEDAS EXTRA',
                                                   textAlign: TextAlign.center,
                                                   style: const TextStyle(
                                                     fontSize: 12,
@@ -10905,7 +11167,8 @@ class _VictoryCelebrationState extends State<_VictoryCelebration>
                                                 ),
                                               ),
                                             )
-                                          else if (widget.rewardClaimed)
+                                          else if (!pinActions &&
+                                              widget.rewardClaimed)
                                             Container(
                                               width: double.infinity,
                                               padding:
@@ -10931,7 +11194,7 @@ class _VictoryCelebrationState extends State<_VictoryCelebration>
                                                   const SizedBox(width: 7),
                                                   Flexible(
                                                     child: PopText(
-                                                      '+${widget.doubleRewardCoins} MONEDAS DUPLICADAS',
+                                                      '+${widget.doubleRewardCoins} MONEDAS EXTRA RECIBIDAS',
                                                       textAlign:
                                                           TextAlign.center,
                                                       style: const TextStyle(
@@ -10945,7 +11208,8 @@ class _VictoryCelebrationState extends State<_VictoryCelebration>
                                                 ],
                                               ),
                                             ),
-                                          const SizedBox(height: 10),
+                                          if (!pinActions)
+                                            const SizedBox(height: 10),
                                         ] else ...[
                                           Container(
                                             padding: const EdgeInsets.symmetric(
@@ -11005,7 +11269,9 @@ class _VictoryCelebrationState extends State<_VictoryCelebration>
                                               ],
                                             ),
                                           ),
-                                          const SizedBox(height: 13),
+                                          SizedBox(
+                                            height: pinActions ? 10 : 13,
+                                          ),
                                           PopText(
                                             description,
                                             textAlign: TextAlign.center,
@@ -11016,7 +11282,9 @@ class _VictoryCelebrationState extends State<_VictoryCelebration>
                                               fontWeight: FontWeight.w700,
                                             ),
                                           ),
-                                          const SizedBox(height: 14),
+                                          SizedBox(
+                                            height: pinActions ? 11 : 14,
+                                          ),
                                           Wrap(
                                             alignment: WrapAlignment.center,
                                             spacing: 8,
@@ -11114,7 +11382,8 @@ class _VictoryCelebrationState extends State<_VictoryCelebration>
                                               ],
                                             ),
                                           ),
-                                          ?_buildEarlyRewardSummary(),
+                                          if (!pinActions)
+                                            ?_buildEarlyRewardSummary(),
                                         ],
                                         if (!pinActions) ...[
                                           const SizedBox(height: 22),
@@ -11159,7 +11428,16 @@ class _VictoryCelebrationState extends State<_VictoryCelebration>
                                 ),
                               ],
                             ),
-                            child: _buildVictoryActions(context, compact: true),
+                            child: Column(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                if (pinnedReward != null) ...[
+                                  pinnedReward,
+                                  const SizedBox(height: 8),
+                                ],
+                                _buildVictoryActions(context, compact: true),
+                              ],
+                            ),
                           ),
                         ),
                       ),

@@ -46,6 +46,10 @@ void main() {
           'This local match is in progress. If you leave now, it will end.',
       '2 / 2 EN META': '2 / 2 HOME',
       'CARGANDO ANUNCIO…': 'LOADING AD…',
+      'CARGANDO…': 'LOADING…',
+      'POR JUGAR': 'FOR PLAYING',
+      'VER ANUNCIO': 'WATCH AD',
+      'EXTRA RECIBIDAS': 'EXTRA RECEIVED',
     };
 
     for (final entry in staticCopy.entries) {
@@ -66,6 +70,9 @@ void main() {
       '¡Duplicaste tu premio: +70 monedas!':
           'You doubled your reward: +70 coins!',
       '+70 MONEDAS POR JUGAR': '+70 COINS FOR PLAYING',
+      '+70 MONEDAS': '+70 COINS',
+      'VER ANUNCIO\n+70 MONEDAS EXTRA': 'WATCH AD\n+70 EXTRA COINS',
+      '+70 MONEDAS EXTRA RECIBIDAS': '+70 EXTRA COINS RECEIVED',
       'VER ANUNCIO · DUPLICAR\n+70 MONEDAS': 'WATCH AD · DOUBLE\n+70 COINS',
       '+70 MONEDAS DUPLICADAS': '+70 DOUBLED COINS',
       'Tus dos fichas llegaron a la meta.': 'Your two pieces reached home.',

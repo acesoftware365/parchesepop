@@ -391,6 +391,8 @@ void main() {
     await progression.recordCellsMoved(eventId: 'ad_move', cells: 20);
     await progression.recordTokenReleased(eventId: 'ad_departure');
     final balanceBeforeAd = progression.balance;
+    expect(progression.matchCoinsAwarded('ad_match'), 105);
+    expect(progression.rewardedDoubleClaimed('ad_match'), isFalse);
 
     final result = await progression.claimRewardedDouble(matchId: 'ad_match');
     expect(result.status, RewardedDoubleStatus.awarded);
@@ -400,6 +402,8 @@ void main() {
       result.transaction!.source,
       ProgressionTransactionSource.rewardedDouble,
     );
+    expect(progression.matchCoinsAwarded('ad_match'), 105);
+    expect(progression.rewardedDoubleClaimed('ad_match'), isTrue);
 
     final duplicate = await progression.claimRewardedDouble(
       matchId: 'ad_match',

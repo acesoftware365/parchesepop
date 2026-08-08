@@ -12,6 +12,7 @@ import 'package:parchesepop/main.dart'
         PlayerProfile,
         ShopScreen;
 import 'package:parchesepop/mobile_ads.dart';
+import 'package:parchesepop/player_progression.dart';
 import 'package:parchesepop/wallet.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
@@ -756,6 +757,298 @@ void main() {
         await tester.pumpWidget(const SizedBox.shrink());
       },
     );
+
+    testWidgets(
+      'iPhone first place pins earned coins and optional ad above every action',
+      (tester) async {
+        _configureIPhone14View(tester);
+        SharedPreferences.setMockInitialValues({});
+        final engine = _firstWinnerMatch();
+        final wallet = await WalletController.create();
+        final progression = await PlayerProgressionController.create();
+        final ads = _FakeAdsController(
+          supported: true,
+          adsReady: true,
+          rewardedReady: true,
+          rewardedResult: RewardedAdResult.earned,
+        );
+        addTearDown(engine.dispose);
+        addTearDown(wallet.dispose);
+        addTearDown(progression.dispose);
+        addTearDown(ads.dispose);
+
+        await tester.pumpWidget(
+          MobileAdsScope(
+            controller: ads,
+            child: MaterialApp(
+              builder: (context, child) => MobileAdShell(
+                controller: ads,
+                child: child ?? const SizedBox.shrink(),
+              ),
+              home: GameScreen(
+                opponent: 'CPU • Fácil',
+                gameEngine: engine,
+                wallet: wallet,
+                progression: progression,
+                analyticsMatchRef: 'pinned_reward_match',
+              ),
+            ),
+          ),
+        );
+        await tester.pump(const Duration(milliseconds: 1900));
+
+        expect(wallet.balance, 370);
+        expect(find.text('+120 MONEDAS'), findsOneWidget);
+        expect(find.text('POR JUGAR'), findsOneWidget);
+        expect(find.text('+70 EXTRA'), findsOneWidget);
+        expect(find.text('VER ANUNCIO'), findsOneWidget);
+        expect(ads.rewardedShowCount, 0);
+
+        final version = find.byKey(const ValueKey('version-above-ad-banner'));
+        for (final key in const [
+          ValueKey('victory-early-rewarded-ad'),
+          ValueKey('victory-continue-watching'),
+          ValueKey('victory-play-again'),
+          ValueKey('victory-home'),
+        ]) {
+          final action = find.byKey(key);
+          expect(action, findsOneWidget);
+          expect(action.hitTestable(), findsOneWidget);
+          expect(tester.getRect(action).height, greaterThanOrEqualTo(44));
+          expect(
+            tester.getRect(action).bottom,
+            lessThanOrEqualTo(tester.getRect(version).top),
+          );
+        }
+
+        final scrollable = find.descendant(
+          of: find.byKey(const ValueKey('victory-celebration')),
+          matching: find.byType(Scrollable),
+        );
+        expect(scrollable, findsOneWidget);
+        final scrollState = tester.state<ScrollableState>(scrollable);
+        expect(scrollState.position.pixels, 0);
+        expect(scrollState.position.maxScrollExtent, 0);
+        expect(
+          tester.getRect(find.byKey(const ValueKey('victory-card'))).bottom,
+          lessThanOrEqualTo(
+            tester
+                .getRect(find.byKey(const ValueKey('victory-action-dock')))
+                .top,
+          ),
+        );
+
+        await tester.tap(
+          find.byKey(const ValueKey('victory-early-rewarded-ad')),
+        );
+        await tester.pump(const Duration(milliseconds: 120));
+
+        expect(ads.rewardedShowCount, 1);
+        expect(wallet.balance, 440);
+        expect(find.text('+70 MONEDAS'), findsOneWidget);
+        expect(find.text('EXTRA RECIBIDAS'), findsOneWidget);
+        expect(
+          find.byKey(const ValueKey('victory-early-rewarded-ad')),
+          findsNothing,
+        );
+        expect(scrollState.position.maxScrollExtent, 0);
+        for (final key in const [
+          ValueKey('victory-continue-watching'),
+          ValueKey('victory-play-again'),
+          ValueKey('victory-home'),
+        ]) {
+          expect(find.byKey(key).hitTestable(), findsOneWidget);
+        }
+
+        await tester.pumpWidget(const SizedBox.shrink());
+      },
+    );
+
+    testWidgets(
+      'restored completed match never reoffers an already claimed reward',
+      (tester) async {
+        _configureIPhone14View(tester);
+        SharedPreferences.setMockInitialValues({});
+        final firstEngine = _firstWinnerMatch();
+        final restoredEngine = _firstWinnerMatch();
+        final wallet = await WalletController.create();
+        final progression = await PlayerProgressionController.create();
+        final ads = _FakeAdsController(
+          supported: true,
+          adsReady: true,
+          rewardedReady: true,
+          rewardedResult: RewardedAdResult.earned,
+        );
+        addTearDown(firstEngine.dispose);
+        addTearDown(restoredEngine.dispose);
+        addTearDown(wallet.dispose);
+        addTearDown(progression.dispose);
+        addTearDown(ads.dispose);
+
+        Widget resultScreen(GameEngine engine) => MobileAdsScope(
+          controller: ads,
+          child: MaterialApp(
+            builder: (context, child) => MobileAdShell(
+              controller: ads,
+              child: child ?? const SizedBox.shrink(),
+            ),
+            home: GameScreen(
+              opponent: 'CPU • Fácil',
+              gameEngine: engine,
+              wallet: wallet,
+              progression: progression,
+              analyticsMatchRef: 'restored_claimed_reward_match',
+            ),
+          ),
+        );
+
+        await tester.pumpWidget(resultScreen(firstEngine));
+        await tester.pump(const Duration(milliseconds: 1900));
+        await tester.tap(
+          find.byKey(const ValueKey('victory-early-rewarded-ad')),
+        );
+        await tester.pump(const Duration(milliseconds: 120));
+
+        expect(wallet.balance, 440);
+        expect(ads.rewardedShowCount, 1);
+        expect(
+          progression.rewardedDoubleClaimed('restored_claimed_reward_match'),
+          isTrue,
+        );
+
+        await tester.pumpWidget(const SizedBox.shrink());
+        await tester.pump();
+        await tester.pumpWidget(resultScreen(restoredEngine));
+        await tester.pump(const Duration(milliseconds: 1900));
+
+        expect(wallet.balance, 440);
+        expect(ads.rewardedShowCount, 1);
+        expect(find.text('+120 MONEDAS'), findsOneWidget);
+        expect(find.text('+70 MONEDAS'), findsOneWidget);
+        expect(find.text('EXTRA RECIBIDAS'), findsOneWidget);
+        expect(
+          find.byKey(const ValueKey('victory-early-rewarded-ad')),
+          findsNothing,
+        );
+
+        await tester.pumpWidget(const SizedBox.shrink());
+      },
+    );
+
+    testWidgets(
+      'iPhone final standings pin earned coins and optional ad without overlap',
+      (tester) async {
+        _configureIPhone14View(tester);
+        SharedPreferences.setMockInitialValues({});
+        final engine = _completedMatch();
+        final wallet = await WalletController.create();
+        final progression = await PlayerProgressionController.create();
+        final ads = _FakeAdsController(
+          supported: true,
+          adsReady: true,
+          rewardedReady: true,
+        );
+        addTearDown(engine.dispose);
+        addTearDown(wallet.dispose);
+        addTearDown(progression.dispose);
+        addTearDown(ads.dispose);
+
+        await tester.pumpWidget(
+          MobileAdsScope(
+            controller: ads,
+            child: MaterialApp(
+              builder: (context, child) => MobileAdShell(
+                controller: ads,
+                child: child ?? const SizedBox.shrink(),
+              ),
+              home: GameScreen(
+                opponent: 'CPU • Fácil',
+                gameEngine: engine,
+                wallet: wallet,
+                progression: progression,
+                analyticsMatchRef: 'final_pinned_reward_match',
+              ),
+            ),
+          ),
+        );
+        await tester.pump(const Duration(milliseconds: 1900));
+
+        expect(wallet.balance, 370);
+        expect(
+          find.byKey(const ValueKey('victory-earned-reward')),
+          findsOneWidget,
+        );
+        expect(
+          find.byKey(const ValueKey('victory-rewarded-ad')),
+          findsOneWidget,
+        );
+        expect(find.byKey(const ValueKey('final-ranking')), findsOneWidget);
+        expect(
+          find.byKey(const ValueKey('victory-continue-watching')),
+          findsNothing,
+        );
+
+        final celebration = find.byKey(const ValueKey('victory-celebration'));
+        final scrollable = find.descendant(
+          of: celebration,
+          matching: find.byType(Scrollable),
+        );
+        final scrollState = tester.state<ScrollableState>(scrollable);
+        expect(scrollState.position.maxScrollExtent, 0);
+        expect(
+          tester.getRect(find.byKey(const ValueKey('victory-card'))).bottom,
+          lessThanOrEqualTo(
+            tester
+                .getRect(find.byKey(const ValueKey('victory-action-dock')))
+                .top,
+          ),
+        );
+        for (final key in const [
+          ValueKey('victory-rewarded-ad'),
+          ValueKey('victory-play-again'),
+          ValueKey('victory-home'),
+        ]) {
+          expect(find.byKey(key).hitTestable(), findsOneWidget);
+        }
+
+        await tester.pumpWidget(const SizedBox.shrink());
+      },
+    );
+
+    testWidgets('never offers a rewarded result without a wallet', (
+      tester,
+    ) async {
+      _configureIPhone14View(tester);
+      final engine = _completedMatch();
+      final ads = _FakeAdsController(
+        supported: true,
+        adsReady: true,
+        rewardedReady: true,
+      );
+      final analytics = _RecordingTypedAnalytics();
+      addTearDown(engine.dispose);
+      addTearDown(ads.dispose);
+
+      await tester.pumpWidget(
+        MobileAdsScope(
+          controller: ads,
+          child: MaterialApp(
+            home: GameScreen(
+              opponent: 'CPU • Fácil',
+              gameEngine: engine,
+              analytics: analytics,
+            ),
+          ),
+        ),
+      );
+      await tester.pump(const Duration(milliseconds: 1900));
+
+      expect(find.byKey(const ValueKey('victory-rewarded-ad')), findsNothing);
+      expect(ads.rewardedShowCount, 0);
+      expect(analytics.events.whereType<RewardedAdEvent>(), isEmpty);
+
+      await tester.pumpWidget(const SizedBox.shrink());
+    });
 
     testWidgets('desktop/no-op hosts navigate without requesting a reward', (
       tester,

@@ -138,6 +138,15 @@ String _translateDynamic(String source) {
       RegExp(r'^\+(\d+) MONEDAS POR JUGAR$'),
       (match) => '+${match.group(1)} COINS FOR PLAYING',
     ),
+    (RegExp(r'^\+(\d+) MONEDAS$'), (match) => '+${match.group(1)} COINS'),
+    (
+      RegExp(r'^VER ANUNCIO\n\+(\d+) MONEDAS EXTRA$'),
+      (match) => 'WATCH AD\n+${match.group(1)} EXTRA COINS',
+    ),
+    (
+      RegExp(r'^\+(\d+) MONEDAS EXTRA RECIBIDAS$'),
+      (match) => '+${match.group(1)} EXTRA COINS RECEIVED',
+    ),
     (
       RegExp(r'^VER ANUNCIO · DUPLICAR\n\+(\d+) MONEDAS$'),
       (match) => 'WATCH AD · DOUBLE\n+${match.group(1)} COINS',
@@ -898,6 +907,7 @@ const _english = <String, String>{
   'Tus cuatro fichas llegaron a la meta.':
       'All four of your pieces reached home.',
   'CARGANDO ANUNCIO…': 'LOADING AD…',
+  'CARGANDO…': 'LOADING…',
   'Este premio ya estaba duplicado.': 'This reward was already doubled.',
   'No se completó el anuncio. Puedes intentarlo otra vez.':
       'The ad was not completed. You can try again.',
@@ -1023,6 +1033,9 @@ const _english = <String, String>{
   '+ MONEDAS': '+ COINS',
   'PREMIO': 'REWARD',
   'VER ANUNCIO · +100': 'WATCH AD · +100',
+  'POR JUGAR': 'FOR PLAYING',
+  'VER ANUNCIO': 'WATCH AD',
+  'EXTRA RECIBIDAS': 'EXTRA RECEIVED',
   'PREPARANDO ANUNCIO': 'PREPARING AD',
   'Mira un anuncio y recibe 100 monedas.': 'Watch an ad and receive 100 coins.',
   '¡Recibiste 100 monedas!': 'You received 100 coins!',

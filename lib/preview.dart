@@ -7,8 +7,11 @@ import 'cosmetic_visuals.dart';
 import 'game_engine.dart';
 import 'game_guide.dart';
 import 'main.dart' as app;
+import 'mobile_ads.dart';
 import 'online_match.dart';
 import 'orientation_policy.dart';
+import 'player_progression.dart';
+import 'wallet.dart';
 
 const preview = String.fromEnvironment(
   'PARCHESPOP_PREVIEW',
@@ -28,6 +31,12 @@ const previewTheme = String.fromEnvironment(
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
+  if (preview == 'victory') {
+    // Keep visual QA deterministic and isolated from the installed app's
+    // wallet while still exercising the real reward settlement path.
+    // ignore: invalid_use_of_visible_for_testing_member
+    SharedPreferences.setMockInitialValues({});
+  }
   final languagePreference = _previewLanguagePreference(previewLanguage);
   if (languagePreference != null) {
     final store = await SharedPreferences.getInstance();
@@ -91,6 +100,13 @@ Future<void> main() async {
   final previewVictoryEngine = preview == 'victory'
       ? _buildVictoryPreviewEngine()
       : null;
+  final previewWallet = preview == 'victory'
+      ? await WalletController.create()
+      : null;
+  final previewProgression = preview == 'victory'
+      ? await PlayerProgressionController.create()
+      : null;
+  final previewAds = preview == 'victory' ? _PreviewAdsController() : null;
   final screen = switch (preview) {
     'shop' => const app.ShopScreen(),
     'settings' => const app.SettingsScreen(),
@@ -125,6 +141,9 @@ Future<void> main() async {
     'victory' => app.GameScreen(
       opponent: 'Mesa rápida • Normal',
       gameEngine: previewVictoryEngine,
+      wallet: previewWallet,
+      progression: previewProgression,
+      analyticsMatchRef: 'victory_preview_match',
     ),
     'controls' => Scaffold(
       body: app.PopBackground(
@@ -154,34 +173,63 @@ Future<void> main() async {
     ),
     _ => const app.ShopScreen(),
   };
-  runApp(
-    AppLanguageScope(
-      controller: language,
-      child: AnimatedBuilder(
-        animation: language,
-        builder: (context, child) => MaterialApp(
-          debugShowCheckedModeBanner: false,
-          locale: language.localeOverride,
-          supportedLocales: const [Locale('es'), Locale('en')],
-          localizationsDelegates: GlobalMaterialLocalizations.delegates,
-          localeResolutionCallback: (locale, supportedLocales) {
-            if (locale?.languageCode == 'en') return const Locale('en');
-            return const Locale('es');
-          },
-          theme: ThemeData(
-            useMaterial3: true,
-            colorScheme: ColorScheme.fromSeed(
-              seedColor: app.PopColors.blue,
-              primary: app.PopColors.blue,
-              secondary: app.PopColors.yellow,
-            ),
+  Widget previewApp = AppLanguageScope(
+    controller: language,
+    child: AnimatedBuilder(
+      animation: language,
+      builder: (context, child) => MaterialApp(
+        debugShowCheckedModeBanner: false,
+        locale: language.localeOverride,
+        supportedLocales: const [Locale('es'), Locale('en')],
+        localizationsDelegates: GlobalMaterialLocalizations.delegates,
+        localeResolutionCallback: (locale, supportedLocales) {
+          if (locale?.languageCode == 'en') return const Locale('en');
+          return const Locale('es');
+        },
+        theme: ThemeData(
+          useMaterial3: true,
+          colorScheme: ColorScheme.fromSeed(
+            seedColor: app.PopColors.blue,
+            primary: app.PopColors.blue,
+            secondary: app.PopColors.yellow,
           ),
-          home: child,
         ),
-        child: screen,
+        home: child,
       ),
+      child: screen,
     ),
   );
+  if (previewAds != null) {
+    previewApp = MobileAdsScope(controller: previewAds, child: previewApp);
+  }
+  runApp(previewApp);
+}
+
+class _PreviewAdsController extends AppAdsController {
+  @override
+  bool get supported => true;
+
+  @override
+  bool get adsReady => true;
+
+  @override
+  bool get rewardedReady => true;
+
+  @override
+  bool get privacyOptionsRequired => false;
+
+  @override
+  Future<void> initialize() async {}
+
+  @override
+  Future<RewardedAdResult> showRewardedWithResult() async =>
+      RewardedAdResult.earned;
+
+  @override
+  Future<void> showPrivacyOptions() async {}
+
+  @override
+  Widget buildBanner(BuildContext context) => const SizedBox.shrink();
 }
 
 AppLanguagePreference? _previewLanguagePreference(String code) =>
