@@ -97,7 +97,7 @@ String appTranslate(BuildContext context, String source) =>
 const _legacyPrivacyDescription =
     'El prototipo guarda localmente el perfil, las monedas, las compras cosméticas y las preferencias. Antes de publicar se documentarán el servicio de cuenta, analíticas, publicidad y cualquier dato que salga del dispositivo.';
 const _privacyDescription =
-    'La aplicación guarda localmente el perfil, las monedas, las compras cosméticas y las preferencias. Google Analytics recopila eventos anónimos de partidas, reanudación, tutorial, anuncios voluntarios, monedas y tienda para mejorar el juego. No enviamos el nombre, el correo, los mensajes, la bandera ni el avatar.';
+    'La aplicación guarda localmente el perfil, las monedas, las compras cosméticas y las preferencias. Si activas la analítica anónima, Google Analytics recopila eventos de partidas, reanudación, tutorial, anuncios voluntarios, monedas y tienda para mejorar el juego. No enviamos el nombre, el correo, los mensajes, la bandera ni el avatar.';
 
 String translateForLanguage(String source, String languageCode) {
   if (source == _legacyPrivacyDescription) source = _privacyDescription;
@@ -114,6 +114,44 @@ String _translateDynamic(String source) {
       (match) => 'Hi, ${match.group(1)}! ${match.group(2)}',
     ),
     (
+      RegExp(r'^Preparando partida local · (\d+)s$'),
+      (match) => 'Preparing local match · ${match.group(1)}s',
+    ),
+    (
+      RegExp(r'^Añadiendo CPU · (\d+)/(\d+)$'),
+      (match) => 'Adding CPU players · ${match.group(1)}/${match.group(2)}',
+    ),
+    (
+      RegExp(r'^Parchís Pop · (Caos|Tradicional|Quick Pop)$'),
+      (match) => 'Parchís Pop · ${translateForLanguage(match.group(1)!, 'en')}',
+    ),
+    (
+      RegExp(r'^(Quick Pop|Tutorial) • CPU (Fácil|Normal|Experto)$'),
+      (match) =>
+          '${match.group(1)} • CPU ${translateForLanguage(match.group(2)!, 'en')}',
+    ),
+    (
+      RegExp(r'^¡Duplicaste tu premio: \+(\d+) monedas!$'),
+      (match) => 'You doubled your reward: +${match.group(1)} coins!',
+    ),
+    (
+      RegExp(r'^\+(\d+) MONEDAS POR JUGAR$'),
+      (match) => '+${match.group(1)} COINS FOR PLAYING',
+    ),
+    (
+      RegExp(r'^VER ANUNCIO · DUPLICAR\n\+(\d+) MONEDAS$'),
+      (match) => 'WATCH AD · DOUBLE\n+${match.group(1)} COINS',
+    ),
+    (
+      RegExp(r'^\+(\d+) MONEDAS DUPLICADAS$'),
+      (match) => '+${match.group(1)} DOUBLED COINS',
+    ),
+    (
+      RegExp(r'^Tus (dos|cuatro) fichas llegaron a la meta\.$'),
+      (match) =>
+          'Your ${match.group(1) == 'dos' ? 'two' : 'four'} pieces reached home.',
+    ),
+    (
       RegExp(r'^Rivales listos · (.+)$'),
       (match) => 'Opponents ready · ${match.group(1)}',
     ),
@@ -123,7 +161,13 @@ String _translateDynamic(String source) {
     ),
     (
       RegExp(r'^Nivel (\d+) · (.+)$'),
-      (match) => 'Level ${match.group(1)} · ${match.group(2)}',
+      (match) =>
+          'Level ${match.group(1)} · ${_translateCompoundLabel(match.group(2)!)}',
+    ),
+    (
+      RegExp(r'^(.+) Nv\. (\d+) · (.+)$'),
+      (match) =>
+          '${match.group(1)} Lv. ${match.group(2)} · ${_translateCompoundLabel(match.group(3)!)}',
     ),
     (RegExp(r'^Nivel (\d+)$'), (match) => 'Level ${match.group(1)}'),
     (RegExp(r'^Nv\. (\d+)$'), (match) => 'Lv. ${match.group(1)}'),
@@ -295,10 +339,10 @@ String _translateDynamic(String source) {
     (RegExp(r'^(.+) GANA$'), (match) => '${match.group(1)} WINS'),
     (
       RegExp(
-        r'^(.+) llevó sus cuatro fichas a la meta\. ¡La revancha está lista!$',
+        r'^(.+) llevó sus (dos|cuatro) fichas a la meta\. ¡La revancha está lista!$',
       ),
       (match) =>
-          '${match.group(1)} brought all four pieces home. The rematch is ready!',
+          '${match.group(1)} brought ${match.group(2) == 'dos' ? 'both pieces' : 'all four pieces'} home. The rematch is ready!',
     ),
     (
       RegExp(r'^(.+) (perdió|perdieron) su turno por el pegamento\. (.+)$'),
@@ -514,6 +558,11 @@ String _translateDynamic(String source) {
   return source;
 }
 
+String _translateCompoundLabel(String source) => source
+    .split(' · ')
+    .map((part) => translateForLanguage(part, 'en'))
+    .join(' · ');
+
 const _english = <String, String>{
   // Global navigation and profile.
   'Ajustes': 'Settings',
@@ -618,11 +667,68 @@ const _english = <String, String>{
   '⚡ Modo Caos seleccionado': '⚡ Chaos Mode selected',
   '🏆 Modo Tradicional seleccionado': '🏆 Traditional Mode selected',
 
+  // Version 2: Quick Pop, contextual tutorial, and progression.
+  'MESA RÁPIDA': 'QUICK TABLE',
+  'Partida local con rivales CPU': 'Local match with CPU opponents',
+  'Quick Pop': 'Quick Pop',
+  'Misiones': 'Missions',
+  'Elige las reglas de la mesa local': 'Choose the rules for your local match',
+  'CPU temporal': 'Temporary CPU',
+  'CPU TEMPORAL': 'TEMPORARY CPU',
+  'TUTORIAL JUGABLE': 'PLAYABLE TUTORIAL',
+  '¿CÓMO QUIERES APRENDER?': 'HOW DO YOU WANT TO LEARN?',
+  'Empieza una partida guiada o consulta todas las reglas.':
+      'Start a guided match or review all the rules.',
+  'GUÍA COMPLETA': 'COMPLETE GUIDE',
+  'Aprende dentro de tu primera partida': 'Learn during your first match',
+  '1 · TIRA LOS DADOS': '1 · ROLL THE DICE',
+  'Toca los dados en el panel inferior.': 'Tap the dice in the bottom panel.',
+  '2 · SACA UNA FICHA': '2 · RELEASE A PIECE',
+  'Cuando tengas un 5, toca la ficha señalada.':
+      'When you roll a 5, tap the highlighted piece.',
+  '3 · ELIGE EL DESTINO': '3 · CHOOSE THE DESTINATION',
+  'Toca una burbuja sobre la casilla de llegada.':
+      'Tap a bubble above the destination space.',
+  '4 · BUSCA UNA ESTRELLA': '4 · FIND A STAR',
+  'Cae en una casilla segura marcada con estrella.':
+      'Land on a safe space marked with a star.',
+  '5 · CAPTURA': '5 · CAPTURE',
+  'Cae sobre una ficha rival que no esté en seguro.':
+      'Land on an opponent piece outside a safe space.',
+  '6 · LLEGA A META': '6 · REACH HOME',
+  'Completa el recorrido y entra al centro.':
+      'Complete the route and enter the center.',
+  'TUTORIAL LISTO': 'TUTORIAL COMPLETE',
+  'Ya conoces la partida.': 'You now know how to play.',
+  'YA SÉ JUGAR': 'I KNOW HOW TO PLAY',
+  'Tu progreso': 'Your progress',
+  'MISIONES DE HOY': "TODAY'S MISSIONS",
+  'Juega normalmente; los premios llegan solos.':
+      'Play normally; rewards arrive automatically.',
+  'Mueve 20 casillas': 'Move 20 spaces',
+  'Saca una ficha': 'Release a piece',
+  'Termina una partida': 'Finish one match',
+  'OBJETIVO SEMANAL': 'WEEKLY GOAL',
+  'Completa partidas; ganar no es obligatorio.':
+      'Complete matches; winning is not required.',
+  'Termina 7 partidas': 'Finish 7 matches',
+  'MONEDAS DISPONIBLES': 'AVAILABLE COINS',
+  'Un tema de 1,800 se alcanza jugando varios días.':
+      'A 1,800-coin theme is reachable after playing for several days.',
+  'LISTO': 'DONE',
+  'Premios por jugar, no por pagar': 'Rewards for playing, not paying',
+  'Terminar, quedar en una posición y volver cada día entrega monedas. Los anuncios son opcionales y los cosméticos no dan ventaja.':
+      'Finishing matches, placing, and returning each day earns coins. Ads are optional and cosmetics provide no advantage.',
+  'Rango y eventos: protegidos': 'Ranked play and events: protected',
+  'Se activarán solo cuando el servidor pueda validar dados, movimientos, resultados y recompensas sin desincronización.':
+      'They will activate only when the server can validate dice, moves, results, and rewards without losing synchronization.',
+
   // Matchmaking and online.
   'Buscando…': 'Searching…',
   'Buscando jugadores': 'Finding players',
   'Preparando la mesa…': 'Preparing the table…',
   'Preparando rivales automáticos…': 'Preparing computer-controlled opponents…',
+  'Preparando partida local': 'Preparing local match',
   'Armando tu mesa…': 'Setting up your table…',
   'Jugadores': 'Players',
   'Jugadores encontrados': 'Players found',
@@ -630,6 +736,10 @@ const _english = <String, String>{
       'We look for players for 6 seconds. If seats are missing, we fill them automatically to start the match.',
   'Esta partida usa rivales controlados por el juego. No requiere una cuenta ni conexión multijugador.':
       'This match uses computer-controlled opponents. It does not require an account or a multiplayer connection.',
+  'Esta versión prepara la partida en tu dispositivo y completa los demás asientos con CPU.':
+      'This version prepares the match on your device and fills the remaining seats with CPU players.',
+  'Esta partida local está en curso. Si sales ahora, se cerrará.':
+      'This local match is in progress. If you leave now, it will end.',
   'Preparando…': 'Preparing…',
   'Rival': 'Opponent',
   'Rival online': 'Online opponent',
@@ -763,6 +873,8 @@ const _english = <String, String>{
       'The other players are still competing for their place.',
   'La partida terminó. Estos son los resultados.':
       'The match is over. Here are the final results.',
+  'QUICK POP': 'QUICK POP',
+  '2 / 2 EN META': '2 / 2 HOME',
   '4 / 4 EN META': '4 / 4 HOME',
   'PUNTOS': 'POINTS',
   'EN META': 'HOME',
@@ -776,6 +888,14 @@ const _english = <String, String>{
   'SEGUIR VIENDO LA PARTIDA': 'KEEP WATCHING THE MATCH',
   'Tus cuatro fichas llegaron a la meta.':
       'All four of your pieces reached home.',
+  'CARGANDO ANUNCIO…': 'LOADING AD…',
+  'Este premio ya estaba duplicado.': 'This reward was already doubled.',
+  'No se completó el anuncio. Puedes intentarlo otra vez.':
+      'The ad was not completed. You can try again.',
+  'No hay un anuncio disponible ahora. Inténtalo más tarde.':
+      'No ad is available right now. Try again later.',
+  'No se pudo mostrar el anuncio. Tus monedas no cambiaron.':
+      'The ad could not be shown. Your coin balance did not change.',
   'Sacaste dobles. ¡Tira otra vez!': 'You rolled doubles. Roll again!',
   'No tienes movimientos.': 'You have no legal moves.',
   'Tres dobles: la ficha más adelantada vuelve a la cárcel.':
@@ -1040,20 +1160,25 @@ const _english = <String, String>{
   'Publicidad y preferencias': 'Advertising and preferences',
   'Publicidad': 'Advertising',
   'Opciones de privacidad de anuncios': 'Ad privacy options',
+  'Analítica anónima': 'Anonymous analytics',
+  'Ayuda a mejorar el juego sin enviar tu nombre ni correo':
+      'Helps improve the game without sending your name or email',
+  'No se pudo guardar la preferencia de analítica.':
+      'The analytics preference could not be saved.',
   'Eliminar cuenta y datos': 'Delete account and data',
   'Eliminar datos': 'Delete data',
   _privacyDescription:
-      'The app stores the profile, coins, cosmetic purchases, and preferences locally. Google Analytics collects anonymous match, resume, tutorial, optional-ad, currency, and shop events to improve the game. We do not send the name, email, messages, flag, or avatar.',
+      'The app stores the profile, coins, cosmetic purchases, and preferences locally. If you enable anonymous analytics, Google Analytics collects match, resume, tutorial, optional-ad, currency, and shop events to improve the game. We do not send the name, email, messages, flag, or avatar.',
   'Parchís Pop es un juego de entretenimiento. Las monedas de esta versión son virtuales, no tienen valor monetario y no otorgan ventajas competitivas.':
       'Parchís Pop is an entertainment game. Coins in this version are virtual, have no monetary value, and do not provide competitive advantages.',
   'Parchís Pop es un juego de entretenimiento. Las monedas de esta versión son de prueba, no tienen valor monetario y no otorgan ventajas competitivas.':
       'Parchís Pop is an entertainment game. Coins in this version are for testing, have no monetary value, and do not provide competitive advantages.',
   'No se permiten nombres ofensivos, amenazas, acoso ni contenido sexual. Los mensajes durante la partida se limitarán a frases preaprobadas.':
       'Offensive names, threats, harassment, and sexual content are not allowed. In-game messages are limited to preapproved phrases.',
-  'En Android y iOS pueden aparecer banners adaptables únicamente fuera de la partida, la guía y la búsqueda de jugadores. Los anuncios recompensados solo se abren cuando eliges voluntariamente una recompensa en la tienda o al finalizar la mesa. Jugar otra vez, Volver al inicio y Reanudar nunca muestran anuncios. El premio se entrega únicamente al completar el anuncio. La aplicación solicita consentimiento cuando corresponde y ofrece opciones para administrar la privacidad publicitaria. macOS no muestra banners ni anuncios recompensados.':
-      'On Android and iOS, adaptive banners may appear only outside matches, the guide, and matchmaking. Rewarded ads open only when you voluntarily choose a reward in the shop or after the table finishes. Play Again, Back to Home, and Resume never show ads. A reward is granted only after the ad is completed. The app requests consent when required and provides options to manage ad privacy. macOS does not show banners or rewarded ads.',
-  'Android y iOS pueden mostrar banners únicamente fuera de la partida, la guía y la búsqueda de jugadores. Los anuncios recompensados son voluntarios en la tienda o al finalizar la mesa. Jugar otra vez, Volver al inicio y Reanudar nunca abren anuncios. Puedes administrar el consentimiento y las preferencias disponibles desde esta pantalla. La versión de macOS no muestra estos anuncios.':
-      'Android and iOS may show banners only outside matches, the guide, and matchmaking. Rewarded ads are optional in the shop or after the table finishes. Play Again, Back to Home, and Resume never open ads. You can manage consent and available preferences from this screen. The macOS version does not show these ads.',
+  'En Android y iOS pueden aparecer banners adaptables únicamente fuera de la partida, la guía y la búsqueda de jugadores. Los anuncios recompensados solo se abren cuando eliges voluntariamente duplicar el premio al finalizar la mesa. Jugar otra vez, Volver al inicio y Reanudar nunca muestran anuncios. El premio se entrega únicamente al completar el anuncio. La aplicación solicita consentimiento cuando corresponde y ofrece opciones para administrar la privacidad publicitaria. macOS no muestra banners ni anuncios recompensados.':
+      'On Android and iOS, adaptive banners may appear only outside matches, the guide, and matchmaking. Rewarded ads open only when you voluntarily choose to double the reward after the table finishes. Play Again, Back to Home, and Resume never show ads. A reward is granted only after the ad is completed. The app requests consent when required and provides options to manage ad privacy. macOS does not show banners or rewarded ads.',
+  'Android y iOS pueden mostrar banners únicamente fuera de la partida, la guía y la búsqueda de jugadores. Los anuncios recompensados son voluntarios al finalizar la mesa. Jugar otra vez, Volver al inicio y Reanudar nunca abren anuncios. Puedes administrar el consentimiento y las preferencias disponibles desde esta pantalla. La versión de macOS no muestra estos anuncios.':
+      'Android and iOS may show banners only outside matches, the guide, and matchmaking. Rewarded ads are optional after the table finishes. Play Again, Back to Home, and Resume never open ads. You can manage consent and available preferences from this screen. The macOS version does not show these ads.',
   'El perfil actual vive en el dispositivo. El flujo definitivo permitirá borrar tanto los datos locales como la cuenta online cuando el servicio de autenticación esté conectado.':
       'The current profile lives on this device. The final flow will let you delete both local data and the online account once the authentication service is connected.',
   'El perfil y sus credenciales se guardan localmente. Desde Mi perfil puedes usar Eliminar cuenta y datos para borrar del dispositivo el perfil, la contraseña protegida, las monedas, los cosméticos y las preferencias asociadas.':
@@ -1070,6 +1195,46 @@ const _english = <String, String>{
   'MODO CAOS': 'CHAOS MODE',
   'Parchís clásico': 'Classic Parcheesi',
   'De la cárcel a la victoria': 'From base to victory',
+  'De la salida a la victoria': 'From the start to victory',
+  'Rápido · 2 fichas': 'Fast · 2 pieces',
+  '2 FICHAS': '2 PIECES',
+  'Cada jugador usa 2 fichas en el tablero completo de 68 casillas.':
+      'Each player uses 2 pieces on the complete 68-space board.',
+  'Las dos fichas empiezan juntas en la salida; no pasan por la cárcel.':
+      'Both pieces begin together on the starting space; they do not wait in base.',
+  'Gana quien lleve primero sus 2 fichas al centro.':
+      'The first player to bring both pieces to the center wins.',
+  'Empieza de inmediato': 'Start immediately',
+  'SIN 5': 'NO 5 NEEDED',
+  'No necesitas sacar un 5 para comenzar: toca una ficha y elige un movimiento legal.':
+      'You do not need a 5 to begin: tap a piece and choose a legal move.',
+  'La pareja inicial está protegida y no bloquea el paso como barrera.':
+      'The initial pair is protected and does not block the route like a blockade.',
+  'Cuando solo existe una jugada legal, el juego la realiza automáticamente.':
+      'When only one legal move exists, the game performs it automatically.',
+  'Dados y decisiones': 'Dice and decisions',
+  'Puedes repartir los dos dados entre tus fichas o usar TODOS con una sola ficha.':
+      'You may split the dice between your pieces or use ALL with one piece.',
+  'Un doble conserva sus 2 usos y concede otra tirada al completar los movimientos.':
+      'A double keeps both uses and grants another roll after the moves are completed.',
+  'Debes obtener el número exacto para entrar a la meta.':
+      'You need the exact number to reach home.',
+  'Capturas y regreso': 'Captures and return',
+  'Captura al caer exactamente sobre una ficha rival fuera de una casilla segura.':
+      'Capture by landing exactly on a rival piece outside a safe space.',
+  'La ficha capturada vuelve a su salida, no a una cárcel.':
+      'A captured piece returns to its starting space, not to base.',
+  'Capturar concede +20 y completar una ficha concede +10.':
+      'A capture grants +20, and bringing a piece home grants +10.',
+  'Reglas que se conservan': 'Rules that remain',
+  'Se mantienen los seguros, barreras, entradas de color y pasillos de 7 casillas.':
+      'Safe spaces, blockades, colored entrances, and 7-space home lanes remain.',
+  'Quick Pop acorta la partida sin recortar el recorrido original.':
+      'Quick Pop shortens the match without trimming the original route.',
+  'Quick Pop: tablero completo, 2 fichas ya en salida y una carrera más corta sin esperar un 5.':
+      'Quick Pop: the complete board, 2 pieces already at the start, and a shorter race without waiting for a 5.',
+  '2 fichas': '2 pieces',
+  'Sin 5 de salida': 'No starting 5',
   'Objetivo y tablero': 'Goal and board',
   'Cada jugador controla 4 fichas y lanza 2 dados.':
       'Each player controls 4 pieces and rolls 2 dice.',

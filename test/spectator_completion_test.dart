@@ -175,6 +175,54 @@ void main() {
     engine.dispose();
   });
 
+  test('checkpoint preserves spectator continuation and finish order', () {
+    final engine = GameEngine();
+    _prepareFirstWinner(engine);
+    expect(engine.moveToken(engine.currentPlayer.tokens.last, die: 1), isTrue);
+    expect(engine.continueAfterWinner(), isTrue);
+    _finishCurrentPlayer(engine);
+
+    expect(engine.finishOrder, const [PlayerColor.red, PlayerColor.green]);
+    expect(engine.currentPlayer.color, PlayerColor.yellow);
+    expect(engine.gameOver, isFalse);
+
+    final checkpoint = <String, dynamic>{
+      ...engine.checkpointRuleMetadata,
+      'mode': engine.mode.name,
+      'cpuLevel': engine.cpuLevel,
+      'turn': engine.turnNumber,
+      'currentPlayer': engine.currentPlayer.color.name,
+      'dice': engine.dice,
+      'remainingDice': engine.remainingDice,
+      'hasRolled': engine.hasRolled,
+      'players': <Map<String, dynamic>>[
+        for (final player in engine.players)
+          <String, dynamic>{
+            'color': player.color.name,
+            'name': player.name,
+            'tokens': <int>[for (final token in player.tokens) token.progress],
+            'inventory': player.inventory?.name,
+            'shielded': player.shielded,
+            'skippedTurns': player.skippedTurns,
+          },
+      ],
+    };
+
+    final restored = GameEngine.fromCheckpoint(checkpoint);
+    expect(restored.finishOrder, const [PlayerColor.red, PlayerColor.green]);
+    expect(restored.winner?.color, PlayerColor.red);
+    expect(restored.currentPlayer.color, PlayerColor.yellow);
+    expect(restored.spectatorContinuationActive, isTrue);
+    expect(restored.gameOver, isFalse);
+
+    _finishCurrentPlayer(restored);
+    expect(restored.gameOver, isTrue);
+    expect(restored.finishOrder, PlayerColor.values);
+
+    restored.dispose();
+    engine.dispose();
+  });
+
   testWidgets('final spectator results show places 1 to 4 and their points', (
     tester,
   ) async {

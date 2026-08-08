@@ -76,6 +76,7 @@ class GameAudioController {
       GameEventType.threeDoublesPenalty ||
       GameEventType.noMove ||
       GameEventType.trap => 'audio/block.wav',
+      GameEventType.powerUp || GameEventType.victory => 'audio/dice.wav',
       _ => null,
     };
     if (asset == null) return;

@@ -14,6 +14,8 @@
 	<false/>
 	<key>GADApplicationIdentifier</key>
 	<string>ca-app-pub-8588489900323524~1344082812</string>
+	<key>FIREBASE_ANALYTICS_COLLECTION_ENABLED</key>
+	<false/>
 	<key>SKAdNetworkItems</key>
 	<array>
 		<dict>

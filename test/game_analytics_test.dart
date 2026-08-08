@@ -3,7 +3,9 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:parchesepop/game_analytics.dart';
 import 'package:parchesepop/game_engine.dart';
 import 'package:parchesepop/main.dart';
+import 'package:parchesepop/mobile_ads.dart';
 import 'package:parchesepop/online_match.dart';
+import 'package:parchesepop/player_progression.dart';
 import 'package:parchesepop/wallet.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
@@ -39,6 +41,50 @@ GameEngine _oneMoveFromVictory() {
   engine.dice = [1, 6];
   engine.remainingDice.addAll([1, 6]);
   return engine;
+}
+
+GameEngine _finishedCpuVictory() {
+  final engine = GameEngine()..currentPlayerIndex = PlayerColor.green.index;
+  final player = engine.currentPlayer;
+  for (var tokenId = 0; tokenId < 3; tokenId++) {
+    player.tokens[tokenId].progress = GameEngine.finishProgress;
+  }
+  player.tokens.last.progress = GameEngine.finishProgress - 1;
+  engine
+    ..hasRolled = true
+    ..dice = const [1, 6];
+  engine.remainingDice.addAll(const [1, 6]);
+  if (!engine.moveToken(player.tokens.last, die: 1)) {
+    throw StateError('CPU victory fixture could not finish.');
+  }
+  return engine;
+}
+
+class _SupportedAdsController extends AppAdsController {
+  @override
+  bool get supported => true;
+
+  @override
+  bool get adsReady => false;
+
+  @override
+  bool get rewardedReady => true;
+
+  @override
+  bool get privacyOptionsRequired => false;
+
+  @override
+  Future<void> initialize() async {}
+
+  @override
+  Future<RewardedAdResult> showRewardedWithResult() async =>
+      RewardedAdResult.dismissed;
+
+  @override
+  Future<void> showPrivacyOptions() async {}
+
+  @override
+  Widget buildBanner(BuildContext context) => const SizedBox.shrink();
 }
 
 class _RecordedSinkEvent {
@@ -119,6 +165,32 @@ OnlineMatchSession _onlineSession() {
   );
 }
 
+OnlineMatchSession _localCpuSession() {
+  OnlineParticipant participant(PlayerColor color, ParticipantKind kind) =>
+      OnlineParticipant(
+        id: '${color.name}-${kind.name}',
+        displayName: color == PlayerColor.red ? 'Tú' : 'CPU ${color.name}',
+        flag: '🎮',
+        avatarId: 'avatar_default',
+        level: 1,
+        color: color,
+        kind: kind,
+        loadout: const CosmeticLoadout(),
+      );
+
+  return OnlineMatchSession(
+    matchId: 'local-table-test',
+    seed: 11,
+    mode: GameMode.traditional,
+    participants: [
+      participant(PlayerColor.red, ParticipantKind.local),
+      participant(PlayerColor.green, ParticipantKind.virtual),
+      participant(PlayerColor.yellow, ParticipantKind.virtual),
+      participant(PlayerColor.blue, ParticipantKind.virtual),
+    ],
+  );
+}
+
 void main() {
   test('CPU match uses a dedicated event with non-identifying parameters', () {
     const event = MatchStartEvent(
@@ -165,6 +237,41 @@ void main() {
         contains(anyOf('name', 'email', 'phone', 'flag', 'avatar', 'user_id')),
       ),
     );
+  });
+
+  test('match format is optional and only emitted when supplied', () async {
+    const legacyStart = MatchStartEvent(
+      playType: MatchPlayType.cpu,
+      mode: GameMode.traditional,
+      cpuDifficulty: CpuDifficulty.normal,
+    );
+    const quickPopStart = MatchStartEvent(
+      playType: MatchPlayType.cpu,
+      mode: GameMode.traditional,
+      matchFormat: MatchFormat.quickPop,
+      cpuDifficulty: CpuDifficulty.normal,
+    );
+
+    expect(legacyStart.parameters, isNot(contains('match_format')));
+    expect(quickPopStart.parameters['match_format'], 'quickPop');
+
+    final sink = _RecordingSink();
+    final analytics = SinkGameAnalytics(sink);
+    await analytics.logEvent(quickPopStart);
+    await analytics.logEvent(
+      const MatchFirstRollEvent(
+        match: MatchAnalyticsContext(
+          playType: MatchPlayType.online,
+          mode: GameMode.chaos,
+          matchFormat: MatchFormat.classic,
+        ),
+        secondsFromMatchStart: 3,
+      ),
+    );
+
+    expect(sink.events, hasLength(2));
+    expect(sink.events[0].parameters['match_format'], 'quickPop');
+    expect(sink.events[1].parameters['match_format'], 'classic');
   });
 
   test(
@@ -325,6 +432,72 @@ void main() {
   });
 
   test(
+    'mission reward uses an exact privacy-safe allowlisted payload',
+    () async {
+      final sink = _RecordingSink();
+      final analytics = SinkGameAnalytics(sink);
+
+      await analytics.logEvent(
+        const MissionRewardEvent(
+          mission: MissionKind.move20Cells,
+          rewardCoins: 40,
+          progress: 20,
+          target: 20,
+          correlation: AnalyticsCorrelation(
+            anonymousSessionId: 'session_mission_001',
+          ),
+        ),
+      );
+
+      expect(sink.events, hasLength(1));
+      expect(sink.events.single.name, 'mission_rewarded');
+      expect(sink.events.single.parameters, <String, Object>{
+        'app_session_ref': 'session_mission_001',
+        'mission_id': 'move20Cells',
+        'mission_progress': 20,
+        'mission_target': 20,
+        'reward_coins': 40,
+      });
+      expect(
+        sink.events.single.parameters.keys,
+        isNot(
+          contains(
+            anyOf('name', 'email', 'phone', 'flag', 'avatar', 'user_id'),
+          ),
+        ),
+      );
+    },
+  );
+
+  test(
+    'mission reward rejects identifying correlation without leaking it',
+    () async {
+      const rejectedValue = 'player@example.com';
+      final sink = _RecordingSink();
+      final analytics = SinkGameAnalytics(sink);
+      final originalDebugPrint = debugPrint;
+      final diagnosticMessages = <String>[];
+      debugPrint = (message, {wrapWidth}) {
+        if (message != null) diagnosticMessages.add(message);
+      };
+      addTearDown(() => debugPrint = originalDebugPrint);
+
+      await analytics.logEvent(
+        const MissionRewardEvent(
+          mission: MissionKind.releaseToken,
+          rewardCoins: 35,
+          progress: 1,
+          target: 1,
+          correlation: AnalyticsCorrelation(anonymousSessionId: rejectedValue),
+        ),
+      );
+
+      expect(sink.events, isEmpty);
+      expect(diagnosticMessages.join('\n'), isNot(contains(rejectedValue)));
+    },
+  );
+
+  test(
     'privacy allowlist rejects custom PII before it reaches the sink',
     () async {
       final sink = _RecordingSink();
@@ -443,10 +616,34 @@ void main() {
         flow: CurrencyFlow.earned,
         source: CurrencySource.adjustment,
         amount: 1,
+        balanceBefore: 9,
+        balanceAfter: 10,
         anonymousTransactionId: transactionReference,
       );
       expect(event.parameters['transaction_ref'], transactionReference);
+      expect(event.parameters['balance_before'], 9);
+      expect(event.parameters['balance_after'], 10);
     }
+  });
+
+  test('currency balance before and after pass the privacy sink', () async {
+    final sink = _RecordingSink();
+    final analytics = SinkGameAnalytics(sink);
+
+    await analytics.logEvent(
+      const CurrencyEvent(
+        flow: CurrencyFlow.earned,
+        source: CurrencySource.mission,
+        amount: 35,
+        balanceBefore: 250,
+        balanceAfter: 285,
+        anonymousTransactionId: 'transaction_balance_01',
+      ),
+    );
+
+    expect(sink.events, hasLength(1));
+    expect(sink.events.single.parameters['balance_before'], 250);
+    expect(sink.events.single.parameters['balance_after'], 285);
   });
 
   test('analytics destination failures never interrupt gameplay', () async {
@@ -548,6 +745,34 @@ void main() {
     await tester.pumpWidget(const SizedBox.shrink());
   });
 
+  testWidgets('a virtual-only table is measured honestly as CPU play', (
+    tester,
+  ) async {
+    final analytics = _RecordingGameAnalytics();
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: GameScreen(
+          opponent: 'Mesa rápida local',
+          onlineSession: _localCpuSession(),
+          matchmakingWaitSeconds: 10,
+          analytics: analytics,
+        ),
+      ),
+    );
+    await tester.pump();
+
+    expect(analytics.events, hasLength(1));
+    expect(analytics.events.single.playType, MatchPlayType.cpu);
+    expect(analytics.events.single.eventName, 'cpu_match_started');
+    expect(analytics.events.single.cpuDifficulty, CpuDifficulty.normal);
+    expect(analytics.events.single.matchmakingWaitSeconds, isNull);
+    expect(analytics.events.single.fallbackOpponentCount, isNull);
+    expect(analytics.events.single.liveHumanOpponentCount, isNull);
+
+    await tester.pumpWidget(const SizedBox.shrink());
+  });
+
   testWidgets('GameScreen logs the first roll exactly once', (tester) async {
     final analytics = _RecordingTypedAnalytics();
     final engine = GameEngine();
@@ -602,6 +827,91 @@ void main() {
 
     await tester.pump(const Duration(seconds: 2));
     expect(analytics.events.whereType<MatchCompletedEvent>(), hasLength(1));
+
+    await tester.pumpWidget(const SizedBox.shrink());
+  });
+
+  testWidgets('CPU-first Home logs completion without a fabricated placement', (
+    tester,
+  ) async {
+    final analytics = _RecordingTypedAnalytics();
+    final engine = _finishedCpuVictory();
+    addTearDown(engine.dispose);
+
+    await tester.binding.setSurfaceSize(const Size(390, 844));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    await tester.pumpWidget(
+      MaterialApp(
+        home: GameScreen(
+          opponent: 'CPU • Fácil',
+          gameEngine: engine,
+          analytics: analytics,
+          analyticsMatchRef: 'cpu_loss_match_01',
+        ),
+        routes: {
+          '/home': (_) => const Scaffold(
+            body: SizedBox(key: ValueKey('home-route-marker')),
+          ),
+        },
+      ),
+    );
+    await tester.pump(const Duration(milliseconds: 2200));
+    await tester.tap(find.byKey(const ValueKey('victory-home')));
+    await tester.pump(const Duration(milliseconds: 300));
+
+    final completed = analytics.events.whereType<MatchCompletedEvent>().single;
+    expect(completed.placement, isNull);
+    expect(analytics.events.whereType<MatchAbandonedEvent>(), isEmpty);
+
+    await tester.pumpWidget(const SizedBox.shrink());
+  });
+
+  testWidgets('leaving an offered x2 reward records an explicit decline', (
+    tester,
+  ) async {
+    SharedPreferences.setMockInitialValues(<String, Object>{});
+    final analytics = _RecordingTypedAnalytics();
+    final engine = _oneMoveFromVictory();
+    final wallet = await WalletController.create();
+    final progression = await PlayerProgressionController.create();
+    final ads = _SupportedAdsController();
+    addTearDown(engine.dispose);
+    addTearDown(wallet.dispose);
+    addTearDown(progression.dispose);
+    addTearDown(ads.dispose);
+
+    await tester.binding.setSurfaceSize(const Size(390, 844));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    await tester.pumpWidget(
+      MobileAdsScope(
+        controller: ads,
+        child: MaterialApp(
+          home: GameScreen(
+            opponent: 'CPU • Fácil',
+            gameEngine: engine,
+            wallet: wallet,
+            progression: progression,
+            analytics: analytics,
+            analyticsMatchRef: 'reward_decline_match_01',
+          ),
+          routes: {
+            '/home': (_) => const Scaffold(
+              body: SizedBox(key: ValueKey('home-route-marker')),
+            ),
+          },
+        ),
+      ),
+    );
+    await tester.pump();
+    expect(engine.moveToken(engine.currentPlayer.tokens.last, die: 1), isTrue);
+    await tester.pump(const Duration(milliseconds: 1900));
+    await tester.tap(find.byKey(const ValueKey('victory-home')));
+    await tester.pump(const Duration(milliseconds: 300));
+
+    expect(
+      analytics.events.whereType<RewardedAdEvent>().map((event) => event.stage),
+      <RewardedAdStage>[RewardedAdStage.offered, RewardedAdStage.declined],
+    );
 
     await tester.pumpWidget(const SizedBox.shrink());
   });
@@ -705,6 +1015,7 @@ void main() {
     final spent = analytics.events.whereType<CurrencyEvent>().single;
     expect(spent.flow, CurrencyFlow.spent);
     expect(spent.amount, 350);
+    expect(spent.balanceBefore, 750);
     expect(spent.balanceAfter, 400);
 
     await tester.pumpWidget(const SizedBox.shrink());

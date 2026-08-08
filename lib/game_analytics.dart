@@ -1,6 +1,7 @@
 import 'package:firebase_analytics/firebase_analytics.dart';
 import 'package:firebase_core/firebase_core.dart';
 import 'package:flutter/foundation.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 import 'firebase_options.dart';
 import 'game_engine.dart';
@@ -47,16 +48,19 @@ class MatchAnalyticsContext {
   const MatchAnalyticsContext({
     required this.playType,
     required this.mode,
+    this.matchFormat,
     this.correlation = const AnalyticsCorrelation(),
   });
 
   final MatchPlayType playType;
   final GameMode mode;
+  final MatchFormat? matchFormat;
   final AnalyticsCorrelation correlation;
 
   Map<String, Object> get parameters => <String, Object>{
     'play_type': playType.name,
     'game_mode': _gameModeName(mode),
+    if (matchFormat case final value?) 'match_format': value.name,
     ...correlation.parameters,
   };
 }
@@ -73,6 +77,7 @@ class MatchStartEvent implements GameAnalyticsEvent {
   const MatchStartEvent({
     required this.playType,
     required this.mode,
+    this.matchFormat,
     this.launchSource = MatchLaunchSource.home,
     this.cpuDifficulty,
     this.matchmakingWaitSeconds,
@@ -99,6 +104,7 @@ class MatchStartEvent implements GameAnalyticsEvent {
 
   final MatchPlayType playType;
   final GameMode mode;
+  final MatchFormat? matchFormat;
   final MatchLaunchSource launchSource;
   final CpuDifficulty? cpuDifficulty;
   final int? matchmakingWaitSeconds;
@@ -120,6 +126,7 @@ class MatchStartEvent implements GameAnalyticsEvent {
     final result = <String, Object>{
       'play_type': playType.name,
       'game_mode': _gameModeName(mode),
+      if (matchFormat case final value?) 'match_format': value.name,
       'is_rematch': isRematch ? 1 : 0,
       'launch_source': launchSource.name,
       ...correlation.parameters,
@@ -417,16 +424,27 @@ class CurrencyEvent implements GameAnalyticsEvent {
     required this.flow,
     required this.source,
     required this.amount,
+    this.balanceBefore,
     this.balanceAfter,
     this.anonymousTransactionId,
     this.match,
     this.correlation = const AnalyticsCorrelation(),
   }) : assert(amount > 0),
-       assert(balanceAfter == null || balanceAfter >= 0);
+       assert(balanceBefore == null || balanceBefore >= 0),
+       assert(balanceAfter == null || balanceAfter >= 0),
+       assert(
+         balanceBefore == null ||
+             balanceAfter == null ||
+             (flow == CurrencyFlow.earned
+                 ? balanceAfter == balanceBefore + amount
+                 : balanceAfter == balanceBefore - amount),
+         'Currency balances must reconcile with the event flow and amount.',
+       );
 
   final CurrencyFlow flow;
   final CurrencySource source;
   final int amount;
+  final int? balanceBefore;
   final int? balanceAfter;
   final String? anonymousTransactionId;
   final MatchAnalyticsContext? match;
@@ -446,6 +464,9 @@ class CurrencyEvent implements GameAnalyticsEvent {
       'currency_source': source.name,
       'coin_amount': amount,
     };
+    if (balanceBefore case final value?) {
+      result['balance_before'] = value;
+    }
     if (balanceAfter case final value?) {
       result['balance_after'] = value;
     }
@@ -457,6 +478,39 @@ class CurrencyEvent implements GameAnalyticsEvent {
     }
     return result;
   }
+}
+
+enum MissionKind { move20Cells, releaseToken, finishOneMatch, finish7Matches }
+
+@immutable
+class MissionRewardEvent implements GameAnalyticsEvent {
+  const MissionRewardEvent({
+    required this.mission,
+    required this.rewardCoins,
+    required this.progress,
+    required this.target,
+    this.correlation = const AnalyticsCorrelation(),
+  }) : assert(rewardCoins > 0),
+       assert(progress >= 0),
+       assert(target > 0);
+
+  final MissionKind mission;
+  final int rewardCoins;
+  final int progress;
+  final int target;
+  final AnalyticsCorrelation correlation;
+
+  @override
+  String get eventName => 'mission_rewarded';
+
+  @override
+  Map<String, Object> get parameters => <String, Object>{
+    ...correlation.parameters,
+    'mission_id': mission.name,
+    'mission_progress': progress,
+    'mission_target': target,
+    'reward_coins': rewardCoins,
+  };
 }
 
 enum ShopStage { previewed, purchased, equipped }
@@ -516,6 +570,67 @@ abstract interface class GameAnalytics {
 /// The richer analytics contract implemented by production and no-op loggers.
 abstract interface class TypedGameAnalytics implements GameAnalytics {
   Future<void> logEvent(GameAnalyticsEvent event);
+}
+
+const String analyticsCollectionPreferenceKey =
+    'privacy_analytics_collection_enabled';
+
+/// Explicit opt-in control for anonymous product analytics.
+///
+/// Collection defaults to off. Advertising consent is intentionally separate
+/// because declining analytics must never affect the ability to play or to
+/// manage AdMob privacy choices.
+abstract interface class AnalyticsPrivacyControl {
+  bool get analyticsCollectionEnabled;
+
+  Future<void> setAnalyticsCollectionEnabled(bool enabled);
+}
+
+typedef AnalyticsCollectionApplier = Future<void> Function(bool enabled);
+
+class ConsentManagedGameAnalytics
+    implements TypedGameAnalytics, AnalyticsPrivacyControl {
+  ConsentManagedGameAnalytics({
+    required GameAnalytics delegate,
+    required SharedPreferences preferences,
+    required bool enabled,
+    AnalyticsCollectionApplier? applyPlatformCollection,
+  }) : _delegate = delegate,
+       _preferences = preferences,
+       _enabled = enabled,
+       _applyPlatformCollection =
+           applyPlatformCollection ?? ((_) => Future<void>.value());
+
+  final GameAnalytics _delegate;
+  final SharedPreferences _preferences;
+  final AnalyticsCollectionApplier _applyPlatformCollection;
+  bool _enabled;
+
+  @override
+  bool get analyticsCollectionEnabled => _enabled;
+
+  @override
+  Future<void> setAnalyticsCollectionEnabled(bool enabled) async {
+    if (_enabled == enabled) return;
+    await _applyPlatformCollection(enabled);
+    final saved = await _preferences.setBool(
+      analyticsCollectionPreferenceKey,
+      enabled,
+    );
+    if (!saved) {
+      await _applyPlatformCollection(_enabled);
+      throw StateError('Analytics privacy preference was not persisted.');
+    }
+    _enabled = enabled;
+  }
+
+  @override
+  Future<void> logEvent(GameAnalyticsEvent event) =>
+      _enabled ? _delegate.logEvent(event) : Future<void>.value();
+
+  @override
+  Future<void> logMatchStarted(MatchStartEvent event) =>
+      _enabled ? _delegate.logMatchStarted(event) : Future<void>.value();
 }
 
 /// Lets code that still receives [GameAnalytics] send new typed events safely.
@@ -608,12 +723,22 @@ Future<GameAnalytics> initializeGameAnalytics() async {
   }
 
   try {
+    final preferences = await SharedPreferences.getInstance();
+    final collectionEnabled =
+        preferences.getBool(analyticsCollectionPreferenceKey) ?? false;
     if (Firebase.apps.isEmpty) {
       await Firebase.initializeApp(
         options: DefaultFirebaseOptions.currentPlatform,
       );
     }
-    return FirebaseGameAnalytics(FirebaseAnalytics.instance);
+    final firebaseAnalytics = FirebaseAnalytics.instance;
+    await firebaseAnalytics.setAnalyticsCollectionEnabled(collectionEnabled);
+    return ConsentManagedGameAnalytics(
+      delegate: FirebaseGameAnalytics(firebaseAnalytics),
+      preferences: preferences,
+      enabled: collectionEnabled,
+      applyPlatformCollection: firebaseAnalytics.setAnalyticsCollectionEnabled,
+    );
   } catch (error, stackTrace) {
     debugPrint('Google Analytics initialization was skipped: $error');
     debugPrintStack(stackTrace: stackTrace);
@@ -662,7 +787,11 @@ const Map<_AnonymousReferenceKind, List<String>> _anonymousReferencePrefixes =
         'resume_',
         'quick-',
       ],
-      _AnonymousReferenceKind.session: <String>['session_', 'shop_session_'],
+      _AnonymousReferenceKind.session: <String>[
+        'session_',
+        'shop_session_',
+        'tutorial_session_',
+      ],
       _AnonymousReferenceKind.transaction: <String>[
         'transaction_',
         'reward_transaction_',
@@ -695,6 +824,7 @@ const Set<String> _allowedParameterNames = <String>{
   'abandon_reason',
   'ad_placement',
   'app_session_ref',
+  'balance_before',
   'balance_after',
   'coin_amount',
   'completion_reason',
@@ -709,7 +839,11 @@ const Set<String> _allowedParameterNames = <String>{
   'launch_source',
   'live_human_opponent_count',
   'match_ref',
+  'match_format',
   'matchmaking_wait_seconds',
+  'mission_id',
+  'mission_progress',
+  'mission_target',
   'placement',
   'play_type',
   'price_coins',

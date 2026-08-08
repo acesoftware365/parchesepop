@@ -64,6 +64,41 @@ void main() {
     },
   );
 
+  testWidgets('Quick Pop guide describes its two-token rules without a 5', (
+    tester,
+  ) async {
+    await tester.binding.setSurfaceSize(const Size(390, 844));
+    await tester.pumpWidget(
+      const MaterialApp(
+        home: GameGuideScreen(initialMode: GameGuideMode.quickPop),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(
+      find.byKey(const ValueKey('guide-summary-quickPop')),
+      findsOneWidget,
+    );
+    expect(find.text('Quick Pop'), findsOneWidget);
+    expect(find.text('2 FICHAS'), findsOneWidget);
+    expect(find.text('Empieza de inmediato'), findsOneWidget);
+    await tester.scrollUntilVisible(
+      find.text('Sin 5 de salida'),
+      260,
+      scrollable: find.byType(Scrollable).first,
+    );
+    expect(find.text('Sin 5 de salida'), findsOneWidget);
+    expect(find.text('Salir con un 5'), findsNothing);
+    expect(
+      find.textContaining('Gana quien coloque primero sus 4'),
+      findsNothing,
+    );
+    expect(tester.takeException(), isNull);
+
+    await tester.pumpWidget(const SizedBox.shrink());
+    await tester.binding.setSurfaceSize(null);
+  });
+
   for (final effect in const [
     ('shield', 'Escudo', '¡PROTEGIDO!'),
     ('turbo', 'Turbo', '¡TURBO!'),

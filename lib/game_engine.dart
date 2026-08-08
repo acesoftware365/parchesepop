@@ -4,7 +4,10 @@ import 'dart:math';
 
 import 'package:flutter/material.dart';
 
+import 'match_rules.dart';
 import 'online_spectator.dart';
+
+export 'match_rules.dart';
 
 enum PlayerColor { red, green, yellow, blue }
 
@@ -84,24 +87,97 @@ class BoardTrap {
 }
 
 class GameToken {
-  GameToken(this.owner, this.id);
+  GameToken(this.owner, this.id, {this.progress = -1});
 
   final PlayerColor owner;
   final int id;
-  int progress = -1;
+  int progress;
 
   bool get inNest => progress < 0;
   bool get finished => progress >= GameEngine.finishProgress;
 }
 
+/// A normalized move choice suitable for CPU, UI, and future server clients.
+/// Duplicate dice values produce one command, while a combined-dice move is a
+/// distinct command because it consumes a different set of resources.
+class LegalMoveCommand {
+  LegalMoveCommand._({
+    required this.token,
+    required this.die,
+    required this.amount,
+    required this.usesAllDice,
+    required Iterable<int> consumedDice,
+    required this.destinationProgress,
+  }) : consumedDice = UnmodifiableListView<int>(List<int>.of(consumedDice));
+
+  factory LegalMoveCommand.singleDie({
+    required GameToken token,
+    required int die,
+    required int destinationProgress,
+  }) => LegalMoveCommand._(
+    token: token,
+    die: die,
+    amount: die,
+    usesAllDice: false,
+    consumedDice: <int>[die],
+    destinationProgress: destinationProgress,
+  );
+
+  factory LegalMoveCommand.allDice({
+    required GameToken token,
+    required int amount,
+    required Iterable<int> dice,
+    required int destinationProgress,
+  }) => LegalMoveCommand._(
+    token: token,
+    die: null,
+    amount: amount,
+    usesAllDice: true,
+    consumedDice: dice,
+    destinationProgress: destinationProgress,
+  );
+
+  final GameToken token;
+  final int? die;
+  final int amount;
+  final bool usesAllDice;
+  final UnmodifiableListView<int> consumedDice;
+  final int destinationProgress;
+
+  bool representsSameChoice(LegalMoveCommand other) {
+    if (!identical(token, other.token) ||
+        die != other.die ||
+        amount != other.amount ||
+        usesAllDice != other.usesAllDice ||
+        destinationProgress != other.destinationProgress ||
+        consumedDice.length != other.consumedDice.length) {
+      return false;
+    }
+    for (var index = 0; index < consumedDice.length; index++) {
+      if (consumedDice[index] != other.consumedDice[index]) return false;
+    }
+    return true;
+  }
+}
+
 class PlayerState {
-  PlayerState(this.color, this.name, {this.isHuman = false})
-    : tokens = List.generate(4, (index) => GameToken(color, index));
+  PlayerState(
+    this.color,
+    this.name, {
+    this.isHuman = false,
+    int tokenCount = 4,
+    int initialTokenProgress = -1,
+    this.initialStackIntact = false,
+  }) : tokens = List.generate(
+         tokenCount,
+         (index) => GameToken(color, index, progress: initialTokenProgress),
+       );
 
   final PlayerColor color;
   final String name;
   final bool isHuman;
   final List<GameToken> tokens;
+  bool initialStackIntact;
   PowerUp? inventory;
   bool shielded = false;
   int skippedTurns = 0;
@@ -116,18 +192,58 @@ class GameEngine extends ChangeNotifier {
   GameEngine({
     this.cpuLevel = 'Normal',
     this.mode = GameMode.traditional,
+    this.matchFormat = MatchFormat.classic,
     Random? random,
     String humanName = 'Tú',
     List<String>? cpuNames,
   }) : _random = random ?? Random(),
+       rules = MatchRules.forFormat(matchFormat),
        players = [
-         PlayerState(PlayerColor.red, humanName, isHuman: true),
-         PlayerState(PlayerColor.green, _resolvedCpuName(cpuNames, 0, 'CPU 1')),
+         PlayerState(
+           PlayerColor.red,
+           humanName,
+           isHuman: true,
+           tokenCount: MatchRules.forFormat(matchFormat).tokenCount,
+           initialTokenProgress: MatchRules.forFormat(
+             matchFormat,
+           ).initialTokenProgress,
+           initialStackIntact: !MatchRules.forFormat(
+             matchFormat,
+           ).initialStackFormsBarrier,
+         ),
+         PlayerState(
+           PlayerColor.green,
+           _resolvedCpuName(cpuNames, 0, 'CPU 1'),
+           tokenCount: MatchRules.forFormat(matchFormat).tokenCount,
+           initialTokenProgress: MatchRules.forFormat(
+             matchFormat,
+           ).initialTokenProgress,
+           initialStackIntact: !MatchRules.forFormat(
+             matchFormat,
+           ).initialStackFormsBarrier,
+         ),
          PlayerState(
            PlayerColor.yellow,
            _resolvedCpuName(cpuNames, 1, 'CPU 2'),
+           tokenCount: MatchRules.forFormat(matchFormat).tokenCount,
+           initialTokenProgress: MatchRules.forFormat(
+             matchFormat,
+           ).initialTokenProgress,
+           initialStackIntact: !MatchRules.forFormat(
+             matchFormat,
+           ).initialStackFormsBarrier,
          ),
-         PlayerState(PlayerColor.blue, _resolvedCpuName(cpuNames, 2, 'CPU 3')),
+         PlayerState(
+           PlayerColor.blue,
+           _resolvedCpuName(cpuNames, 2, 'CPU 3'),
+           tokenCount: MatchRules.forFormat(matchFormat).tokenCount,
+           initialTokenProgress: MatchRules.forFormat(
+             matchFormat,
+           ).initialTokenProgress,
+           initialStackIntact: !MatchRules.forFormat(
+             matchFormat,
+           ).initialStackFormsBarrier,
+         ),
        ] {
     if (isChaos) {
       for (final side in PlayerColor.values) {
@@ -164,12 +280,31 @@ class GameEngine extends ChangeNotifier {
       return entry?['name'] as String? ?? fallback;
     }
 
+    final formatName = checkpoint['matchFormat'] as String?;
+    final matchFormat = formatName == null
+        ? MatchFormat.classic
+        : MatchFormat.values.cast<MatchFormat?>().firstWhere(
+            (format) => format?.name == formatName,
+            orElse: () => null,
+          );
+    if (matchFormat == null) {
+      throw FormatException('Unsupported match format: $formatName');
+    }
+    final rules = MatchRules.forFormat(matchFormat);
+    final savedRulesVersion = checkpoint['rulesVersion'];
+    if (savedRulesVersion != null && savedRulesVersion != rules.rulesVersion) {
+      throw FormatException(
+        'Unsupported rules version $savedRulesVersion for ${matchFormat.name}.',
+      );
+    }
+
     final modeName = checkpoint['mode'] as String?;
     final engine = GameEngine(
       cpuLevel: checkpoint['cpuLevel'] as String? ?? 'Normal',
       mode: modeName == GameMode.chaos.name
           ? GameMode.chaos
           : GameMode.traditional,
+      matchFormat: matchFormat,
       humanName: red?['name'] as String? ?? 'Tú',
       cpuNames: [
         playerName(PlayerColor.green, 'CPU 1'),
@@ -189,7 +324,8 @@ class GameEngine extends ChangeNotifier {
         index < player.tokens.length && index < tokens.length;
         index++
       ) {
-        player.tokens[index].progress = tokens[index] as int? ?? -1;
+        player.tokens[index].progress =
+            tokens[index] as int? ?? engine.rules.initialTokenProgress;
       }
       final powerName = saved['inventory'] as String?;
       player.inventory = powerName == null
@@ -199,6 +335,13 @@ class GameEngine extends ChangeNotifier {
                 .firstOrNull;
       player.shielded = saved['shielded'] as bool? ?? false;
       player.skippedTurns = saved['skippedTurns'] as int? ?? 0;
+    }
+    final savedInitialStacks = checkpoint['initialStackIntact'] as Map?;
+    for (final player in engine.players) {
+      player.initialStackIntact = engine.rules.initialStackFormsBarrier
+          ? false
+          : savedInitialStacks?[player.color.name] as bool? ??
+                player.tokens.every((token) => token.progress == 0);
     }
     engine.traps
       ..clear()
@@ -260,6 +403,45 @@ class GameEngine extends ChangeNotifier {
             .whereType<int>(),
       );
     engine.hasRolled = checkpoint['hasRolled'] as bool? ?? false;
+    final savedConsecutiveDoubles = checkpoint['consecutiveDoubles'];
+    engine.consecutiveDoubles = savedConsecutiveDoubles is int
+        ? savedConsecutiveDoubles.clamp(0, 2)
+        : 0;
+    engine._lastTrapEffectTurn.clear();
+    final savedTrapTurns = checkpoint['lastTrapEffectTurn'];
+    if (savedTrapTurns is Map) {
+      for (final entry in savedTrapTurns.entries) {
+        final colorName = entry.key;
+        final turn = entry.value;
+        if (colorName is! String || turn is! int || turn < 0) continue;
+        final color = PlayerColor.values
+            .where((candidate) => candidate.name == colorName)
+            .firstOrNull;
+        if (color != null) engine._lastTrapEffectTurn[color] = turn;
+      }
+    }
+    final restoredFinishOrder = <PlayerColor>[];
+    final rawFinishOrder = checkpoint['finishOrder'];
+    if (rawFinishOrder is List) {
+      for (final rawColor in rawFinishOrder.whereType<String>()) {
+        final color = PlayerColor.values
+            .where((candidate) => candidate.name == rawColor)
+            .firstOrNull;
+        if (color == null || restoredFinishOrder.contains(color)) continue;
+        engine._standings.recordFinish(color);
+        restoredFinishOrder.add(color);
+      }
+    }
+    if (restoredFinishOrder.isNotEmpty) {
+      final winnerColor = restoredFinishOrder.first;
+      engine.winner = engine.players.firstWhere(
+        (player) => player.color == winnerColor,
+      );
+    }
+    engine.spectatorContinuationActive =
+        checkpoint['spectatorContinuationActive'] == true &&
+        restoredFinishOrder.isNotEmpty &&
+        !engine._standings.isComplete;
     engine.message = 'Partida reanudada.';
     engine.effectResolving = false;
     engine.pendingTrapPlacement = false;
@@ -269,11 +451,20 @@ class GameEngine extends ChangeNotifier {
       type: GameEventType.matchStarted,
       description: 'La partida se reanudó desde el último punto guardado.',
     );
+    // Timers are intentionally not serialized. Recreate the only pending
+    // transition that can otherwise leave a restored match with no legal
+    // input: a consumed roll, a no-move roll, or the third-double penalty.
+    if (engine.hasRolled &&
+        (engine.remainingDice.isEmpty || !engine.hasAnyMove())) {
+      engine._scheduleEndTurn(Duration.zero);
+    }
     return engine;
   }
 
   final String cpuLevel;
   final GameMode mode;
+  final MatchFormat matchFormat;
+  final MatchRules rules;
   final List<PlayerState> players;
   final Random _random;
   final List<BoardTrap> traps = [];
@@ -320,6 +511,26 @@ class GameEngine extends ChangeNotifier {
 
   PlayerState get currentPlayer => players[currentPlayerIndex];
   bool get isChaos => mode == GameMode.chaos;
+
+  /// Metadata that every durable checkpoint must persist alongside the board
+  /// state. Legacy checkpoints without these keys migrate to Classic.
+  Map<String, Object> get checkpointRuleMetadata => <String, Object>{
+    'matchFormat': matchFormat.name,
+    'rulesVersion': rules.rulesVersion,
+    'initialStackIntact': <String, bool>{
+      for (final player in players)
+        player.color.name: player.initialStackIntact,
+    },
+    'finishOrder': <String>[
+      for (final color in _standings.finishOrder) color.name,
+    ],
+    'spectatorContinuationActive': spectatorContinuationActive,
+    'consecutiveDoubles': consecutiveDoubles,
+    'lastTrapEffectTurn': <String, int>{
+      for (final entry in _lastTrapEffectTurn.entries)
+        entry.key.name: entry.value,
+    },
+  };
   PlayerColor get localViewerColor =>
       players.firstWhere((player) => player.isHuman).color;
 
@@ -697,7 +908,12 @@ class GameEngine extends ChangeNotifier {
       final previousProgress = penalized?.progress;
       final openedBarrier =
           penalized != null && _barrierTokensFor(penalized).length >= 2;
-      if (penalized != null) penalized.progress = -1;
+      if (penalized != null) {
+        if (penalized.progress != 0) {
+          currentPlayer.initialStackIntact = false;
+        }
+        penalized.progress = rules.initialTokenProgress;
+      }
       consecutiveDoubles = 0;
       dice = [dice[0], 0];
       hasRolled = true;
@@ -706,7 +922,8 @@ class GameEngine extends ChangeNotifier {
                 ? 'Tres dobles: las fichas del pasillo final están protegidas.'
                 : 'Tres dobles: no había una ficha en juego para penalizar.'
           : 'Tres dobles: la ficha ${penalized.id + 1} de '
-                '${currentPlayer.name} volvió a la cárcel.'
+                '${currentPlayer.name} volvió '
+                '${rules.requiresFiveToExit ? 'a la cárcel' : 'a la salida'}.'
                 '${openedBarrier ? ' La barrera se abrió.' : ''}';
       _recordEvent(
         type: GameEventType.threeDoublesPenalty,
@@ -750,7 +967,9 @@ class GameEngine extends ChangeNotifier {
       return false;
     }
     if (token.inNest) {
-      return allowNestExit && amount == 5 && !_startBlocked(token.owner);
+      return allowNestExit &&
+          (!rules.requiresFiveToExit || amount == 5) &&
+          !_startBlocked(token.owner);
     }
     if (enforceFiveReservation &&
         amount == 5 &&
@@ -782,6 +1001,7 @@ class GameEngine extends ChangeNotifier {
   }
 
   bool mustUseFiveToLeaveNest(PlayerColor owner) {
+    if (!rules.requiresFiveToExit) return false;
     final player = players.firstWhere((player) => player.color == owner);
     return player.tokens.any((token) => token.inNest) && !_startBlocked(owner);
   }
@@ -792,6 +1012,58 @@ class GameEngine extends ChangeNotifier {
   List<int> legalDieValuesFor(GameToken token) {
     final values = legalDiceFor(token).toSet().toList()..sort();
     return values;
+  }
+
+  /// Returns every distinct command the current player can legally submit.
+  /// This intentionally counts `(token, die)` and `(token, all dice)` choices,
+  /// not just movable tokens, so callers never auto-move through a real choice.
+  List<LegalMoveCommand> legalMoveCommands() {
+    if (!hasRolled || gameOver || effectResolving) {
+      return const <LegalMoveCommand>[];
+    }
+    final commands = <LegalMoveCommand>[];
+    for (final token in currentPlayer.tokens) {
+      if (token.finished) continue;
+      for (final die in legalDieValuesFor(token)) {
+        final destination = destinationProgressFor(token, die);
+        if (destination == null) continue;
+        commands.add(
+          LegalMoveCommand.singleDie(
+            token: token,
+            die: die,
+            destinationProgress: destination,
+          ),
+        );
+      }
+      final combinedDice = _rolledDiceAvailableForCombinedMove();
+      final combinedAmount = allDiceTotalFor(token);
+      if (combinedDice != null && combinedAmount != null) {
+        commands.add(
+          LegalMoveCommand.allDice(
+            token: token,
+            amount: combinedAmount,
+            dice: combinedDice,
+            destinationProgress: token.progress + combinedAmount,
+          ),
+        );
+      }
+    }
+    return UnmodifiableListView<LegalMoveCommand>(commands);
+  }
+
+  /// The sole legal command, or `null` when there are zero or multiple real
+  /// choices. UI code may use this after the dice animation to auto-move once.
+  LegalMoveCommand? get uniqueLegalMoveCommand {
+    final commands = legalMoveCommands();
+    return commands.length == 1 ? commands.single : null;
+  }
+
+  /// Applies a previously exposed command only if it is still legal.
+  bool executeMoveCommand(LegalMoveCommand command) {
+    if (!legalMoveCommands().any(command.representsSameChoice)) return false;
+    return command.usesAllDice
+        ? moveTokenUsingAllDice(command.token)
+        : moveToken(command.token, die: command.die);
   }
 
   List<int>? _rolledDiceAvailableForCombinedMove() {
@@ -925,6 +1197,9 @@ class GameEngine extends ChangeNotifier {
         !usingAllDice && _isHomeEntryCapture(token, used);
     final previousProgress = token.progress;
     final previousBarrier = _barrierTokensFor(token);
+    if (_isProtectedInitialStackToken(token)) {
+      currentPlayer.initialStackIntact = false;
+    }
     for (final value in consumedDice) {
       remainingDice.remove(value);
     }
@@ -1047,7 +1322,7 @@ class GameEngine extends ChangeNotifier {
         toProgress: token.progress,
       );
     }
-    if (currentPlayer.tokens.every((item) => item.finished)) {
+    if (_hasCompletedRequiredTokens(currentPlayer)) {
       _finishGame();
       notifyListeners();
       return true;
@@ -1098,7 +1373,8 @@ class GameEngine extends ChangeNotifier {
     );
 
     final capturedProgress = token.progress;
-    token.progress = -1;
+    if (capturedProgress != 0) player.initialStackIntact = false;
+    token.progress = rules.initialTokenProgress;
     _lastCapturedToken = token;
     _recordEvent(
       type: GameEventType.capture,
@@ -1166,9 +1442,24 @@ class GameEngine extends ChangeNotifier {
             token.progress < commonPathLength &&
             loopIndex(token.owner, token.progress) == loopPosition;
       }).length;
-      if (count >= 2) return true;
+      if (count >= 2 && !_isProtectedInitialStack(player, loopPosition)) {
+        return true;
+      }
     }
     return false;
+  }
+
+  bool _isProtectedInitialStack(PlayerState player, int loopPosition) =>
+      !rules.initialStackFormsBarrier &&
+      player.initialStackIntact &&
+      loopPosition == startOffset[player.color] &&
+      player.tokens.length >= 2 &&
+      player.tokens.every((token) => token.progress == 0);
+
+  bool _isProtectedInitialStackToken(GameToken token) {
+    if (token.progress != 0) return false;
+    final player = players.firstWhere((player) => player.color == token.owner);
+    return _isProtectedInitialStack(player, startOffset[token.owner]!);
   }
 
   List<GameToken> _barrierTokensFor(GameToken token) {
@@ -1176,6 +1467,9 @@ class GameEngine extends ChangeNotifier {
     final owner = players.firstWhere((player) => player.color == token.owner);
     if (token.progress < commonPathLength) {
       final index = loopIndex(token.owner, token.progress);
+      if (_isProtectedInitialStack(owner, index)) {
+        return const <GameToken>[];
+      }
       return owner.tokens
           .where(
             (other) =>
@@ -1232,7 +1526,7 @@ class GameEngine extends ChangeNotifier {
     }
     var inspectedPlayers = 0;
     while (inspectedPlayers < players.length &&
-        (players[currentPlayerIndex].tokens.every((token) => token.finished) ||
+        (_hasCompletedRequiredTokens(players[currentPlayerIndex]) ||
             players[currentPlayerIndex].skippedTurns > 0)) {
       if (players[currentPlayerIndex].skippedTurns > 0) {
         skippedPlayers.add(players[currentPlayerIndex].name);
@@ -1319,6 +1613,9 @@ class GameEngine extends ChangeNotifier {
         currentPlayer.inventory = null;
         _lastCapturedToken = null;
         final previousProgress = token.progress;
+        if (_isProtectedInitialStackToken(token)) {
+          currentPlayer.initialStackIntact = false;
+        }
         token.progress += amount;
         _recordEvent(
           type: GameEventType.powerUp,
@@ -1514,6 +1811,7 @@ class GameEngine extends ChangeNotifier {
     final player = players.firstWhere((item) => item.color == token.owner);
     final trapOwner = players.firstWhere((item) => item.color == trap.owner);
     final landingProgress = token.progress;
+    if (landingProgress != 0) player.initialStackIntact = false;
     if (_consumeAutomaticShield(
       player: player,
       token: token,
@@ -1550,11 +1848,15 @@ class GameEngine extends ChangeNotifier {
         final setback = previousProgress - token.progress;
         message = '¡RETROCESO! ${player.name} retrocedió $setback pasos.';
       case PowerUp.prisonTrap:
-        token.progress = -1;
-        message = '¡TRAMPA CÁRCEL! ${player.name} volvió a la cárcel.';
+        token.progress = rules.initialTokenProgress;
+        message = rules.requiresFiveToExit
+            ? '¡TRAMPA CÁRCEL! ${player.name} volvió a la cárcel.'
+            : '¡TRAMPA! ${player.name} volvió a la salida.';
       case PowerUp.bomb:
-        token.progress = -1;
-        message = '¡BOMBA! ${player.name} volvió a la cárcel.';
+        token.progress = rules.initialTokenProgress;
+        message = rules.requiresFiveToExit
+            ? '¡BOMBA! ${player.name} volvió a la cárcel.'
+            : '¡BOMBA! ${player.name} volvió a la salida.';
       case PowerUp.shield || PowerUp.boost:
         return false;
     }
@@ -1649,16 +1951,20 @@ class GameEngine extends ChangeNotifier {
   void _beginEffectResolution() {
     effectResolving = true;
     _effectResolutionTimer?.cancel();
-    _effectResolutionTimer = Timer(const Duration(milliseconds: 2200), () {
+    _effectResolutionTimer = Timer(const Duration(milliseconds: 900), () {
       effectResolving = false;
       notifyListeners();
     });
   }
 
   void _checkWinner() {
-    if (!currentPlayer.tokens.every((item) => item.finished)) return;
+    if (!_hasCompletedRequiredTokens(currentPlayer)) return;
     _finishGame();
   }
+
+  bool _hasCompletedRequiredTokens(PlayerState player) =>
+      player.tokens.where((token) => token.finished).length >=
+      rules.tokensRequiredToWin;
 
   bool continueAfterWinner() {
     if (!canContinueAfterWinner) return false;

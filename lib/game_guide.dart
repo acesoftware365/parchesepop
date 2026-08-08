@@ -5,8 +5,8 @@ import 'package:flutter/material.dart';
 import 'app_language.dart';
 import 'mobile_ads.dart';
 
-/// The two rule sets presented by [GameGuideScreen].
-enum GameGuideMode { traditional, chaos }
+/// The rule sets presented by [GameGuideScreen].
+enum GameGuideMode { traditional, chaos, quickPop }
 
 /// Effects that can be previewed in [TrapPowerLab].
 enum GuideEffect { shield, turbo, glue, setback, prison, bomb }
@@ -44,7 +44,11 @@ class _GameGuideScreenState extends State<GameGuideScreen> {
 
   @override
   Widget build(BuildContext context) {
-    final isChaos = _mode == GameGuideMode.chaos;
+    final sections = switch (_mode) {
+      GameGuideMode.traditional => traditionalRuleSections,
+      GameGuideMode.chaos => [...traditionalRuleSections, ...chaosRuleSections],
+      GameGuideMode.quickPop => quickPopRuleSections,
+    };
     return SuppressMobileAdBanner(
       child: Scaffold(
         backgroundColor: GuidePalette.navy,
@@ -94,9 +98,7 @@ class _GameGuideScreenState extends State<GameGuideScreen> {
                     padding: const EdgeInsets.fromLTRB(16, 14, 16, 0),
                     child: _RulesGrid(
                       key: ValueKey('rules-${_mode.name}'),
-                      sections: isChaos
-                          ? [...traditionalRuleSections, ...chaosRuleSections]
-                          : traditionalRuleSections,
+                      sections: sections,
                     ),
                   ),
                 ),
@@ -107,7 +109,7 @@ class _GameGuideScreenState extends State<GameGuideScreen> {
                     child: const TrapPowerLab(),
                   ),
                 ),
-                const SliverToBoxAdapter(child: _QuickReference()),
+                SliverToBoxAdapter(child: _QuickReference(mode: _mode)),
                 const SliverToBoxAdapter(child: SizedBox(height: 28)),
               ],
             ),
@@ -450,6 +452,62 @@ const traditionalRuleSections = <GuideRuleSection>[
   ),
 ];
 
+const quickPopRuleSections = <GuideRuleSection>[
+  GuideRuleSection(
+    icon: Icons.speed_rounded,
+    title: 'Quick Pop',
+    color: GuidePalette.green,
+    badge: '2 FICHAS',
+    rules: [
+      'Cada jugador usa 2 fichas en el tablero completo de 68 casillas.',
+      'Las dos fichas empiezan juntas en la salida; no pasan por la cárcel.',
+      'Gana quien lleve primero sus 2 fichas al centro.',
+    ],
+  ),
+  GuideRuleSection(
+    icon: Icons.outbound_rounded,
+    title: 'Empieza de inmediato',
+    color: GuidePalette.blue,
+    badge: 'SIN 5',
+    rules: [
+      'No necesitas sacar un 5 para comenzar: toca una ficha y elige un movimiento legal.',
+      'La pareja inicial está protegida y no bloquea el paso como barrera.',
+      'Cuando solo existe una jugada legal, el juego la realiza automáticamente.',
+    ],
+  ),
+  GuideRuleSection(
+    icon: Icons.casino_rounded,
+    title: 'Dados y decisiones',
+    color: GuidePalette.violet,
+    rules: [
+      'Puedes repartir los dos dados entre tus fichas o usar TODOS con una sola ficha.',
+      'Un doble conserva sus 2 usos y concede otra tirada al completar los movimientos.',
+      'Debes obtener el número exacto para entrar a la meta.',
+    ],
+  ),
+  GuideRuleSection(
+    icon: Icons.my_location_rounded,
+    title: 'Capturas y regreso',
+    color: GuidePalette.red,
+    badge: '+20',
+    rules: [
+      'Captura al caer exactamente sobre una ficha rival fuera de una casilla segura.',
+      'La ficha capturada vuelve a su salida, no a una cárcel.',
+      'Capturar concede +20 y completar una ficha concede +10.',
+    ],
+  ),
+  GuideRuleSection(
+    icon: Icons.star_rounded,
+    title: 'Reglas que se conservan',
+    color: GuidePalette.yellow,
+    rules: [
+      'Se mantienen los seguros, barreras, entradas de color y pasillos de 7 casillas.',
+      'Ninguna ficha puede atravesar una barrera.',
+      'Quick Pop acorta la partida sin recortar el recorrido original.',
+    ],
+  ),
+];
+
 const chaosRuleSections = <GuideRuleSection>[
   GuideRuleSection(
     icon: Icons.auto_awesome_rounded,
@@ -626,7 +684,7 @@ class _GuideHero extends StatelessWidget {
                   ),
                   SizedBox(height: 4),
                   PopText(
-                    'De la cárcel a la victoria',
+                    'De la salida a la victoria',
                     style: TextStyle(
                       color: Colors.white,
                       fontSize: 24,
@@ -662,32 +720,53 @@ class _ModeSelector extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Row(
-      children: [
-        Expanded(
-          child: _ModeButton(
-            key: const ValueKey('guide-mode-traditional'),
-            selected: value == GameGuideMode.traditional,
-            icon: Icons.emoji_events_rounded,
-            title: 'TRADICIONAL',
-            subtitle: 'Parchís clásico',
-            color: GuidePalette.blue,
-            onTap: () => onChanged(GameGuideMode.traditional),
-          ),
-        ),
-        const SizedBox(width: 10),
-        Expanded(
-          child: _ModeButton(
-            key: const ValueKey('guide-mode-chaos'),
-            selected: value == GameGuideMode.chaos,
-            icon: Icons.auto_awesome_rounded,
-            title: 'CAOS',
-            subtitle: 'Poderes y trampas',
-            color: GuidePalette.red,
-            onTap: () => onChanged(GameGuideMode.chaos),
-          ),
-        ),
-      ],
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final columns = constraints.maxWidth >= 720 ? 3 : 2;
+        final itemWidth = (constraints.maxWidth - (columns - 1) * 10) / columns;
+        return Wrap(
+          spacing: 10,
+          runSpacing: 10,
+          children: [
+            SizedBox(
+              width: itemWidth,
+              child: _ModeButton(
+                key: const ValueKey('guide-mode-traditional'),
+                selected: value == GameGuideMode.traditional,
+                icon: Icons.emoji_events_rounded,
+                title: 'TRADICIONAL',
+                subtitle: 'Parchís clásico',
+                color: GuidePalette.blue,
+                onTap: () => onChanged(GameGuideMode.traditional),
+              ),
+            ),
+            SizedBox(
+              width: itemWidth,
+              child: _ModeButton(
+                key: const ValueKey('guide-mode-chaos'),
+                selected: value == GameGuideMode.chaos,
+                icon: Icons.auto_awesome_rounded,
+                title: 'CAOS',
+                subtitle: 'Poderes y trampas',
+                color: GuidePalette.red,
+                onTap: () => onChanged(GameGuideMode.chaos),
+              ),
+            ),
+            SizedBox(
+              width: itemWidth,
+              child: _ModeButton(
+                key: const ValueKey('guide-mode-quick-pop'),
+                selected: value == GameGuideMode.quickPop,
+                icon: Icons.speed_rounded,
+                title: 'QUICK POP',
+                subtitle: 'Rápido · 2 fichas',
+                color: GuidePalette.green,
+                onTap: () => onChanged(GameGuideMode.quickPop),
+              ),
+            ),
+          ],
+        );
+      },
     );
   }
 }
@@ -791,19 +870,30 @@ class _ModeSummary extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final chaos = mode == GameGuideMode.chaos;
+    final (color, icon, description) = switch (mode) {
+      GameGuideMode.traditional => (
+        GuidePalette.blue,
+        Icons.check_circle_rounded,
+        'Modo Tradicional: carrera pura con dados, seguros, barreras, capturas y estrategia.',
+      ),
+      GameGuideMode.chaos => (
+        GuidePalette.red,
+        Icons.bolt_rounded,
+        'Modo Caos: todas las reglas tradicionales + cristales, poderes automáticos y varias trampas ocultas.',
+      ),
+      GameGuideMode.quickPop => (
+        GuidePalette.green,
+        Icons.speed_rounded,
+        'Quick Pop: tablero completo, 2 fichas ya en salida y una carrera más corta sin esperar un 5.',
+      ),
+    };
     return Container(
       key: ValueKey('guide-summary-${mode.name}'),
       padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
       decoration: BoxDecoration(
         color: Colors.white,
         borderRadius: BorderRadius.circular(18),
-        border: Border.all(
-          color: (chaos ? GuidePalette.red : GuidePalette.blue).withValues(
-            alpha: .35,
-          ),
-          width: 2,
-        ),
+        border: Border.all(color: color.withValues(alpha: .35), width: 2),
       ),
       child: Row(
         children: [
@@ -812,21 +902,14 @@ class _ModeSummary extends StatelessWidget {
             height: 40,
             decoration: BoxDecoration(
               shape: BoxShape.circle,
-              color: chaos
-                  ? GuidePalette.red.withValues(alpha: .12)
-                  : GuidePalette.blue.withValues(alpha: .12),
+              color: color.withValues(alpha: .12),
             ),
-            child: Icon(
-              chaos ? Icons.bolt_rounded : Icons.check_circle_rounded,
-              color: chaos ? GuidePalette.red : GuidePalette.blue,
-            ),
+            child: Icon(icon, color: color),
           ),
           const SizedBox(width: 11),
           Expanded(
             child: PopText(
-              chaos
-                  ? 'Modo Caos: todas las reglas tradicionales + cristales, poderes automáticos y varias trampas ocultas.'
-                  : 'Modo Tradicional: carrera pura con dados, seguros, barreras, capturas y estrategia.',
+              description,
               style: const TextStyle(
                 color: GuidePalette.ink,
                 fontWeight: FontWeight.w800,
@@ -1876,7 +1959,9 @@ class _LabGridPainter extends CustomPainter {
 }
 
 class _QuickReference extends StatelessWidget {
-  const _QuickReference();
+  const _QuickReference({required this.mode});
+
+  final GameGuideMode mode;
 
   @override
   Widget build(BuildContext context) {
@@ -1889,10 +1974,10 @@ class _QuickReference extends StatelessWidget {
           borderRadius: BorderRadius.circular(22),
           border: Border.all(color: Colors.white, width: 2),
         ),
-        child: const Column(
+        child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Row(
+            const Row(
               children: [
                 Icon(Icons.lightbulb_rounded, color: GuidePalette.navy),
                 SizedBox(width: 8),
@@ -1906,18 +1991,27 @@ class _QuickReference extends StatelessWidget {
                 ),
               ],
             ),
-            SizedBox(height: 10),
+            const SizedBox(height: 10),
             Wrap(
               spacing: 8,
               runSpacing: 8,
-              children: [
-                _QuickPill(text: '5 = SALIDA'),
-                _QuickPill(text: 'Captura = +20'),
-                _QuickPill(text: 'Meta = +10'),
-                _QuickPill(text: 'Doble = otra tirada'),
-                _QuickPill(text: '3 dobles = penalización'),
-                _QuickPill(text: 'Meta = número exacto'),
-              ],
+              children: mode == GameGuideMode.quickPop
+                  ? const [
+                      _QuickPill(text: '2 fichas'),
+                      _QuickPill(text: 'Sin 5 de salida'),
+                      _QuickPill(text: 'Captura = +20'),
+                      _QuickPill(text: 'Meta = +10'),
+                      _QuickPill(text: 'Doble = otra tirada'),
+                      _QuickPill(text: 'Meta = número exacto'),
+                    ]
+                  : const [
+                      _QuickPill(text: '5 = SALIDA'),
+                      _QuickPill(text: 'Captura = +20'),
+                      _QuickPill(text: 'Meta = +10'),
+                      _QuickPill(text: 'Doble = otra tirada'),
+                      _QuickPill(text: '3 dobles = penalización'),
+                      _QuickPill(text: 'Meta = número exacto'),
+                    ],
             ),
           ],
         ),

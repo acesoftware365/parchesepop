@@ -128,7 +128,7 @@ void main() {
     expect(tester.takeException(), isNull);
   });
 
-  testWidgets('online setup clearly offers traditional and chaos modes', (
+  testWidgets('local quick table clearly offers traditional and chaos modes', (
     tester,
   ) async {
     SharedPreferences.setMockInitialValues({
@@ -143,7 +143,7 @@ void main() {
 
     await tester.pumpWidget(const ParchesePopApp());
     await tester.pumpAndSettle();
-    await tester.tap(find.text('PARTIDA ONLINE'));
+    await tester.tap(find.text('MESA RÁPIDA'));
     await tester.pump();
     await tester.pump(const Duration(milliseconds: 450));
 
@@ -181,7 +181,7 @@ void main() {
 
     await tester.pumpWidget(const ParchesePopApp());
     await tester.pumpAndSettle();
-    await tester.tap(find.text('PARTIDA ONLINE'));
+    await tester.tap(find.text('MESA RÁPIDA'));
     await tester.pump();
     await tester.pump(const Duration(milliseconds: 450));
 
@@ -207,7 +207,7 @@ void main() {
 
         await tester.pumpWidget(const ParchesePopApp());
         await tester.pumpAndSettle();
-        await tester.tap(find.text('PARTIDA ONLINE'));
+        await tester.tap(find.text('MESA RÁPIDA'));
         await tester.pump();
         await tester.pump(const Duration(milliseconds: 450));
         await tester.tap(
@@ -434,7 +434,7 @@ void main() {
     wallet.dispose();
   });
 
-  testWidgets('online fallback keeps complete profiles inside the match', (
+  testWidgets('local CPU fallback keeps complete profiles inside the match', (
     tester,
   ) async {
     useViewport(tester, const Size(844, 390));
@@ -490,14 +490,15 @@ void main() {
         findsOneWidget,
       );
     }
-    expect(find.textContaining('Rival'), findsNWidgets(3));
+    expect(find.textContaining('CPU'), findsNWidgets(3));
+    expect(find.textContaining('Rival online'), findsNothing);
     expect(
       find.textContaining(RegExp('virtual', caseSensitive: false)),
       findsNothing,
     );
 
     final board = tester.widget<GameBoardMockup>(find.byType(GameBoardMockup));
-    expect(board.playerLabels[PlayerColor.green], isNot(startsWith('CPU')));
+    expect(board.playerLabels[PlayerColor.green], startsWith('CPU · '));
     expect(board.robotTokenColors, {
       for (final participant in session.participants)
         if (participant.loadout.tokensId == 'tokens_robot') participant.color,
@@ -545,14 +546,14 @@ void main() {
         (widget) =>
             widget is Text &&
             (widget.data?.startsWith('Nivel ') ?? false) &&
-            (widget.data?.endsWith(' · Rival online') ?? false),
+            (widget.data?.endsWith(' · CPU') ?? false),
       ),
       findsNWidgets(3),
     );
     expect(tester.takeException(), isNull);
   });
 
-  testWidgets('matchmaking uses neutral labels and passes fallback profiles', (
+  testWidgets('matchmaking labels local fallback profiles as CPU', (
     tester,
   ) async {
     SharedPreferences.setMockInitialValues({});
@@ -580,7 +581,14 @@ void main() {
       findsNothing,
     );
     expect(find.byKey(const ValueKey('matchmaking-seats')), findsOneWidget);
-    expect(find.text('Buscando jugadores online · 6s'), findsOneWidget);
+    expect(find.text('Preparando partida local'), findsOneWidget);
+    expect(
+      find.text(
+        'Esta versión prepara la partida en tu dispositivo y completa los demás '
+        'asientos con CPU.',
+      ),
+      findsOneWidget,
+    );
     final localName = find.text('JugadorCompleto 🇩🇴');
     expect(localName, findsOneWidget);
     expect(
@@ -588,33 +596,30 @@ void main() {
       findsOneWidget,
     );
     expect(find.text('Preparando…'), findsNWidgets(3));
+    expect(find.text('CPU'), findsNothing);
     expect(find.text('RIVAL ONLINE'), findsNothing);
 
-    for (var second = 0; second < 6; second++) {
-      await tester.pump(const Duration(seconds: 1));
-    }
-    expect(find.byType(MatchmakingScreen), findsOneWidget);
-    expect(find.text('Buscando jugadores online · 0s'), findsOneWidget);
+    await tester.pump(const Duration(milliseconds: 250));
+    expect(find.text('Añadiendo CPU · 1/3'), findsOneWidget);
+    expect(find.text('CPU'), findsOneWidget);
     expect(find.text('RIVAL ONLINE'), findsNothing);
 
-    await tester.pump(const Duration(seconds: 1));
-    expect(find.text('Completando la mesa · 1/3'), findsOneWidget);
-    expect(find.text('RIVAL ONLINE'), findsOneWidget);
+    await tester.pump(const Duration(milliseconds: 250));
+    expect(find.text('Añadiendo CPU · 2/3'), findsOneWidget);
+    expect(find.text('CPU'), findsNWidgets(2));
+    expect(find.text('RIVAL ONLINE'), findsNothing);
 
-    await tester.pump(const Duration(seconds: 1));
-    expect(find.text('Completando la mesa · 2/3'), findsOneWidget);
-    expect(find.text('RIVAL ONLINE'), findsNWidgets(2));
-
-    await tester.pump(const Duration(seconds: 1));
-    expect(find.text('Completando la mesa · 3/3'), findsOneWidget);
-    expect(find.text('RIVAL ONLINE'), findsNWidgets(3));
+    await tester.pump(const Duration(milliseconds: 250));
+    expect(find.text('Añadiendo CPU · 3/3'), findsOneWidget);
+    expect(find.text('CPU'), findsNWidgets(3));
+    expect(find.text('RIVAL ONLINE'), findsNothing);
     expect(
       find.textContaining(RegExp('virtual', caseSensitive: false)),
       findsNothing,
     );
     expect(find.byType(MatchmakingScreen), findsOneWidget);
 
-    await tester.pump(const Duration(seconds: 1));
+    await tester.pump(const Duration(milliseconds: 250));
     await tester.pump(const Duration(milliseconds: 400));
 
     final game = tester.widget<GameScreen>(find.byType(GameScreen));
@@ -780,7 +785,7 @@ void main() {
 
     await tester.pumpWidget(const ParchesePopApp());
     await tester.pumpAndSettle();
-    expect(find.text('ONLINE MATCH'), findsOneWidget);
+    expect(find.text('QUICK TABLE'), findsOneWidget);
     expect(find.text('PLAY CPU'), findsOneWidget);
     expect(
       Localizations.localeOf(tester.element(find.byType(HomeScreen))),
@@ -807,7 +812,7 @@ void main() {
     await tester.ensureVisible(find.byKey(const ValueKey('settings-back')));
     await tester.tap(find.byKey(const ValueKey('settings-back')));
     await tester.pumpAndSettle();
-    expect(find.text('PARTIDA ONLINE'), findsOneWidget);
+    expect(find.text('MESA RÁPIDA'), findsOneWidget);
     expect(find.text('CONTRA CPU'), findsOneWidget);
     expect(
       Localizations.localeOf(tester.element(find.byType(HomeScreen))),
@@ -822,7 +827,7 @@ void main() {
 
     await tester.pumpWidget(const ParchesePopApp());
     await tester.pumpAndSettle();
-    expect(find.text('ONLINE MATCH'), findsOneWidget);
+    expect(find.text('QUICK TABLE'), findsOneWidget);
     expect(find.text('PLAY CPU'), findsOneWidget);
 
     await tester.ensureVisible(find.text('Shop'));

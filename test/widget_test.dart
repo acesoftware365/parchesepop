@@ -162,6 +162,39 @@ void main() {
     engine.dispose();
   });
 
+  testWidgets('portrait game toolbar keeps 44 point touch targets', (
+    tester,
+  ) async {
+    final engine = GameEngine();
+    await tester.binding.setSurfaceSize(const Size(390, 844));
+    await tester.pumpWidget(
+      MaterialApp(
+        home: GameScreen(opponent: 'CPU • Fácil', gameEngine: engine),
+      ),
+    );
+    await tester.pump();
+
+    for (final key in const <String>[
+      'game-back-button',
+      'game-history-button',
+      'game-settings-button',
+    ]) {
+      final target = find.byKey(ValueKey(key));
+      expect(target, findsOneWidget);
+      final size = tester.getSize(target);
+      expect(size.width, greaterThanOrEqualTo(44));
+      expect(size.height, greaterThanOrEqualTo(44));
+    }
+    expect(
+      tester.getSize(find.byKey(const ValueKey('game-quick-bar'))).height,
+      greaterThanOrEqualTo(44),
+    );
+
+    await tester.pumpWidget(const SizedBox.shrink());
+    await tester.binding.setSurfaceSize(null);
+    engine.dispose();
+  });
+
   testWidgets('match timer counts play time and pauses when the game ends', (
     tester,
   ) async {

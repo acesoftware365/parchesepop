@@ -19,6 +19,17 @@ const _iosRewardedReleaseId = 'ca-app-pub-8588489900323524/2250538595';
 // build. It is false in every normal debug and release build.
 const _disableAdsForStoreCapture = bool.fromEnvironment('STORE_SCREENSHOTS');
 
+/// Allows an optimized QA build to use Google's official test ad units.
+///
+/// Debug builds always use test units. Release builds use the production units
+/// unless they are compiled with `--dart-define=QA_TEST_ADS=true`.
+const qaTestAdsEnabled = bool.fromEnvironment('QA_TEST_ADS');
+
+bool shouldUseTestAdUnits({
+  required bool debugBuild,
+  required bool qaOverride,
+}) => debugBuild || qaOverride;
+
 bool supportsMobileAds(TargetPlatform platform, {bool isWeb = false}) =>
     !isWeb &&
     (platform == TargetPlatform.android || platform == TargetPlatform.iOS);
@@ -159,17 +170,25 @@ class GoogleMobileAdsController extends AppAdsController {
   }
 
   String get _bannerAdUnitId {
+    final useTestUnits = shouldUseTestAdUnits(
+      debugBuild: kDebugMode,
+      qaOverride: qaTestAdsEnabled,
+    );
     if (platform == TargetPlatform.android) {
-      return kDebugMode ? _androidBannerTestId : _androidBannerReleaseId;
+      return useTestUnits ? _androidBannerTestId : _androidBannerReleaseId;
     }
-    return kDebugMode ? _iosBannerTestId : _iosBannerReleaseId;
+    return useTestUnits ? _iosBannerTestId : _iosBannerReleaseId;
   }
 
   String get _rewardedAdUnitId {
+    final useTestUnits = shouldUseTestAdUnits(
+      debugBuild: kDebugMode,
+      qaOverride: qaTestAdsEnabled,
+    );
     if (platform == TargetPlatform.android) {
-      return kDebugMode ? _androidRewardedTestId : _androidRewardedReleaseId;
+      return useTestUnits ? _androidRewardedTestId : _androidRewardedReleaseId;
     }
-    return kDebugMode ? _iosRewardedTestId : _iosRewardedReleaseId;
+    return useTestUnits ? _iosRewardedTestId : _iosRewardedReleaseId;
   }
 
   @override

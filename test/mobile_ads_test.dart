@@ -246,7 +246,7 @@ void main() {
       expect(dock.bottom, lessThanOrEqualTo(banner.top));
 
       for (final label in const [
-        'PARTIDA ONLINE',
+        'MESA RÁPIDA',
         'CONTRA CPU',
         'Tienda',
         'Mi perfil',
@@ -543,7 +543,7 @@ void main() {
     'double-tapping resume opens one saved match with no ad or banner',
     (tester) async {
       SharedPreferences.setMockInitialValues({
-        'active_match_board_layout_version': 3,
+        'active_match_board_layout_version': 4,
         'active_match_checkpoint':
             '{"savedAt":"2026-08-08T01:00:00Z",'
             '"analyticsMatchRef":"resume_test_match",'

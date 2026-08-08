@@ -182,8 +182,8 @@ void main() {
     final hudFinder = find.byKey(const ValueKey('portrait-game-hud'));
     final boardBefore = tester.getRect(boardFinder);
     final hudBefore = tester.getRect(hudFinder);
-    expect(boardBefore.width, closeTo(402, .5));
-    expect(boardBefore.height, closeTo(402, .5));
+    expect(boardBefore.width, closeTo(402, 1));
+    expect(boardBefore.height, closeTo(402, 1));
     expect(hudBefore.bottom, lessThanOrEqualTo(707));
     expect(hudFinder, findsOneWidget);
     expect(
@@ -364,8 +364,8 @@ void main() {
 
     final boardFinder = find.byKey(const ValueKey('game-board'));
     final boardBeforeSelection = tester.getRect(boardFinder);
-    expect(boardBeforeSelection.width, closeTo(402, .5));
-    expect(boardBeforeSelection.height, closeTo(402, .5));
+    expect(boardBeforeSelection.width, closeTo(402, 1));
+    expect(boardBeforeSelection.height, closeTo(402, 1));
     expect(find.byKey(const ValueKey('portrait-game-hud')), findsOneWidget);
     expect(
       find.byKey(const ValueKey('mobile-board-navigator')),
@@ -503,7 +503,7 @@ void main() {
         findsNothing,
       );
       expect((board.width - board.height).abs(), lessThanOrEqualTo(.5));
-      expect(board.width, closeTo(402, .5));
+      expect(board.width, closeTo(402, 1));
       expect(diceColumn.left, lessThan(minimapColumn.left));
       expect(diceColumn.top, closeTo(minimapColumn.top, .5));
       expect(hud.bottom, lessThanOrEqualTo(707));

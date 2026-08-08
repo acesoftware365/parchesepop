@@ -1,3 +1,5 @@
+import 'dart:convert';
+
 import 'package:flutter/foundation.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
@@ -353,6 +355,8 @@ Iterable<WalletProduct> get shopCatalog =>
 
 enum AddCoinsResult { added, invalidAmount }
 
+enum ApplyCreditResult { applied, alreadyApplied, invalid }
+
 enum PurchaseResult {
   purchased,
   alreadyOwned,
@@ -368,6 +372,10 @@ class WalletController extends ChangeNotifier {
       _balance = initialBalance;
 
   static const _balanceKey = 'parchesepop.wallet.balance.v1';
+  static const _creditEnvelopeKey = 'parchesepop.wallet.credits.v2';
+  static const _creditEnvelopeBackupKey =
+      'parchesepop.wallet.credits.v2.backup';
+  static const _purchaseJournalKey = 'parchesepop.wallet.purchase.v1.pending';
   static const _ownedKey = 'parchesepop.wallet.owned.v1';
   static const _equippedPrefix = 'parchesepop.wallet.equipped.v1.';
 
@@ -377,6 +385,9 @@ class WalletController extends ChangeNotifier {
   bool _initialized = false;
   final Set<String> _ownedProductIds = {};
   final Map<CosmeticCategory, String> _equippedProductIds = {};
+  final Set<String> _appliedCreditIds = {};
+  Future<void> _mutationTail = Future<void>.value();
+  bool _creditLedgerNeedsReconciliation = false;
 
   static Future<WalletController> create({
     SharedPreferences? preferences,
@@ -392,6 +403,7 @@ class WalletController extends ChangeNotifier {
 
   int get balance => _balance;
   bool get isInitialized => _initialized;
+  bool get creditLedgerNeedsReconciliation => _creditLedgerNeedsReconciliation;
   Set<String> get ownedProductIds => Set.unmodifiable(_ownedProductIds);
   Map<CosmeticCategory, String> get equippedProductIds =>
       Map.unmodifiable(_equippedProductIds);
@@ -407,6 +419,22 @@ class WalletController extends ChangeNotifier {
     _balance = savedBalance == null || savedBalance < 0
         ? initialBalance
         : savedBalance;
+    final creditEnvelope = preferences.getString(_creditEnvelopeKey);
+    final backupEnvelope = preferences.getString(_creditEnvelopeBackupKey);
+    final primaryLedger = _tryDecodeCreditEnvelope(creditEnvelope);
+    final backupLedger = _tryDecodeCreditEnvelope(backupEnvelope);
+    final ledger = primaryLedger ?? backupLedger;
+    if (ledger != null) {
+      _balance = ledger.$1;
+      _appliedCreditIds
+        ..clear()
+        ..addAll(ledger.$2);
+    } else {
+      // With only the legacy balance there is no safe way to tell which
+      // historical deterministic credits it already contains. The app adopts
+      // known progression IDs before replaying them, preventing inflation.
+      _creditLedgerNeedsReconciliation = savedBalance != null;
+    }
 
     final validIds = walletCatalog.map((product) => product.id).toSet();
     _ownedProductIds
@@ -421,6 +449,8 @@ class WalletController extends ChangeNotifier {
           validIds.contains,
         ),
       );
+
+    await _recoverPendingPurchase();
 
     _equippedProductIds.clear();
     for (final category in CosmeticCategory.values) {
@@ -444,8 +474,26 @@ class WalletController extends ChangeNotifier {
     }
 
     _initialized = true;
+    if (primaryLedger == null && backupLedger != null) {
+      // Repair a corrupt/partial primary from the last verified backup.
+      await _persistCreditEnvelope();
+    }
     notifyListeners();
   }
+
+  /// Adopts historical transaction IDs without changing the legacy balance.
+  ///
+  /// This is used only when neither the primary nor backup v2 ledger can be
+  /// recovered. New credits are applied normally after reconciliation.
+  Future<void> reconcileKnownCredits(Iterable<String> transactionIds) =>
+      _enqueueMutation<void>(() async {
+        await _ensureInitialized();
+        if (!_creditLedgerNeedsReconciliation) return;
+        _appliedCreditIds.addAll(transactionIds.where(_isSafeCreditId));
+        _creditLedgerNeedsReconciliation = false;
+        await _persistCreditEnvelope();
+        notifyListeners();
+      });
 
   WalletProduct? productById(String? productId) {
     if (productId == null) return null;
@@ -466,59 +514,112 @@ class WalletController extends ChangeNotifier {
   bool isEquipped(String productId) =>
       _equippedProductIds.values.contains(productId);
 
-  Future<AddCoinsResult> addCoins(int amount) async {
-    await _ensureInitialized();
-    if (amount <= 0) return AddCoinsResult.invalidAmount;
+  Future<AddCoinsResult> addCoins(int amount) =>
+      _enqueueMutation<AddCoinsResult>(() async {
+        await _ensureInitialized();
+        if (amount <= 0) return AddCoinsResult.invalidAmount;
 
-    _balance += amount;
-    await _preferences!.setInt(_balanceKey, _balance);
-    notifyListeners();
-    return AddCoinsResult.added;
-  }
+        _balance += amount;
+        await _persistCreditEnvelope();
+        notifyListeners();
+        return AddCoinsResult.added;
+      });
 
-  Future<PurchaseResult> purchase(String productId) async {
-    await _ensureInitialized();
-    final product = productById(productId);
-    if (product == null) return PurchaseResult.productNotFound;
-    if (isOwned(productId)) return PurchaseResult.alreadyOwned;
-    if (_balance < product.price) return PurchaseResult.insufficientFunds;
+  /// Applies a reward exactly once across rebuilds, resumes and app restarts.
+  ///
+  /// Gameplay rewards should use this API with a deterministic transaction ID.
+  /// [addCoins] remains for legacy/admin adjustments that are intentionally not
+  /// deduplicated.
+  Future<ApplyCreditResult> applyCredit({
+    required String transactionId,
+    required int amount,
+  }) => _enqueueMutation<ApplyCreditResult>(() async {
+        await _ensureInitialized();
+        if (amount <= 0 || !_isSafeCreditId(transactionId)) {
+          return ApplyCreditResult.invalid;
+        }
+        if (!_appliedCreditIds.add(transactionId)) {
+          return ApplyCreditResult.alreadyApplied;
+        }
+        _balance += amount;
+        await _persistCreditEnvelope();
+        notifyListeners();
+        return ApplyCreditResult.applied;
+      });
 
-    _balance -= product.price;
-    _ownedProductIds.add(productId);
-    await Future.wait([
-      _preferences!.setInt(_balanceKey, _balance),
-      _preferences!.setStringList(_ownedKey, _ownedProductIds.toList()..sort()),
-    ]);
-    notifyListeners();
-    return PurchaseResult.purchased;
-  }
+  Future<PurchaseResult> purchase(String productId) =>
+      _enqueueMutation<PurchaseResult>(() async {
+        await _ensureInitialized();
+        final product = productById(productId);
+        if (product == null) return PurchaseResult.productNotFound;
+        if (isOwned(productId)) return PurchaseResult.alreadyOwned;
+        if (_balance < product.price) return PurchaseResult.insufficientFunds;
 
-  Future<EquipResult> equip(String productId) async {
-    await _ensureInitialized();
-    final product = productById(productId);
-    if (product == null) return EquipResult.productNotFound;
-    if (!isOwned(productId)) return EquipResult.notOwned;
-    if (isEquipped(productId)) return EquipResult.alreadyEquipped;
+        final balanceBefore = _balance;
+        final balanceAfter = balanceBefore - product.price;
+        final journalSaved = await _preferences!.setString(
+          _purchaseJournalKey,
+          jsonEncode(<String, Object>{
+            'schemaVersion': 1,
+            'productId': product.id,
+            'price': product.price,
+            'balanceBefore': balanceBefore,
+            'balanceAfter': balanceAfter,
+          }),
+        );
+        if (!journalSaved) {
+          throw StateError('Wallet purchase journal was not persisted.');
+        }
 
-    _equippedProductIds[product.category] = productId;
-    await _preferences!.setString(
-      '$_equippedPrefix${product.category.name}',
-      productId,
-    );
-    notifyListeners();
-    return EquipResult.equipped;
-  }
+        _balance = balanceAfter;
+        _ownedProductIds.add(productId);
+        await _persistCreditEnvelope();
+        final ownedSaved = await _preferences!.setStringList(
+          _ownedKey,
+          _ownedProductIds.toList()..sort(),
+        );
+        if (!ownedSaved) {
+          throw StateError('Wallet purchase ownership was not persisted.');
+        }
+        // If this final cleanup fails, startup recovery sees that both sides
+        // already match and safely removes the journal on the next run.
+        await _preferences!.remove(_purchaseJournalKey);
+        notifyListeners();
+        return PurchaseResult.purchased;
+      });
 
-  Future<void> resetLocalData() async {
+  Future<EquipResult> equip(String productId) =>
+      _enqueueMutation<EquipResult>(() async {
+        await _ensureInitialized();
+        final product = productById(productId);
+        if (product == null) return EquipResult.productNotFound;
+        if (!isOwned(productId)) return EquipResult.notOwned;
+        if (isEquipped(productId)) return EquipResult.alreadyEquipped;
+
+        _equippedProductIds[product.category] = productId;
+        await _preferences!.setString(
+          '$_equippedPrefix${product.category.name}',
+          productId,
+        );
+        notifyListeners();
+        return EquipResult.equipped;
+      });
+
+  Future<void> resetLocalData() => _enqueueMutation<void>(() async {
     await _ensureInitialized();
     await Future.wait([
       _preferences!.remove(_balanceKey),
+      _preferences!.remove(_creditEnvelopeKey),
+      _preferences!.remove(_creditEnvelopeBackupKey),
+      _preferences!.remove(_purchaseJournalKey),
       _preferences!.remove(_ownedKey),
       for (final category in CosmeticCategory.values)
         _preferences!.remove('$_equippedPrefix${category.name}'),
     ]);
 
     _balance = initialBalance;
+    _creditLedgerNeedsReconciliation = false;
+    _appliedCreditIds.clear();
     _ownedProductIds
       ..clear()
       ..addAll(
@@ -536,9 +637,107 @@ class WalletController extends ChangeNotifier {
       }
     }
     notifyListeners();
-  }
+  });
 
   Future<void> _ensureInitialized() async {
     if (!_initialized) await initialize();
+  }
+
+  Future<T> _enqueueMutation<T>(Future<T> Function() operation) {
+    final result = _mutationTail.then((_) => operation());
+    _mutationTail = result.then<void>(
+      (_) {},
+      onError: (Object _, StackTrace _) {},
+    );
+    return result;
+  }
+
+  Future<void> _recoverPendingPurchase() async {
+    final raw = _preferences!.getString(_purchaseJournalKey);
+    if (raw == null || raw.isEmpty) return;
+    try {
+      final decoded = jsonDecode(raw);
+      if (decoded is! Map || decoded['schemaVersion'] != 1) {
+        await _preferences!.remove(_purchaseJournalKey);
+        return;
+      }
+      final productId = decoded['productId'];
+      final price = decoded['price'];
+      final balanceBefore = decoded['balanceBefore'];
+      final balanceAfter = decoded['balanceAfter'];
+      final product = productId is String ? productById(productId) : null;
+      if (product == null ||
+          price is! int ||
+          price != product.price ||
+          balanceBefore is! int ||
+          balanceBefore < price ||
+          balanceAfter is! int ||
+          balanceAfter != balanceBefore - price) {
+        await _preferences!.remove(_purchaseJournalKey);
+        return;
+      }
+
+      // A crash can happen after the journal, after the debit, or after the
+      // ownership write. Complete whichever half is missing, then persist both.
+      if (_balance == balanceBefore) {
+        _balance = balanceAfter;
+      } else if (_balance != balanceAfter) {
+        // The journal does not match the durable balance anymore. Do not guess
+        // or alter money; discard malformed/stale recovery data safely.
+        await _preferences!.remove(_purchaseJournalKey);
+        return;
+      }
+      _ownedProductIds.add(product.id);
+      await _persistCreditEnvelope();
+      final ownedSaved = await _preferences!.setStringList(
+        _ownedKey,
+        _ownedProductIds.toList()..sort(),
+      );
+      if (!ownedSaved) {
+        throw StateError('Recovered wallet ownership was not persisted.');
+      }
+      await _preferences!.remove(_purchaseJournalKey);
+    } on FormatException {
+      await _preferences!.remove(_purchaseJournalKey);
+    }
+  }
+
+  Future<void> _persistCreditEnvelope() async {
+    final encoded = jsonEncode(<String, Object>{
+      'schemaVersion': 2,
+      'balance': _balance,
+      'appliedCreditIds': _appliedCreditIds.toList()..sort(),
+    });
+    final saved = await _preferences!.setString(_creditEnvelopeKey, encoded);
+    if (!saved) throw StateError('Wallet credit envelope was not persisted.');
+    final backupSaved = await _preferences!.setString(
+      _creditEnvelopeBackupKey,
+      encoded,
+    );
+    if (!backupSaved) {
+      throw StateError('Wallet credit backup envelope was not persisted.');
+    }
+    // Keep the original key current for older builds and migration tools.
+    await _preferences!.setInt(_balanceKey, _balance);
+  }
+
+  static bool _isSafeCreditId(String value) =>
+      value.isNotEmpty &&
+      value.length <= 160 &&
+      RegExp(r'^[A-Za-z0-9:_\-.]+$').hasMatch(value);
+
+  static (int, Set<String>)? _tryDecodeCreditEnvelope(String? raw) {
+    if (raw == null || raw.isEmpty) return null;
+    try {
+      final decoded = jsonDecode(raw);
+      if (decoded is! Map || decoded['schemaVersion'] != 2) return null;
+      final balance = decoded['balance'];
+      final rawIds = decoded['appliedCreditIds'];
+      if (balance is! int || balance < 0 || rawIds is! List) return null;
+      final ids = rawIds.whereType<String>().where(_isSafeCreditId).toSet();
+      return (balance, ids);
+    } on FormatException {
+      return null;
+    }
   }
 }

@@ -58,7 +58,7 @@ Future<void> _pumpUntilHome(WidgetTester tester) async {
   expect(
     homeMarker,
     findsOneWidget,
-    reason: 'The completed match should return to the home route promptly.',
+    reason: 'The explicit home action should return to the home route.',
   );
   expect(find.byType(GameScreen), findsNothing);
 }
@@ -104,42 +104,44 @@ void main() {
     },
   );
 
-  testWidgets(
-    'complete standings stay visible for five seconds then return home',
-    (tester) async {
-      final engine = _completedMatch();
-      addTearDown(engine.dispose);
-      addTearDown(() => tester.binding.setSurfaceSize(null));
+  testWidgets('complete standings stay visible until the player chooses home', (
+    tester,
+  ) async {
+    final engine = _completedMatch();
+    addTearDown(engine.dispose);
+    addTearDown(() => tester.binding.setSurfaceSize(null));
 
-      await tester.binding.setSurfaceSize(const Size(390, 844));
-      await tester.pumpWidget(
-        MaterialApp(
-          home: GameScreen(opponent: 'Online', gameEngine: engine),
-          routes: {
-            '/home': (_) => const Scaffold(
-              body: SizedBox(key: ValueKey('home-route-marker')),
-            ),
-          },
-        ),
-      );
-      await tester.pump(const Duration(milliseconds: 1800));
+    await tester.binding.setSurfaceSize(const Size(390, 844));
+    await tester.pumpWidget(
+      MaterialApp(
+        home: GameScreen(opponent: 'Online', gameEngine: engine),
+        routes: {
+          '/home': (_) => const Scaffold(
+            body: SizedBox(key: ValueKey('home-route-marker')),
+          ),
+        },
+      ),
+    );
+    await tester.pump(const Duration(milliseconds: 1800));
 
-      expect(find.byKey(const ValueKey('final-ranking')), findsOneWidget);
-      expect(find.byKey(const ValueKey('home-route-marker')), findsNothing);
+    expect(find.byKey(const ValueKey('final-ranking')), findsOneWidget);
+    expect(find.byKey(const ValueKey('home-route-marker')), findsNothing);
 
-      await tester.pump(const Duration(milliseconds: 4900));
-      expect(find.byKey(const ValueKey('final-ranking')), findsOneWidget);
-      expect(find.byKey(const ValueKey('home-route-marker')), findsNothing);
+    await tester.pump(const Duration(seconds: 6));
+    expect(find.byKey(const ValueKey('final-ranking')), findsOneWidget);
+    expect(find.byKey(const ValueKey('home-route-marker')), findsNothing);
 
-      await tester.pump(const Duration(milliseconds: 101));
-      // The game backdrop is intentionally animated forever, so waiting for
-      // every frame to settle would time out even after navigation succeeds.
-      await _pumpUntilHome(tester);
+    final homeButton = find.byKey(const ValueKey('victory-home'));
+    expect(homeButton.hitTestable(), findsOneWidget);
+    await tester.tap(homeButton);
+    await tester.pump();
+    // The game backdrop is intentionally animated forever, so waiting for
+    // every frame to settle would time out even after navigation succeeds.
+    await _pumpUntilHome(tester);
 
-      expect(find.byKey(const ValueKey('home-route-marker')), findsOneWidget);
-      expect(find.byType(GameScreen), findsNothing);
-    },
-  );
+    expect(find.byKey(const ValueKey('home-route-marker')), findsOneWidget);
+    expect(find.byType(GameScreen), findsNothing);
+  });
 
   testWidgets('spectator mode offers an explicit exit to the home route', (
     tester,

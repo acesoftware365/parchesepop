@@ -5,6 +5,7 @@ import 'dart:math' as math;
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/semantics.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_localizations/flutter_localizations.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:url_launcher/url_launcher.dart';
@@ -13,15 +14,22 @@ import 'package:wakelock_plus/wakelock_plus.dart';
 import 'app_language.dart';
 import 'app_availability.dart';
 import 'cosmetic_visuals.dart';
+import 'feature_rollout.dart';
 import 'game_analytics.dart';
 import 'game_audio.dart';
 import 'game_engine.dart';
+import 'game_feedback.dart';
 import 'game_guide.dart';
+import 'game_interaction_state.dart';
 import 'mobile_ads.dart';
 import 'online_match.dart';
 import 'orientation_policy.dart';
 import 'player_auth.dart';
+import 'player_progression.dart';
+import 'progress_hub.dart';
 import 'safe_chat.dart';
+import 'tutorial_controller.dart';
+import 'tutorial_scenario.dart';
 import 'wallet.dart';
 
 Future<void> main() async {
@@ -50,12 +58,33 @@ class PopColors {
   static const cloud = Color(0xFFF4F7FC);
 }
 
+class _PlatformGameFeedbackOutput implements GameFeedbackOutput {
+  const _PlatformGameFeedbackOutput();
+
+  @override
+  Future<void> playSound(GameEventType eventType) =>
+      gameAudio.playEvent(eventType);
+
+  @override
+  Future<void> playHaptic(GameHapticCue cue) => switch (cue) {
+    GameHapticCue.light => HapticFeedback.selectionClick(),
+    GameHapticCue.calm => HapticFeedback.lightImpact(),
+    GameHapticCue.strong => HapticFeedback.heavyImpact(),
+    GameHapticCue.success => HapticFeedback.mediumImpact(),
+    GameHapticCue.celebration => HapticFeedback.vibrate(),
+  };
+}
+
 /// Version of the logical board topology stored in active-match checkpoints.
 /// Increment this whenever saved progress or loop indices change meaning.
-const int activeMatchBoardLayoutVersion = 3;
+const int activeMatchBoardLayoutVersion = 4;
 
 const String settingsRollGuideKey = 'settings_roll_guide';
 const String settingsDiceHandKey = 'settings_dice_hand';
+const AppFeatureRollout appFeatureRollout = AppFeatureRollout.safeDefaults;
+// Retained only in debug/test builds for the existing ad diagnostics. Release
+// builds use the single post-match "double reward" offer.
+const bool shopRewardedCoinsEnabled = !kReleaseMode;
 
 String _newAnalyticsReference(String prefix) {
   final timestamp = DateTime.now().microsecondsSinceEpoch.toRadixString(36);
@@ -251,11 +280,23 @@ String _participantRoleLabel(
   OnlineParticipant participant, {
   bool uppercase = false,
 }) {
-  final label = participant.kind == ParticipantKind.local
-      ? 'Tú'
-      : 'Rival online';
+  final label = switch (participant.kind) {
+    ParticipantKind.local => 'Tú',
+    ParticipantKind.remoteHuman => 'Rival online',
+    ParticipantKind.virtual => 'CPU',
+    ParticipantKind.humanTakenOver => 'CPU temporal',
+  };
   return uppercase ? label.toUpperCase() : label;
 }
+
+bool _sessionHasRemoteHuman(OnlineMatchSession? session) =>
+    session?.participants.any(
+      (participant) => participant.kind == ParticipantKind.remoteHuman,
+    ) ??
+    false;
+
+MatchPlayType _playTypeForSession(OnlineMatchSession? session) =>
+    _sessionHasRemoteHuman(session) ? MatchPlayType.online : MatchPlayType.cpu;
 
 String _cosmeticGlyph(String productId) {
   if (productId.startsWith('theme_')) return '🎨';
@@ -742,9 +783,11 @@ class ParchesePopApp extends StatefulWidget {
 class _ParchesePopAppState extends State<ParchesePopApp>
     with WidgetsBindingObserver {
   final WalletController wallet = WalletController();
+  final PlayerProgressionController progression = PlayerProgressionController();
   final AppLanguageController language = AppLanguageController();
   late final AppAdsController adsController;
   LocalPlayerAuthGateway? authGateway;
+  TutorialController? tutorial;
   PlayerProfile? profile;
   GameEngine? interruptedMatch;
   OnlineMatchSession? interruptedOnlineSession;
@@ -775,7 +818,32 @@ class _ParchesePopAppState extends State<ParchesePopApp>
   Future<void> _loadProfile() async {
     final store = await SharedPreferences.getInstance();
     final localAuth = await LocalPlayerAuthGateway.create();
-    await Future.wait([wallet.initialize(), language.initialize()]);
+    await Future.wait([
+      wallet.initialize(),
+      progression.initialize(),
+      language.initialize(),
+    ]);
+    // Progression and wallet persist independently. Replaying deterministic
+    // credits repairs the narrow crash window between awarding a mission and
+    // storing its wallet balance; WalletController rejects every duplicate.
+    if (wallet.creditLedgerNeedsReconciliation) {
+      await wallet.reconcileKnownCredits(
+        progression.transactions.map((transaction) => transaction.id),
+      );
+    }
+    for (final transaction in progression.transactions) {
+      await wallet.applyCredit(
+        transactionId: transaction.id,
+        amount: transaction.amount,
+      );
+    }
+    tutorial = await TutorialController.create(
+      analytics: widget.analytics,
+      preferences: store,
+      correlation: AnalyticsCorrelation(
+        anonymousSessionId: _newAnalyticsReference('tutorial_session'),
+      ),
+    );
     authGateway = localAuth;
     final name = store.getString('profile_name');
     if (name != null && mounted) {
@@ -826,6 +894,8 @@ class _ParchesePopAppState extends State<ParchesePopApp>
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
     wallet.dispose();
+    progression.dispose();
+    tutorial?.dispose();
     language.dispose();
     adsController.dispose();
     authGateway?.dispose();
@@ -839,6 +909,22 @@ class _ParchesePopAppState extends State<ParchesePopApp>
     await store.setString('profile_email', value.email);
     await store.setString('profile_flag', value.flag);
     await store.setInt('profile_level', value.level);
+  }
+
+  Future<void> _discardDeletedLocalData() async {
+    interruptedMatch?.dispose();
+    if (!mounted) return;
+    setState(() {
+      profile = null;
+      interruptedMatch = null;
+      interruptedOnlineSession = null;
+      interruptedAnalyticsMatchRef = null;
+      interruptedMatchSavedAt = null;
+      interruptedFirstRollAnalyticsLogged = false;
+      interruptedMatchOpponent = null;
+      interruptedMatchElapsed = Duration.zero;
+      restoringSavedMatch = false;
+    });
   }
 
   @override
@@ -920,9 +1006,12 @@ class _ParchesePopAppState extends State<ParchesePopApp>
       profile: profile ?? PlayerProfile.guest,
       onProfileChanged: _saveProfile,
       wallet: wallet,
+      progression: progression,
+      tutorial: tutorial,
       authGateway: authGateway!,
       analytics: widget.analytics,
       onResumeMatch: interruptedMatch == null ? null : _resumeSavedMatch,
+      onLocalDataDeleted: _discardDeletedLocalData,
     );
   }
 
@@ -946,10 +1035,9 @@ class _ParchesePopAppState extends State<ParchesePopApp>
             DateTime.now().difference(interruptedMatchSavedAt!).inSeconds,
           );
     final analyticsMatch = MatchAnalyticsContext(
-      playType: resumedOnlineSession == null
-          ? MatchPlayType.cpu
-          : MatchPlayType.online,
+      playType: _playTypeForSession(resumedOnlineSession),
       mode: resumedEngine.mode,
+      matchFormat: resumedEngine.matchFormat,
       correlation: AnalyticsCorrelation(anonymousMatchId: matchRef),
     );
     try {
@@ -970,6 +1058,10 @@ class _ParchesePopAppState extends State<ParchesePopApp>
             opponent: interruptedMatchOpponent ?? 'Partida guardada',
             gameEngine: resumedEngine,
             wallet: wallet,
+            progression: appFeatureRollout.retentionRewards
+                ? progression
+                : null,
+            tutorial: tutorial,
             localProfile: profile,
             onlineSession: resumedOnlineSession,
             analytics: widget.analytics,
@@ -1556,15 +1648,21 @@ class HomeScreen extends StatefulWidget {
     required this.onProfileChanged,
     required this.wallet,
     required this.authGateway,
+    this.progression,
+    this.tutorial,
     this.analytics = const NoopGameAnalytics(),
     this.onResumeMatch,
+    this.onLocalDataDeleted,
   });
   final PlayerProfile profile;
   final ValueChanged<PlayerProfile> onProfileChanged;
   final WalletController wallet;
+  final PlayerProgressionController? progression;
+  final TutorialController? tutorial;
   final PlayerAuthGateway authGateway;
   final GameAnalytics analytics;
   final void Function(BuildContext context)? onResumeMatch;
+  final Future<void> Function()? onLocalDataDeleted;
 
   @override
   State<HomeScreen> createState() => _HomeScreenState();
@@ -1616,9 +1714,12 @@ class _HomeScreenState extends State<HomeScreen>
             profile: widget.profile,
             onProfileChanged: widget.onProfileChanged,
             wallet: widget.wallet,
+            progression: widget.progression,
+            tutorial: widget.tutorial,
             authGateway: widget.authGateway,
             analytics: widget.analytics,
             onResumeMatch: widget.onResumeMatch,
+            onLocalDataDeleted: widget.onLocalDataDeleted,
           ),
         ),
       ),
@@ -1949,15 +2050,21 @@ class PlayHome extends StatelessWidget {
     required this.onProfileChanged,
     required this.wallet,
     required this.authGateway,
+    this.progression,
+    this.tutorial,
     this.analytics = const NoopGameAnalytics(),
     this.onResumeMatch,
+    this.onLocalDataDeleted,
   });
   final PlayerProfile profile;
   final ValueChanged<PlayerProfile> onProfileChanged;
   final WalletController wallet;
+  final PlayerProgressionController? progression;
+  final TutorialController? tutorial;
   final PlayerAuthGateway authGateway;
   final GameAnalytics analytics;
   final void Function(BuildContext context)? onResumeMatch;
+  final Future<void> Function()? onLocalDataDeleted;
 
   @override
   Widget build(BuildContext context) => LayoutBuilder(
@@ -1989,8 +2096,8 @@ class PlayHome extends StatelessWidget {
                   _ModeCard(
                     color: PopColors.blue,
                     icon: Icons.bolt_rounded,
-                    title: 'PARTIDA ONLINE',
-                    subtitle: 'Juega online con otros jugadores',
+                    title: 'MESA RÁPIDA',
+                    subtitle: 'Partida local con rivales CPU',
                     dense: densePortrait,
                     expanded: horizontalModes && !compactLandscape,
                     onTap: () => _startOnline(context),
@@ -2025,6 +2132,7 @@ class PlayHome extends StatelessWidget {
                               themeId: wallet.equippedProductId(
                                 CosmeticCategory.theme,
                               ),
+                              analytics: analytics,
                             ),
                           ),
                         ),
@@ -2047,23 +2155,44 @@ class PlayHome extends StatelessWidget {
                               ),
                               SizedBox(height: compactLandscape ? 5 : 10),
                             ],
+                            if (appFeatureRollout.contextualTutorial &&
+                                !compactLandscape &&
+                                viewport.maxHeight >= 800 &&
+                                (tutorial?.shouldOffer ?? false)) ...[
+                              _TutorialStarterButton(
+                                compact: compactLandscape,
+                                onTap: () => _startTutorial(context),
+                              ),
+                              SizedBox(height: compactLandscape ? 5 : 10),
+                            ],
                             _HomeSectionTitle(compact: compactLandscape),
                             SizedBox(height: compactLandscape ? 4 : 12),
                             if (horizontalModes)
                               Row(
                                 crossAxisAlignment: CrossAxisAlignment.start,
                                 children: [
-                                  Expanded(child: modeCards.first),
-                                  const SizedBox(width: 16),
-                                  Expanded(child: modeCards.last),
+                                  for (
+                                    var index = 0;
+                                    index < modeCards.length;
+                                    index++
+                                  ) ...[
+                                    if (index > 0) const SizedBox(width: 12),
+                                    Expanded(child: modeCards[index]),
+                                  ],
                                 ],
                               )
                             else
                               Column(
                                 children: [
-                                  modeCards.first,
-                                  SizedBox(height: densePortrait ? 9 : 13),
-                                  modeCards.last,
+                                  for (
+                                    var index = 0;
+                                    index < modeCards.length;
+                                    index++
+                                  ) ...[
+                                    if (index > 0)
+                                      SizedBox(height: densePortrait ? 9 : 13),
+                                    modeCards[index],
+                                  ],
                                 ],
                               ),
                           ],
@@ -2098,16 +2227,44 @@ class PlayHome extends StatelessWidget {
                                     : 'Mi perfil',
                                 onTap: () => _openProfile(context),
                               ),
+                              if (appFeatureRollout.quickPopLocal)
+                                _RoundMenuButton(
+                                  key: const ValueKey('home-quick-pop'),
+                                  color: PopColors.green,
+                                  icon: Icons.speed_rounded,
+                                  label: 'Quick Pop',
+                                  onTap: () => _startQuickPop(context),
+                                ),
+                              if (appFeatureRollout.retentionRewards)
+                                if (progression case final controller?)
+                                  _RoundMenuButton(
+                                    key: const ValueKey('home-progress'),
+                                    color: PopColors.blue,
+                                    icon: Icons.emoji_events_rounded,
+                                    label: 'Misiones',
+                                    onTap: () => Navigator.push(
+                                      context,
+                                      MaterialPageRoute(
+                                        builder: (_) => ProgressHubScreen(
+                                          progression: controller,
+                                          wallet: wallet,
+                                        ),
+                                      ),
+                                    ),
+                                  ),
                               _RoundMenuButton(
                                 key: const ValueKey('home-how-to-play'),
                                 color: const Color(0xFF8A61FF),
                                 icon: Icons.help_rounded,
                                 label: 'Cómo jugar',
-                                onTap: () => Navigator.push(
+                                onTap: () => _openLearning(
                                   context,
-                                  MaterialPageRoute(
-                                    builder: (_) => const GameGuideScreen(),
-                                  ),
+                                  offerTutorial:
+                                      appFeatureRollout.contextualTutorial &&
+                                      narrow &&
+                                      !compactLandscape &&
+                                      viewport.maxHeight < 800 &&
+                                      (tutorial?.shouldOffer ?? false),
                                 ),
                               ),
                               _RoundMenuButton(
@@ -2158,7 +2315,11 @@ class PlayHome extends StatelessWidget {
       builder: (_) => _HomeProfileDialog(
         profile: profile,
         wallet: wallet,
+        progression: progression,
+        tutorial: tutorial,
         authGateway: authGateway,
+        analytics: analytics,
+        onLocalDataDeleted: onLocalDataDeleted,
         onProfileChanged: onProfileChanged,
       ),
     );
@@ -2199,6 +2360,8 @@ class PlayHome extends StatelessWidget {
           profile: profile,
           mode: mode,
           wallet: wallet,
+          progression: appFeatureRollout.retentionRewards ? progression : null,
+          tutorial: tutorial,
           analytics: analytics,
         ),
       ),
@@ -2218,6 +2381,118 @@ class PlayHome extends StatelessWidget {
           opponent: 'CPU • ${setup.level}',
           mode: setup.mode,
           wallet: wallet,
+          progression: appFeatureRollout.retentionRewards ? progression : null,
+          tutorial: tutorial,
+          localProfile: profile,
+          analytics: analytics,
+        ),
+      ),
+    );
+  }
+
+  void _startQuickPop(BuildContext context) {
+    if (!appFeatureRollout.quickPopLocal) return;
+    Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (_) => GameScreen(
+          opponent: 'Quick Pop • CPU Normal',
+          mode: GameMode.traditional,
+          matchFormat: MatchFormat.quickPop,
+          wallet: wallet,
+          progression: appFeatureRollout.retentionRewards ? progression : null,
+          tutorial: tutorial,
+          localProfile: profile,
+          analytics: analytics,
+        ),
+      ),
+    );
+  }
+
+  Future<void> _openLearning(
+    BuildContext context, {
+    required bool offerTutorial,
+  }) async {
+    if (!offerTutorial) {
+      await Navigator.push<void>(
+        context,
+        MaterialPageRoute(builder: (_) => const GameGuideScreen()),
+      );
+      return;
+    }
+
+    final choice = await showModalBottomSheet<bool>(
+      context: context,
+      showDragHandle: true,
+      isScrollControlled: true,
+      builder: (sheetContext) => SafeArea(
+        child: Padding(
+          key: const ValueKey('learning-options-sheet'),
+          padding: const EdgeInsets.fromLTRB(20, 6, 20, 18),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              const PopText(
+                '¿CÓMO QUIERES APRENDER?',
+                textAlign: TextAlign.center,
+                style: TextStyle(
+                  color: PopColors.navy,
+                  fontSize: 20,
+                  fontWeight: FontWeight.w900,
+                ),
+              ),
+              const SizedBox(height: 6),
+              const PopText(
+                'Empieza una partida guiada o consulta todas las reglas.',
+                textAlign: TextAlign.center,
+                style: TextStyle(color: Color(0xFF667085)),
+              ),
+              const SizedBox(height: 16),
+              FilledButton.icon(
+                key: const ValueKey('learning-start-tutorial'),
+                onPressed: () => Navigator.pop(sheetContext, true),
+                icon: const Icon(Icons.school_rounded),
+                label: const PopText('TUTORIAL JUGABLE'),
+              ),
+              const SizedBox(height: 9),
+              OutlinedButton.icon(
+                key: const ValueKey('learning-open-guide'),
+                onPressed: () => Navigator.pop(sheetContext, false),
+                icon: const Icon(Icons.menu_book_rounded),
+                label: const PopText('GUÍA COMPLETA'),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+    if (!context.mounted || choice == null) return;
+    if (choice) {
+      await _startTutorial(context);
+    } else {
+      await Navigator.push<void>(
+        context,
+        MaterialPageRoute(builder: (_) => const GameGuideScreen()),
+      );
+    }
+  }
+
+  Future<void> _startTutorial(BuildContext context) async {
+    if (!appFeatureRollout.contextualTutorial) return;
+    final controller = tutorial;
+    if (controller == null) return;
+    await controller.start();
+    if (!context.mounted) return;
+    await Navigator.push<void>(
+      context,
+      MaterialPageRoute(
+        builder: (_) => GameScreen(
+          opponent: 'Tutorial • CPU Fácil',
+          mode: GameMode.traditional,
+          wallet: wallet,
+          tutorial: controller,
+          guidedTutorial: true,
           localProfile: profile,
           analytics: analytics,
         ),
@@ -2274,7 +2549,7 @@ class _OnlineModeDialog extends StatelessWidget {
                           ),
                         ),
                         PopText(
-                          'Elige las reglas para tu partida rápida',
+                          'Elige las reglas de la mesa local',
                           style: TextStyle(
                             color: Color(0xFF667085),
                             fontWeight: FontWeight.w700,
@@ -2962,17 +3237,93 @@ class _ResumeSavedMatchButton extends StatelessWidget {
                 size: compact ? 20 : 25,
               ),
               SizedBox(width: compact ? 6 : 9),
-              PopText(
-                'CONTINUAR PARTIDA GUARDADA',
-                style: TextStyle(
-                  color: Colors.white,
-                  fontSize: compact ? 10 : 13,
-                  fontWeight: FontWeight.w900,
-                  letterSpacing: .2,
+              Flexible(
+                child: _AutoFitSingleLineText(
+                  'CONTINUAR PARTIDA GUARDADA',
+                  alignment: Alignment.center,
+                  textAlign: TextAlign.center,
+                  style: TextStyle(
+                    color: Colors.white,
+                    fontSize: compact ? 10 : 13,
+                    fontWeight: FontWeight.w900,
+                    letterSpacing: .2,
+                  ),
                 ),
               ),
             ],
           ),
+        ),
+      ),
+    ),
+  );
+}
+
+class _TutorialStarterButton extends StatelessWidget {
+  const _TutorialStarterButton({required this.compact, required this.onTap});
+
+  final bool compact;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) => Material(
+    color: Colors.transparent,
+    child: InkWell(
+      key: const ValueKey('start-contextual-tutorial'),
+      onTap: onTap,
+      borderRadius: BorderRadius.circular(18),
+      child: Ink(
+        height: compact ? 42 : 54,
+        padding: EdgeInsets.symmetric(horizontal: compact ? 12 : 16),
+        decoration: BoxDecoration(
+          gradient: const LinearGradient(
+            colors: [Color(0xFF32B875), Color(0xFF16855B)],
+          ),
+          borderRadius: BorderRadius.circular(18),
+          border: Border.all(color: Colors.white, width: 1.8),
+          boxShadow: const [
+            BoxShadow(
+              color: Color(0x4432B875),
+              blurRadius: 10,
+              offset: Offset(0, 5),
+            ),
+          ],
+        ),
+        child: Row(
+          children: [
+            Icon(
+              Icons.school_rounded,
+              color: Colors.white,
+              size: compact ? 21 : 26,
+            ),
+            const SizedBox(width: 9),
+            const Expanded(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  PopText(
+                    'TUTORIAL JUGABLE',
+                    style: TextStyle(
+                      color: Colors.white,
+                      fontWeight: FontWeight.w900,
+                      fontSize: 12,
+                    ),
+                  ),
+                  PopText(
+                    'Aprende dentro de tu primera partida',
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(
+                      color: Color(0xFFE7FFF4),
+                      fontSize: 10,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            const Icon(Icons.arrow_forward_rounded, color: Colors.white),
+          ],
         ),
       ),
     ),
@@ -3203,6 +3554,9 @@ class _RoundMenuButtonState extends State<_RoundMenuButton> {
         ? PopColors.navy
         : Colors.white;
     if (compact) {
+      final compactWidth = ((MediaQuery.sizeOf(context).width - 54) / 3)
+          .clamp(86.0, 112.0)
+          .toDouble();
       return MouseRegion(
         onEnter: (_) => setState(() => hovered = true),
         onExit: (_) => setState(() => hovered = false),
@@ -3211,7 +3565,7 @@ class _RoundMenuButtonState extends State<_RoundMenuButton> {
           duration: const Duration(milliseconds: 120),
           curve: Curves.easeOut,
           child: SizedBox(
-            width: 126,
+            width: compactWidth,
             height: 48,
             child: Material(
               color: Colors.white.withValues(alpha: .08),
@@ -4170,12 +4524,16 @@ class MatchmakingScreen extends StatefulWidget {
     required this.profile,
     required this.mode,
     this.wallet,
+    this.progression,
+    this.tutorial,
     this.analytics = const NoopGameAnalytics(),
   });
 
   final PlayerProfile profile;
   final GameMode mode;
   final WalletController? wallet;
+  final PlayerProgressionController? progression;
+  final TutorialController? tutorial;
   final GameAnalytics analytics;
 
   @override
@@ -4183,15 +4541,15 @@ class MatchmakingScreen extends StatefulWidget {
 }
 
 class _MatchmakingScreenState extends State<MatchmakingScreen> {
-  static const playerSearchSeconds = 6;
-  static const firstVirtualJoinSecond = playerSearchSeconds + 1;
+  static const _setupTick = Duration(milliseconds: 250);
+  static const firstVirtualJoinStep = 1;
   static const virtualSeatColors = [
     PlayerColor.green,
     PlayerColor.yellow,
     PlayerColor.blue,
   ];
 
-  int elapsedSeconds = 0;
+  int setupStep = 0;
   Timer? timer;
   late final int seed;
   late final OnlineParticipant localPlayer;
@@ -4219,7 +4577,7 @@ class _MatchmakingScreenState extends State<MatchmakingScreen> {
         tokensId: widget.wallet?.equippedProductId(CosmeticCategory.tokens),
       ),
     );
-    timer = Timer.periodic(const Duration(seconds: 1), (_) => _advanceSearch());
+    timer = Timer.periodic(_setupTick, (_) => _advanceSearch());
   }
 
   void _prepareVirtualFallback() {
@@ -4237,32 +4595,31 @@ class _MatchmakingScreenState extends State<MatchmakingScreen> {
 
   void _advanceSearch() {
     if (!mounted || openingGame) return;
-    final nextSecond = elapsedSeconds + 1;
-    if (nextSecond == firstVirtualJoinSecond) {
+    final nextStep = setupStep + 1;
+    if (nextStep == firstVirtualJoinStep) {
       _prepareVirtualFallback();
     }
-    final gameStartSecond = firstVirtualJoinSecond + virtualSeatColors.length;
-    if (nextSecond >= gameStartSecond) {
-      elapsedSeconds = nextSecond;
+    final gameStartStep = firstVirtualJoinStep + virtualSeatColors.length;
+    if (nextStep >= gameStartStep) {
+      setupStep = nextStep;
       _openGame();
       return;
     }
-    setState(() => elapsedSeconds = nextSecond);
+    setState(() => setupStep = nextStep);
   }
 
   int get revealedOpponents {
-    final joined = elapsedSeconds - firstVirtualJoinSecond + 1;
+    final joined = setupStep - firstVirtualJoinStep + 1;
     if (joined <= 0) return 0;
     if (joined >= opponents.length) return opponents.length;
     return joined;
   }
 
   String get searchStatus {
-    if (elapsedSeconds < firstVirtualJoinSecond) {
-      final remaining = playerSearchSeconds - elapsedSeconds;
-      return 'Buscando jugadores online · ${remaining}s';
+    if (setupStep < firstVirtualJoinStep) {
+      return 'Preparando partida local';
     }
-    return 'Completando la mesa · '
+    return 'Añadiendo CPU · '
         '$revealedOpponents/${virtualSeatColors.length}';
   }
 
@@ -4281,9 +4638,14 @@ class _MatchmakingScreenState extends State<MatchmakingScreen> {
               '${firstOpponent.displayName} ${firstOpponent.flag} • Normal',
           mode: readySession.mode,
           wallet: widget.wallet,
+          progression: widget.progression,
+          tutorial: widget.tutorial,
           onlineSession: readySession,
           analytics: widget.analytics,
-          matchmakingWaitSeconds: elapsedSeconds,
+          matchmakingWaitSeconds: math.max(
+            1,
+            (setupStep * _setupTick.inMilliseconds / 1000).ceil(),
+          ),
         ),
       ),
     );
@@ -4409,9 +4771,8 @@ class _MatchmakingScreenState extends State<MatchmakingScreen> {
                           SizedBox(width: 8),
                           Expanded(
                             child: PopText(
-                              'Buscamos jugadores durante 6 segundos. Si faltan '
-                              'asientos, los completamos automáticamente para '
-                              'iniciar la partida.',
+                              'Esta versión prepara la partida en tu dispositivo '
+                              'y completa los demás asientos con CPU.',
                               style: TextStyle(
                                 fontSize: 11,
                                 color: Color(0xFF667085),
@@ -4667,8 +5028,12 @@ class GameScreen extends StatefulWidget {
     super.key,
     required this.opponent,
     this.mode = GameMode.traditional,
+    this.matchFormat = MatchFormat.classic,
     this.gameEngine,
     this.wallet,
+    this.progression,
+    this.tutorial,
+    this.guidedTutorial = false,
     this.localProfile,
     this.onlineSession,
     this.analytics = const NoopGameAnalytics(),
@@ -4684,8 +5049,12 @@ class GameScreen extends StatefulWidget {
   });
   final String opponent;
   final GameMode mode;
+  final MatchFormat matchFormat;
   final GameEngine? gameEngine;
   final WalletController? wallet;
+  final PlayerProgressionController? progression;
+  final TutorialController? tutorial;
+  final bool guidedTutorial;
   final PlayerProfile? localProfile;
   final OnlineMatchSession? onlineSession;
   final GameAnalytics analytics;
@@ -4704,13 +5073,15 @@ class GameScreen extends StatefulWidget {
 }
 
 class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
-  static const finalStandingsDisplayDuration = Duration(seconds: 5);
   static const _firstRollGuideDelay = Duration(milliseconds: 450);
   static const _idleRollGuideDelay = Duration(seconds: 4);
 
   late final GameEngine engine;
   late final bool ownsEngine;
+  late final TutorialGameScenario? tutorialScenario;
   late final MatchAnalyticsContext analyticsMatch;
+  late final String progressionEventRunRef;
+  late final GameFeedbackController feedbackController;
   final math.Random cpuPacingRandom = math.Random();
   bool cpuThinking = false;
   GameToken? selectedToken;
@@ -4731,6 +5102,7 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
   bool endMatchRewardClaimed = false;
   bool postVictoryNavigationInProgress = false;
   bool rewardedPreloadRequested = false;
+  bool tutorialCompletionVisible = false;
   final Object moveSelectionTapGroup = Object();
   SafeChatController? safeChat;
   SafeChatMessage? visibleChatMessage;
@@ -4742,6 +5114,12 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
   bool matchAbandonAnalyticsLogged = false;
   bool rematchOfferAnalyticsLogged = false;
   bool rewardedOfferAnalyticsLogged = false;
+  bool rewardedDecisionAnalyticsLogged = false;
+  int rewardedOfferedCoins = 0;
+  bool matchCompletionRewardSettled = false;
+  bool matchPlacementRewardSettled = false;
+  int matchRewardCoinsAwarded = 0;
+  int matchBasePayout = 0;
   bool localCpuTakeoverActive = false;
   bool rollGuideEnabled = true;
   DiceHandPreference diceHandPreference = DiceHandPreference.right;
@@ -4758,9 +5136,63 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
   bool get _isCpuControlledTurn =>
       !engine.currentPlayer.isHuman || localCpuTakeoverActive;
 
+  bool get _usesGuidedTutorial =>
+      widget.guidedTutorial ||
+      (widget.tutorial != null && widget.opponent.startsWith('Tutorial'));
+
+  TutorialStep? get _guidedTutorialStep =>
+      widget.tutorial?.lifecycle == TutorialLifecycle.inProgress
+      ? widget.tutorial?.currentStep
+      : null;
+
+  bool get _guidedTutorialActive =>
+      tutorialScenario != null && _guidedTutorialStep != null;
+
+  bool get _tutorialAllowsRoll =>
+      !_guidedTutorialActive ||
+      tutorialScenario!.allowsRoll(_guidedTutorialStep);
+
+  List<int>? get _guidedVisibleRemainingDice {
+    if (!_guidedTutorialActive || !engine.hasRolled) return null;
+    final die = tutorialScenario!.expectedDie(_guidedTutorialStep);
+    return die == null ? const <int>[] : <int>[die];
+  }
+
+  bool _tutorialAllowsToken(GameToken token) =>
+      !_guidedTutorialActive ||
+      tutorialScenario!.allowsToken(_guidedTutorialStep, token);
+
+  bool _tutorialAllowsMove(
+    GameToken token,
+    int die, {
+    bool usesAllDice = false,
+  }) =>
+      !_guidedTutorialActive ||
+      tutorialScenario!.allowsMove(
+        _guidedTutorialStep,
+        token,
+        die,
+        usesAllDice: usesAllDice,
+      );
+
+  List<MoveDestinationPreview> _visibleMoveDestinationPreviews(
+    GameToken? token,
+  ) {
+    final previews = _moveDestinationPreviews(engine, token);
+    if (!_guidedTutorialActive) return previews;
+    return previews
+        .where(
+          (preview) => _tutorialAllowsMove(
+            preview.token,
+            preview.value,
+            usesAllDice: preview.usesAllDice,
+          ),
+        )
+        .toList(growable: false);
+  }
+
   GameToken? get _tokenChoiceGuideTarget {
-    if (!rollGuideEnabled ||
-        !rollGuideAppActive ||
+    if (!rollGuideAppActive ||
         !_isLocallyControlledTurn ||
         !engine.hasRolled ||
         engine.gameOver ||
@@ -4769,6 +5201,17 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
         selectedToken != null) {
       return null;
     }
+    if (_guidedTutorialActive) {
+      final target = tutorialScenario!.expectedToken(_guidedTutorialStep);
+      if (target != null &&
+          !target.finished &&
+          (engine.legalDiceFor(target).isNotEmpty ||
+              engine.canMoveUsingAllDice(target))) {
+        return target;
+      }
+      return null;
+    }
+    if (!rollGuideEnabled) return null;
     final legalNestTokens = engine.currentPlayer.tokens
         .where(
           (token) => token.inNest && engine.legalDiceFor(token).contains(5),
@@ -4793,6 +5236,16 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
         engine.gameOver ||
         engine.effectResolving ||
         selectedToken != null) {
+      return null;
+    }
+    if (_guidedTutorialActive) {
+      final target = tutorialScenario!.expectedToken(_guidedTutorialStep);
+      if (target != null &&
+          !target.finished &&
+          (engine.legalDiceFor(target).isNotEmpty ||
+              engine.canMoveUsingAllDice(target))) {
+        return target;
+      }
       return null;
     }
     final legalTokens = engine.currentPlayer.tokens
@@ -4842,32 +5295,59 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
             onlineSession.participantForColor(PlayerColor.yellow).displayName,
             onlineSession.participantForColor(PlayerColor.blue).displayName,
           ];
+    tutorialScenario =
+        _usesGuidedTutorial &&
+            widget.gameEngine == null &&
+            widget.tutorial?.currentStep != null
+        ? TutorialGameScenario.create(
+            step: widget.tutorial!.currentStep!,
+            humanName: widget.localProfile?.name ?? 'Tú',
+          )
+        : null;
     ownsEngine = widget.gameEngine == null;
     engine =
         widget.gameEngine ??
+        tutorialScenario?.engine ??
         GameEngine(
           cpuLevel: level,
           mode: onlineSession?.mode ?? widget.mode,
+          matchFormat: widget.matchFormat,
           humanName:
               onlineSession?.participantForColor(PlayerColor.red).displayName ??
               'Tú',
           cpuNames: onlineCpuNames,
         );
-    final playType = onlineSession == null
-        ? MatchPlayType.cpu
-        : MatchPlayType.online;
+    final playType = _playTypeForSession(onlineSession);
     final matchRef =
         widget.analyticsMatchRef ??
         _newAnalyticsReference(
-          onlineSession == null ? 'cpu_match' : 'online_match',
+          playType == MatchPlayType.cpu ? 'cpu_match' : 'online_match',
         );
     analyticsMatch = MatchAnalyticsContext(
       playType: playType,
       mode: engine.mode,
+      matchFormat: engine.matchFormat,
       correlation: AnalyticsCorrelation(anonymousMatchId: matchRef),
     );
+    // GameEngine starts a fresh local event sequence after checkpoint restore.
+    // A run-scoped prefix keeps mission events unique across every resume.
+    progressionEventRunRef = _newAnalyticsReference('progress');
+    feedbackController = GameFeedbackController(
+      output: const _PlatformGameFeedbackOutput(),
+      safeLandingResolver: (event) {
+        final progress = event.toProgress;
+        if (progress == null ||
+            progress < 0 ||
+            progress >= GameEngine.commonPathLength) {
+          return false;
+        }
+        return GameEngine.safeLoopIndices.contains(
+          engine.loopIndex(event.playerColor, progress),
+        );
+      },
+    );
     firstRollAnalyticsLogged = widget.analyticsFirstRollLogged;
-    if (widget.isResumedMatch) {
+    if (!_usesGuidedTutorial && widget.isResumedMatch) {
       unawaited(
         widget.analytics.logEvent(
           MatchResumeEvent(
@@ -4877,48 +5357,56 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
           ),
         ),
       );
-    } else {
+    } else if (!_usesGuidedTutorial) {
       unawaited(
         widget.analytics.logMatchStarted(
           MatchStartEvent(
             playType: playType,
             mode: engine.mode,
+            matchFormat: engine.matchFormat,
             launchSource: widget.isRematch
                 ? MatchLaunchSource.rematch
                 : MatchLaunchSource.home,
-            cpuDifficulty: onlineSession == null
+            cpuDifficulty: playType == MatchPlayType.cpu
                 ? switch (level) {
                     'Fácil' => CpuDifficulty.easy,
                     'Experto' => CpuDifficulty.expert,
                     _ => CpuDifficulty.normal,
                   }
                 : null,
-            matchmakingWaitSeconds: onlineSession == null
-                ? null
-                : widget.matchmakingWaitSeconds,
-            fallbackOpponentCount: onlineSession?.participants
-                .where(
-                  (participant) => participant.kind == ParticipantKind.virtual,
-                )
-                .length,
-            liveHumanOpponentCount: onlineSession?.participants
-                .where(
-                  (participant) =>
-                      participant.kind == ParticipantKind.remoteHuman,
-                )
-                .length,
-            takenOverOpponentCount: onlineSession?.participants
-                .where(
-                  (participant) =>
-                      participant.kind == ParticipantKind.humanTakenOver,
-                )
-                .length,
+            matchmakingWaitSeconds: playType == MatchPlayType.online
+                ? widget.matchmakingWaitSeconds
+                : null,
+            fallbackOpponentCount: playType == MatchPlayType.online
+                ? onlineSession?.participants
+                      .where(
+                        (participant) =>
+                            participant.kind == ParticipantKind.virtual,
+                      )
+                      .length
+                : null,
+            liveHumanOpponentCount: playType == MatchPlayType.online
+                ? onlineSession?.participants
+                      .where(
+                        (participant) =>
+                            participant.kind == ParticipantKind.remoteHuman,
+                      )
+                      .length
+                : null,
+            takenOverOpponentCount: playType == MatchPlayType.online
+                ? onlineSession?.participants
+                      .where(
+                        (participant) =>
+                            participant.kind == ParticipantKind.humanTakenOver,
+                      )
+                      .length
+                : null,
             correlation: analyticsMatch.correlation,
           ),
         ),
       );
     }
-    if (widget.isRematch) {
+    if (!_usesGuidedTutorial && widget.isRematch) {
       unawaited(
         widget.analytics.logEvent(
           RematchEvent(match: analyticsMatch, stage: RematchStage.started),
@@ -4942,7 +5430,13 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
       _queueVictoryCelebration();
     }
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (mounted) unawaited(_saveMatchCheckpoint());
+      if (!mounted) return;
+      unawaited(_saveMatchCheckpoint());
+      // A restored checkpoint can open directly on a CPU turn without a fresh
+      // engine notification. Kick the existing CPU driver once after mount.
+      if (widget.isResumedMatch && !engine.gameOver && _isCpuControlledTurn) {
+        _onGameChanged();
+      }
     });
     unawaited(_loadRollGuidePreferences(rearm: true));
   }
@@ -4992,15 +5486,20 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
         state == AppLifecycleState.paused ||
         state == AppLifecycleState.detached;
     if (isLeaving) {
-      if (state == AppLifecycleState.detached && !engine.gameOver) {
-        _logMatchAbandoned(MatchAbandonReason.appClosed);
+      if (state == AppLifecycleState.detached) {
+        if (engine.gameOver) {
+          _logMatchCompleted(placement: engine.placementFor(PlayerColor.red));
+          _logRewardedDeclinedIfIgnored();
+        } else {
+          _logMatchAbandoned(MatchAbandonReason.appClosed);
+        }
       }
       rollGuideAppActive = false;
       _cancelRollGuide(resetWindow: true, notify: false);
       mobileBoardCameraMode = _MobileBoardCameraMode.fullBoard;
       unawaited(_saveMatchCheckpoint());
       unawaited(gameAudio.pauseForBackground());
-      if (widget.onlineSession != null && !engine.gameOver) {
+      if (_sessionHasRemoteHuman(widget.onlineSession) && !engine.gameOver) {
         localCpuTakeoverActive = true;
         _onGameChanged();
       }
@@ -5020,6 +5519,7 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
   bool get _canOfferRollGuide =>
       rollGuideEnabled &&
       rollGuideAppActive &&
+      _tutorialAllowsRoll &&
       _isLocallyControlledTurn &&
       !engine.hasRolled &&
       !engine.gameOver &&
@@ -5031,6 +5531,9 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
     final hand = diceHandPreferenceFromStorage(
       store.getString(settingsDiceHandKey),
     );
+    feedbackController
+      ..soundEnabled = store.getBool('settings_sound') ?? true
+      ..hapticsEnabled = store.getBool('settings_vibration') ?? true;
     if (!mounted) return;
 
     rollGuideDelayTimer?.cancel();
@@ -5080,7 +5583,8 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
   }
 
   void _rollDiceFromHud() {
-    if (!_isLocallyControlledTurn ||
+    if (!_tutorialAllowsRoll ||
+        !_isLocallyControlledTurn ||
         engine.hasRolled ||
         engine.gameOver ||
         engine.effectResolving) {
@@ -5091,6 +5595,20 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
       completedGuidedRolls = math.min(completedGuidedRolls + 1, 2);
     }
     engine.roll();
+    if (engine.matchFormat == MatchFormat.quickPop) {
+      final command = engine.uniqueLegalMoveCommand;
+      if (command != null) {
+        final reduceMotion =
+            MediaQuery.maybeOf(context)?.disableAnimations ?? false;
+        Future<void>.delayed(
+          Duration(milliseconds: reduceMotion ? 80 : 620),
+          () {
+            if (!mounted || engine.gameOver || engine.effectResolving) return;
+            engine.executeMoveCommand(command);
+          },
+        );
+      }
+    }
   }
 
   Future<void> _openGameSettings() async {
@@ -5098,7 +5616,10 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
     await Navigator.push<void>(
       context,
       MaterialPageRoute(
-        builder: (_) => const SettingsScreen(themeId: 'theme_default'),
+        builder: (_) => SettingsScreen(
+          themeId: 'theme_default',
+          analytics: widget.analytics,
+        ),
       ),
     );
     if (!mounted) return;
@@ -5106,6 +5627,9 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
   }
 
   Future<void> _saveMatchCheckpoint() async {
+    // Tutorial progress is enough to reconstruct this short lesson. Never let
+    // it overwrite the player's real resumable match.
+    if (_usesGuidedTutorial) return;
     final store = await SharedPreferences.getInstance();
     if (engine.gameOver) {
       await store.remove('active_match_checkpoint');
@@ -5118,6 +5642,7 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
     await store.setString(
       'active_match_checkpoint',
       jsonEncode({
+        ...engine.checkpointRuleMetadata,
         'savedAt': DateTime.now().toIso8601String(),
         'analyticsMatchRef': analyticsMatch.correlation.anonymousMatchId,
         'analyticsFirstRollLogged': firstRollAnalyticsLogged,
@@ -5190,7 +5715,9 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
       if (event.sequence <= lastAnalyticsEventSequence) continue;
       lastAnalyticsEventSequence = event.sequence;
 
-      if (!firstRollAnalyticsLogged && event.type == GameEventType.roll) {
+      if (!_usesGuidedTutorial &&
+          !firstRollAnalyticsLogged &&
+          event.type == GameEventType.roll) {
         firstRollAnalyticsLogged = true;
         unawaited(
           widget.analytics.logEvent(
@@ -5203,33 +5730,280 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
         );
       }
 
-      if (!matchCompletionAnalyticsLogged &&
-          event.type == GameEventType.victory) {
-        matchCompletionAnalyticsLogged = true;
-        unawaited(
-          widget.analytics.logEvent(
-            MatchCompletedEvent(
-              match: analyticsMatch,
-              reason: MatchCompletionReason.reachedHome,
-              placement: engine.placementFor(PlayerColor.red),
-              durationSeconds: matchElapsed.inSeconds,
-              turnsPlayed: math.max(0, engine.turnNumber),
-            ),
-          ),
-        );
+      unawaited(_trackTutorialEvent(event));
+      unawaited(_trackProgressionEvent(event));
+
+      final localPlacement = engine.placementFor(PlayerColor.red);
+      if (localPlacement != null) {
+        _logMatchCompleted(placement: localPlacement);
       }
     }
+  }
+
+  void _logMatchCompleted({int? placement}) {
+    if (_usesGuidedTutorial ||
+        matchCompletionAnalyticsLogged ||
+        matchAbandonAnalyticsLogged) {
+      return;
+    }
+    matchCompletionAnalyticsLogged = true;
+    unawaited(
+      widget.analytics.logEvent(
+        MatchCompletedEvent(
+          match: analyticsMatch,
+          reason: MatchCompletionReason.reachedHome,
+          placement: placement,
+          durationSeconds: matchElapsed.inSeconds,
+          turnsPlayed: math.max(0, engine.turnNumber),
+        ),
+      ),
+    );
+  }
+
+  Future<void> _trackTutorialEvent(GameEvent event) async {
+    final controller = widget.tutorial;
+    if (!_usesGuidedTutorial ||
+        controller == null ||
+        controller.lifecycle != TutorialLifecycle.inProgress ||
+        event.playerColor != PlayerColor.red) {
+      return;
+    }
+    final previousStep = controller.currentStep;
+    switch (controller.currentStep) {
+      case TutorialStep.firstRoll when event.type == GameEventType.roll:
+        await controller.completeStep(TutorialStep.firstRoll);
+      case TutorialStep.releaseToken when event.type == GameEventType.departure:
+        await controller.completeStep(TutorialStep.releaseToken);
+      case TutorialStep.chooseMove when event.type == GameEventType.move:
+        await controller.completeStep(TutorialStep.chooseMove);
+      case TutorialStep.safeSquare when event.type == GameEventType.move:
+        final progress = event.toProgress;
+        if (progress != null &&
+            progress >= 0 &&
+            progress < GameEngine.commonPathLength &&
+            GameEngine.safeLoopIndices.contains(
+              engine.loopIndex(event.playerColor, progress),
+            )) {
+          await controller.completeStep(TutorialStep.safeSquare);
+        }
+      case TutorialStep.capture when event.type == GameEventType.capture:
+        await controller.completeStep(TutorialStep.capture);
+      case TutorialStep.reachHome when event.type == GameEventType.goal:
+        await controller.completeStep(TutorialStep.reachHome);
+      default:
+        break;
+    }
+    if (controller.currentStep != previousStep) {
+      tutorialScenario?.prepareFor(controller.currentStep);
+    }
+    if (!mounted) return;
+    setState(() {
+      tutorialCompletionVisible =
+          _usesGuidedTutorial &&
+          controller.lifecycle == TutorialLifecycle.completed;
+    });
+  }
+
+  Future<void> _trackProgressionEvent(GameEvent event) async {
+    if (_usesGuidedTutorial) return;
+    final controller = widget.progression;
+    if (controller == null || event.playerColor != PlayerColor.red) return;
+    final eventId = '${progressionEventRunRef}_${event.sequence}';
+    final transactions = <ProgressionTransaction>[];
+    final releasedQuickPopToken =
+        engine.matchFormat == MatchFormat.quickPop &&
+        event.type == GameEventType.move &&
+        event.fromProgress == 0;
+    if (event.type == GameEventType.departure || releasedQuickPopToken) {
+      final update = await controller.recordTokenReleased(
+        eventId: '${eventId}_release',
+      );
+      transactions.addAll(update.transactions);
+    }
+    if (event.type == GameEventType.move) {
+      final from = event.fromProgress;
+      final to = event.toProgress;
+      if (from != null && to != null && to > from) {
+        final update = await controller.recordCellsMoved(
+          eventId: '${eventId}_move',
+          cells: to - from,
+        );
+        transactions.addAll(update.transactions);
+      }
+    }
+    await _creditProgression(transactions);
+  }
+
+  Future<void> _creditProgression(
+    Iterable<ProgressionTransaction> transactions,
+  ) async {
+    final wallet = widget.wallet;
+    if (wallet == null) return;
+    for (final transaction in transactions) {
+      final balanceBefore = wallet.balance;
+      final result = await wallet.applyCredit(
+        transactionId: transaction.id,
+        amount: transaction.amount,
+      );
+      if (result != ApplyCreditResult.applied) continue;
+      final source = switch (transaction.source) {
+        ProgressionTransactionSource.matchCompletion =>
+          CurrencySource.matchCompletion,
+        ProgressionTransactionSource.placement => CurrencySource.placement,
+        ProgressionTransactionSource.firstMatchOfDay =>
+          CurrencySource.firstMatchOfDay,
+        ProgressionTransactionSource.dailyMoveMission ||
+        ProgressionTransactionSource.dailyReleaseMission ||
+        ProgressionTransactionSource.weeklyMatchesMission =>
+          CurrencySource.mission,
+        ProgressionTransactionSource.rewardedDouble =>
+          CurrencySource.rewardedAd,
+      };
+      unawaited(
+        widget.analytics.logEvent(
+          CurrencyEvent(
+            flow: CurrencyFlow.earned,
+            source: source,
+            amount: transaction.amount,
+            balanceBefore: balanceBefore,
+            balanceAfter: wallet.balance,
+            anonymousTransactionId: _newAnalyticsReference('transaction'),
+            match: transaction.matchId == null ? null : analyticsMatch,
+          ),
+        ),
+      );
+      final progression = widget.progression;
+      if (progression != null) {
+        final mission = switch (transaction.source) {
+          ProgressionTransactionSource.firstMatchOfDay => (
+            MissionKind.finishOneMatch,
+            progression.dailyMissions.matchCompleted ? 1 : 0,
+            1,
+          ),
+          ProgressionTransactionSource.dailyMoveMission => (
+            MissionKind.move20Cells,
+            progression.dailyMissions.cellsMoved,
+            progression.dailyMissions.moveTarget,
+          ),
+          ProgressionTransactionSource.dailyReleaseMission => (
+            MissionKind.releaseToken,
+            progression.dailyMissions.tokenReleased ? 1 : 0,
+            1,
+          ),
+          ProgressionTransactionSource.weeklyMatchesMission => (
+            MissionKind.finish7Matches,
+            progression.weeklyMission.matchesCompleted,
+            progression.weeklyMission.target,
+          ),
+          _ => null,
+        };
+        if (mission case final value?) {
+          unawaited(
+            widget.analytics.logEvent(
+              MissionRewardEvent(
+                mission: value.$1,
+                rewardCoins: transaction.amount,
+                progress: value.$2,
+                target: value.$3,
+                correlation: analyticsMatch.correlation,
+              ),
+            ),
+          );
+        }
+      }
+    }
+  }
+
+  Future<void> _settleMatchRewards() async {
+    if (_usesGuidedTutorial) return;
+    final progression = widget.progression;
+    if (progression == null) return;
+    final placement = engine.placementFor(PlayerColor.red);
+    // The first finisher ends the active match even when the local player has
+    // not reached home yet. Award participation at that point so losing never
+    // means "no progress". If the player keeps watching, the placement reward
+    // is added later when their position becomes authoritative.
+    if (!engine.gameOver && placement == null) return;
+    final matchId =
+        analyticsMatch.correlation.anonymousMatchId ??
+        'local_${engine.hashCode}';
+    ProgressionUpdate update;
+    if (!matchCompletionRewardSettled) {
+      matchCompletionRewardSettled = true;
+      if (placement != null) matchPlacementRewardSettled = true;
+      update = await progression.recordMatchCompleted(
+        matchId: matchId,
+        placement: placement,
+      );
+    } else if (placement != null && !matchPlacementRewardSettled) {
+      matchPlacementRewardSettled = true;
+      update = await progression.recordPlacement(
+        matchId: matchId,
+        placement: placement,
+      );
+    } else {
+      return;
+    }
+    await _creditProgression(update.transactions);
+    matchBasePayout = progression.matchPayout(matchId);
+    matchRewardCoinsAwarded += update.coinsAwarded;
+    _logRewardedOfferIfEligible();
+    if (mounted) setState(() {});
+  }
+
+  void _logRewardedOfferIfEligible() {
+    if (rewardedOfferAnalyticsLogged) return;
+    final ads = MobileAdsScope.maybeOf(context);
+    final reward = widget.progression == null
+        ? (engine.standingsComplete ? 100 : 0)
+        : matchPlacementRewardSettled
+        ? matchBasePayout
+        : 0;
+    if (reward <= 0 || ads == null || !ads.supported) return;
+    rewardedOfferAnalyticsLogged = true;
+    rewardedOfferedCoins = reward;
+    unawaited(
+      widget.analytics.logEvent(
+        RewardedAdEvent(
+          stage: RewardedAdStage.offered,
+          placement: RewardedAdPlacement.postMatchReward,
+          rewardCoins: reward,
+          match: analyticsMatch,
+        ),
+      ),
+    );
+  }
+
+  void _logRewardedDeclinedIfIgnored() {
+    if (!rewardedOfferAnalyticsLogged ||
+        rewardedDecisionAnalyticsLogged ||
+        rewardedOfferedCoins <= 0) {
+      return;
+    }
+    rewardedDecisionAnalyticsLogged = true;
+    unawaited(
+      widget.analytics.logEvent(
+        RewardedAdEvent(
+          stage: RewardedAdStage.declined,
+          placement: RewardedAdPlacement.postMatchReward,
+          rewardCoins: rewardedOfferedCoins,
+          match: analyticsMatch,
+        ),
+      ),
+    );
   }
 
   void _onGameChanged() {
     if (!mounted) return;
     _trackAnalyticsEvents();
-    if (engine.eventHistory.isNotEmpty) {
-      final latestEvent = engine.eventHistory.last;
-      if (latestEvent.sequence > lastAudioEventSequence) {
-        lastAudioEventSequence = latestEvent.sequence;
-        unawaited(gameAudio.playEvent(latestEvent.type));
-        _reactToMatchEvent(latestEvent);
+    final feedbackEvents = engine.eventHistory
+        .where((event) => event.sequence > lastAudioEventSequence)
+        .toList(growable: false);
+    if (feedbackEvents.isNotEmpty) {
+      lastAudioEventSequence = feedbackEvents.last.sequence;
+      unawaited(feedbackController.process(feedbackEvents));
+      for (final event in feedbackEvents) {
+        _reactToMatchEvent(event);
       }
     }
     if (selectedToken != null &&
@@ -5245,6 +6019,8 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
     if (engine.gameOver && engine.winner != null) {
       _queueVictoryCelebration();
     }
+    unawaited(_settleMatchRewards());
+    _logRewardedOfferIfEligible();
     setState(() {});
     _syncRollGuide();
     if (!engine.gameOver && _isCpuControlledTurn && !cpuThinking) {
@@ -5273,33 +6049,11 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
           ),
         );
       }
-      final ads = MobileAdsScope.maybeOf(context);
-      if (!rewardedOfferAnalyticsLogged &&
-          engine.standingsComplete &&
-          ads != null &&
-          ads.supported) {
-        rewardedOfferAnalyticsLogged = true;
-        unawaited(
-          widget.analytics.logEvent(
-            RewardedAdEvent(
-              stage: RewardedAdStage.offered,
-              placement: RewardedAdPlacement.postMatchReward,
-              rewardCoins: 100,
-              match: analyticsMatch,
-            ),
-          ),
-        );
-      }
-      if (engine.standingsComplete) {
-        finalReturnTimer?.cancel();
-        finalReturnTimer = Timer(finalStandingsDisplayDuration, () {
-          if (mounted) _returnToStart();
-        });
-      }
+      _logRewardedOfferIfEligible();
     });
   }
 
-  /// Optional coin bonus offered after the whole table has finished.
+  /// Optional coin bonus offered after the local placement is known.
   /// Navigation never opens an advertisement.
   Future<void> _watchEndMatchRewarded() async {
     if (endMatchRewardInProgress ||
@@ -5309,15 +6063,21 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
     }
     final ads = MobileAdsScope.maybeOf(context);
     if (ads == null || !ads.supported) return;
+    final rewardAmount = widget.progression == null ? 100 : matchBasePayout;
+    if (rewardAmount <= 0 ||
+        (widget.progression != null && !matchPlacementRewardSettled)) {
+      return;
+    }
 
     finalReturnTimer?.cancel();
+    final legacyBalanceBefore = widget.wallet?.balance;
     setState(() => endMatchRewardInProgress = true);
     unawaited(
       widget.analytics.logEvent(
         RewardedAdEvent(
           stage: RewardedAdStage.started,
           placement: RewardedAdPlacement.postMatchReward,
-          rewardCoins: 100,
+          rewardCoins: rewardAmount,
           match: analyticsMatch,
         ),
       ),
@@ -5329,7 +6089,25 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
       debugPrint('Optional post-match rewarded ad could not be completed.');
     }
     final earned = adResult.didEarnReward;
-    if (earned) await widget.wallet?.addCoins(100);
+    rewardedDecisionAnalyticsLogged = true;
+    var creditedAmount = 0;
+    if (earned) {
+      final progression = widget.progression;
+      if (progression == null) {
+        await widget.wallet?.addCoins(rewardAmount);
+        creditedAmount = rewardAmount;
+      } else {
+        final matchId =
+            analyticsMatch.correlation.anonymousMatchId ??
+            'local_${engine.hashCode}';
+        final result = await progression.claimRewardedDouble(matchId: matchId);
+        final transaction = result.transaction;
+        if (transaction != null) {
+          await _creditProgression([transaction]);
+          creditedAmount = transaction.amount;
+        }
+      }
+    }
     unawaited(
       widget.analytics.logEvent(
         RewardedAdEvent(
@@ -5340,18 +6118,19 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
             RewardedAdResult.failed => RewardedAdStage.failed,
           },
           placement: RewardedAdPlacement.postMatchReward,
-          rewardCoins: 100,
+          rewardCoins: rewardAmount,
           match: analyticsMatch,
         ),
       ),
     );
-    if (earned) {
+    if (earned && widget.progression == null) {
       unawaited(
         widget.analytics.logEvent(
           CurrencyEvent(
             flow: CurrencyFlow.earned,
             source: CurrencySource.rewardedAd,
-            amount: 100,
+            amount: rewardAmount,
+            balanceBefore: legacyBalanceBefore,
             balanceAfter: widget.wallet?.balance,
             anonymousTransactionId: _newAnalyticsReference(
               'reward_transaction',
@@ -5370,7 +6149,9 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
       SnackBar(
         content: PopText(switch (adResult) {
           RewardedAdResult.earned =>
-            '¡Recibiste 100 monedas por completar la partida!',
+            creditedAmount > 0
+                ? '¡Duplicaste tu premio: +$creditedAmount monedas!'
+                : 'Este premio ya estaba duplicado.',
           RewardedAdResult.dismissed =>
             'No se completó el anuncio. Puedes intentarlo otra vez.',
           RewardedAdResult.unavailable =>
@@ -5384,15 +6165,21 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
 
   void _playAgain() {
     finalReturnTimer?.cancel();
+    _logMatchCompleted(placement: engine.placementFor(PlayerColor.red));
+    _logRewardedDeclinedIfIgnored();
+    final playType = _playTypeForSession(widget.onlineSession);
     final nextMatchRef = _newAnalyticsReference(
-      widget.onlineSession == null ? 'cpu_match' : 'online_match',
+      playType == MatchPlayType.cpu ? 'cpu_match' : 'online_match',
     );
     Navigator.of(context).pushReplacement(
       MaterialPageRoute(
         builder: (_) => GameScreen(
           opponent: widget.opponent,
           mode: engine.mode,
+          matchFormat: engine.matchFormat,
           wallet: widget.wallet,
+          progression: widget.progression,
+          tutorial: widget.tutorial,
           localProfile: widget.localProfile,
           onlineSession: widget.onlineSession,
           analytics: widget.analytics,
@@ -5734,8 +6521,13 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
 
   Future<void> _leaveToHome({required bool discardSavedMatch}) async {
     finalReturnTimer?.cancel();
-    if (discardSavedMatch && !engine.gameOver) {
-      _logMatchAbandoned(MatchAbandonReason.backButton);
+    if (discardSavedMatch) {
+      if (engine.gameOver) {
+        _logMatchCompleted(placement: engine.placementFor(PlayerColor.red));
+        _logRewardedDeclinedIfIgnored();
+      } else {
+        _logMatchAbandoned(MatchAbandonReason.backButton);
+      }
     }
     final store = await SharedPreferences.getInstance();
     if (discardSavedMatch) {
@@ -5754,7 +6546,12 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
 
   Future<void> _handleBackRequest() async {
     if (engine.gameOver || !mounted) return;
-    if (widget.onlineSession != null) {
+    if (_usesGuidedTutorial) {
+      final navigator = Navigator.of(context);
+      if (navigator.canPop()) navigator.pop();
+      return;
+    }
+    if (_sessionHasRemoteHuman(widget.onlineSession)) {
       final leaveOnline = await showDialog<bool>(
         context: context,
         builder: (dialogContext) => _MatchExitDialogFrame(
@@ -5942,6 +6739,7 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
     }
     final tappedToken = _ownTokenAt(tapped);
     if (tappedToken != null) {
+      if (!_tutorialAllowsToken(tappedToken)) return;
       if (!identical(tappedToken, selectedToken)) {
         final canSelect =
             engine.legalDiceFor(tappedToken).isNotEmpty ||
@@ -5955,8 +6753,7 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
       }
       return;
     }
-    final selectedDestination = _moveDestinationPreviews(
-      engine,
+    final selectedDestination = _visibleMoveDestinationPreviews(
       selectedToken,
     ).where((preview) => _moveDestinationPath(preview, 1).contains(tapped));
     if (selectedDestination.isNotEmpty) {
@@ -5975,6 +6772,7 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
     final token = selectedToken;
     if (token == null ||
         engine.effectResolving ||
+        !_tutorialAllowsMove(token, die) ||
         !engine.legalDiceFor(token).contains(die)) {
       return;
     }
@@ -5986,6 +6784,11 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
     final token = selectedToken;
     if (token == null ||
         engine.effectResolving ||
+        !_tutorialAllowsMove(
+          token,
+          engine.allDiceTotalFor(token) ?? -1,
+          usesAllDice: true,
+        ) ||
         !engine.canMoveUsingAllDice(token)) {
       return;
     }
@@ -6001,8 +6804,16 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
   Widget? _buildMovePopup() {
     final token = selectedToken;
     if (token == null || engine.effectResolving) return null;
-    final choices = engine.legalDieValuesFor(token);
-    final allDiceTotal = engine.allDiceTotalFor(token);
+    final choices = engine
+        .legalDieValuesFor(token)
+        .where((die) => _tutorialAllowsMove(token, die))
+        .toList(growable: false);
+    final rawAllDiceTotal = engine.allDiceTotalFor(token);
+    final allDiceTotal =
+        rawAllDiceTotal != null &&
+            _tutorialAllowsMove(token, rawAllDiceTotal, usesAllDice: true)
+        ? rawAllDiceTotal
+        : null;
     if (choices.isEmpty && allDiceTotal == null) return null;
     final twentyStepColor = _twentyStepGuideColor(token.id);
     return _TokenMovePopup(
@@ -6368,7 +7179,9 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
     final playerLabels = <PlayerColor, String>{
       if (widget.onlineSession case final onlineSession?)
         for (final participant in onlineSession.participants)
-          participant.color: participant.displayName,
+          participant.color: participant.isVirtuallyControlled
+              ? 'CPU · ${participant.displayName}'
+              : participant.displayName,
     };
     final standingEntries = _standingEntries(avatarIds);
     final localDiceStyleId =
@@ -6406,6 +7219,11 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
                           box.maxWidth >= 560 &&
                           box.maxWidth >= box.maxHeight * 1.15;
                       final mobileBoardTools = compactPhoneBoard && !sideBySide;
+                      final interactionState = GameInteractionState.derive(
+                        engine: engine,
+                        isLocallyControlledTurn: _isLocallyControlledTurn,
+                        selectedToken: selectedToken,
+                      );
                       const railGap = 4.0;
                       final minimumRailWidth = (box.maxWidth * .25)
                           .clamp(205.0, 290.0)
@@ -6428,10 +7246,10 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
                           sideBySide &&
                           box.maxHeight <= 430 &&
                           availableRailWidth >= 330;
-                      final selectedMovePreviews = _moveDestinationPreviews(
-                        engine,
-                        selectedToken,
-                      ).where((preview) => !preview.overview).toList();
+                      final selectedMovePreviews =
+                          _visibleMoveDestinationPreviews(
+                            selectedToken,
+                          ).where((preview) => !preview.overview).toList();
                       final mobileMoveChoicesVisible =
                           mobileBoardTools && selectedMovePreviews.isNotEmpty;
                       final mobileTurnDecisionVisible =
@@ -6502,8 +7320,10 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
                         child: GestureDetector(
                           behavior: HitTestBehavior.opaque,
                           excludeFromSemantics: true,
-                          onTapUp: (details) =>
-                              _tapBoard(details.localPosition, boardSize),
+                          onTapUp: interactionState.boardInputEnabled
+                              ? (details) =>
+                                    _tapBoard(details.localPosition, boardSize)
+                              : null,
                           child: Stack(
                             fit: StackFit.expand,
                             children: [
@@ -6511,6 +7331,9 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
                                 engine: engine,
                                 compactPhone: compactPhoneBoard,
                                 selectedToken: selectedToken,
+                                movePreviews: _visibleMoveDestinationPreviews(
+                                  selectedToken,
+                                ),
                                 revealAllTraps: trapDiagnosticsEnabled,
                                 playerThemeIds: playerThemeIds,
                                 robotTokens: robotTokens,
@@ -6571,7 +7394,13 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
                                   geometry: boardGeometry,
                                   target: tokenChoicePromptCell,
                                   rolledDice: engine.dice,
-                                  remainingDice: engine.remainingDice,
+                                  remainingDice: _guidedTutorialActive
+                                      ? <int>[
+                                          tutorialScenario!.expectedDie(
+                                            _guidedTutorialStep,
+                                          )!,
+                                        ]
+                                      : engine.remainingDice,
                                   onTap: () {
                                     setState(() {
                                       selectedToken = tokenChoicePromptTarget;
@@ -6640,8 +7469,7 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
                                 playerLabels: playerLabels,
                                 localPlayerLabel: appTranslate(context, 'TÚ'),
                                 languageCode: appLanguageCodeOf(context),
-                                movePreviews: _moveDestinationPreviews(
-                                  engine,
+                                movePreviews: _visibleMoveDestinationPreviews(
                                   selectedToken,
                                 ),
                               ),
@@ -6657,7 +7485,8 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
                         onDieSelected: _moveSelectedToken,
                         onCancelSelection: _cancelTokenSelection,
                         onRollRequested: _rollDiceFromHud,
-                        rollEnabled: _isLocallyControlledTurn,
+                        rollEnabled:
+                            interactionState.canRollDice && _tutorialAllowsRoll,
                         rollGuideEnabled: rollGuideEnabled,
                         rollGuideVisible: rollGuideVisible,
                         rollGuidePulseSerial: rollGuidePulseSerial,
@@ -6672,6 +7501,7 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
                         avatarIds: avatarIds,
                         mobileBoardNavigator: mobileBoardNavigator,
                         mobileBoardFullView: mobileFullBoard,
+                        visibleRemainingDice: _guidedVisibleRemainingDice,
                       );
                       final Widget panel = mobileBoardTools
                           ? TapRegion(
@@ -6681,6 +7511,7 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
                           : rawPanel;
                       final quickBar = _GameQuickBar(
                         chaos: engine.isChaos,
+                        matchFormat: engine.matchFormat,
                         compact: sideBySide,
                         phoneLandscape: phoneLandscape,
                         attached: !sideBySide,
@@ -6694,7 +7525,10 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
                             context,
                             MaterialPageRoute(
                               builder: (_) => GameGuideScreen(
-                                initialMode: engine.isChaos
+                                initialMode:
+                                    engine.matchFormat == MatchFormat.quickPop
+                                    ? GameGuideMode.quickPop
+                                    : engine.isChaos
                                     ? GameGuideMode.chaos
                                     : GameGuideMode.traditional,
                               ),
@@ -6740,7 +7574,9 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
                                                         onRollRequested:
                                                             _rollDiceFromHud,
                                                         rollEnabled:
-                                                            _isLocallyControlledTurn,
+                                                            interactionState
+                                                                .canRollDice &&
+                                                            _tutorialAllowsRoll,
                                                         rollGuideEnabled:
                                                             rollGuideEnabled,
                                                         rollGuideVisible:
@@ -6770,6 +7606,8 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
                                                             trapDiagnosticsEnabled,
                                                         wideShortLandscape:
                                                             true,
+                                                        visibleRemainingDice:
+                                                            _guidedVisibleRemainingDice,
                                                       ),
                                                     ),
                                                   ],
@@ -6828,7 +7666,9 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
                                                     onRollRequested:
                                                         _rollDiceFromHud,
                                                     rollEnabled:
-                                                        _isLocallyControlledTurn,
+                                                        interactionState
+                                                            .canRollDice &&
+                                                        _tutorialAllowsRoll,
                                                     rollGuideEnabled:
                                                         rollGuideEnabled,
                                                     rollGuideVisible:
@@ -6854,6 +7694,8 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
                                                     avatarIds: avatarIds,
                                                     revealTrapDetails:
                                                         trapDiagnosticsEnabled,
+                                                    visibleRemainingDice:
+                                                        _guidedVisibleRemainingDice,
                                                   ),
                                                 ),
                                               ],
@@ -6926,20 +7768,70 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
                       );
                     },
                   ),
+                  if (_usesGuidedTutorial &&
+                      widget.tutorial?.lifecycle ==
+                          TutorialLifecycle.inProgress)
+                    Positioned(
+                      left: 10,
+                      right: 10,
+                      top: 62,
+                      child: Align(
+                        alignment: Alignment.topCenter,
+                        child: ConstrainedBox(
+                          constraints: const BoxConstraints(maxWidth: 520),
+                          child: _TutorialCoachBanner(
+                            controller: widget.tutorial!,
+                            onSkip: () async {
+                              final navigator = Navigator.of(context);
+                              await widget.tutorial!.skip();
+                              if (!mounted) return;
+                              if (widget.guidedTutorial && navigator.canPop()) {
+                                navigator.pop();
+                              } else {
+                                setState(() {});
+                              }
+                            },
+                          ),
+                        ),
+                      ),
+                    ),
+                  if (tutorialCompletionVisible)
+                    Positioned.fill(
+                      child: BlockSemantics(
+                        child: _TutorialCompletionCard(
+                          onDone: () {
+                            final navigator = Navigator.of(context);
+                            if (navigator.canPop()) {
+                              navigator.pop();
+                            } else {
+                              setState(() => tutorialCompletionVisible = false);
+                            }
+                          },
+                        ),
+                      ),
+                    ),
                   if (showVictory && engine.winner != null)
                     Positioned.fill(
                       child: BlockSemantics(
                         child: _VictoryCelebration(
                           winner: engine.winner!,
                           mode: engine.mode,
+                          matchFormat: engine.matchFormat,
                           elapsed: matchElapsed,
                           standings: standingEntries,
                           standingsComplete: engine.standingsComplete,
+                          rewardCoins: matchRewardCoinsAwarded,
+                          doubleRewardCoins: widget.progression == null
+                              ? 100
+                              : matchBasePayout,
                           onContinueWatching: engine.canContinueAfterWinner
                               ? _continueWatching
                               : null,
                           onWatchRewarded:
-                              engine.standingsComplete &&
+                              (widget.progression == null
+                                      ? engine.standingsComplete
+                                      : matchPlacementRewardSettled &&
+                                            matchBasePayout > 0) &&
                                   mobileAdsSupported &&
                                   !endMatchRewardClaimed &&
                                   !postVictoryNavigationInProgress
@@ -6961,6 +7853,217 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
       ),
     );
   }
+}
+
+class _TutorialCoachBanner extends StatelessWidget {
+  const _TutorialCoachBanner({required this.controller, required this.onSkip});
+
+  final TutorialController controller;
+  final VoidCallback onSkip;
+
+  (String, String, IconData) get _copy => switch (controller.currentStep) {
+    TutorialStep.firstRoll => (
+      '1 · TIRA LOS DADOS',
+      'Toca los dados. Esta práctica prepara un 5 y un 2.',
+      Icons.casino_rounded,
+    ),
+    TutorialStep.releaseToken => (
+      '2 · SACA UNA FICHA',
+      'Toca la ficha señalada y usa el 5 para sacarla.',
+      Icons.outbound_rounded,
+    ),
+    TutorialStep.chooseMove => (
+      '3 · ELIGE EL DESTINO',
+      'Vuelve a tocar la ficha y elige la burbuja de 2 pasos.',
+      Icons.touch_app_rounded,
+    ),
+    TutorialStep.safeSquare => (
+      '4 · BUSCA UNA ESTRELLA',
+      'Ejemplo preparado: usa el 2 para caer en la estrella.',
+      Icons.star_rounded,
+    ),
+    TutorialStep.capture => (
+      '5 · CAPTURA',
+      'Usa el 3 para caer sobre la ficha rival señalada.',
+      Icons.flash_on_rounded,
+    ),
+    TutorialStep.reachHome => (
+      '6 · LLEGA A META',
+      'Último ejemplo: usa el 1 exacto para entrar al centro.',
+      Icons.flag_rounded,
+    ),
+    null => ('TUTORIAL LISTO', 'Ya conoces la partida.', Icons.check_rounded),
+  };
+
+  @override
+  Widget build(BuildContext context) {
+    final copy = _copy;
+    final completed = controller.completedSteps.length;
+    return Material(
+      key: const ValueKey('contextual-tutorial-banner'),
+      color: Colors.transparent,
+      child: Container(
+        padding: const EdgeInsets.fromLTRB(11, 9, 6, 9),
+        decoration: BoxDecoration(
+          color: const Color(0xF516294F),
+          borderRadius: BorderRadius.circular(20),
+          border: Border.all(color: PopColors.yellow, width: 2),
+          boxShadow: const [
+            BoxShadow(
+              color: Color(0x66020B27),
+              blurRadius: 14,
+              offset: Offset(0, 7),
+            ),
+          ],
+        ),
+        child: Row(
+          children: [
+            Container(
+              width: 43,
+              height: 43,
+              decoration: const BoxDecoration(
+                color: PopColors.yellow,
+                shape: BoxShape.circle,
+              ),
+              child: Icon(copy.$3, color: PopColors.navy),
+            ),
+            const SizedBox(width: 10),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  PopText(
+                    copy.$1,
+                    style: const TextStyle(
+                      color: Colors.white,
+                      fontSize: 12,
+                      fontWeight: FontWeight.w900,
+                    ),
+                  ),
+                  const SizedBox(height: 2),
+                  PopText(
+                    copy.$2,
+                    maxLines: 2,
+                    style: const TextStyle(
+                      color: Color(0xFFDCE8FF),
+                      fontSize: 10.5,
+                      height: 1.15,
+                    ),
+                  ),
+                  const SizedBox(height: 5),
+                  Row(
+                    children: [
+                      for (
+                        var index = 0;
+                        index < TutorialController.orderedSteps.length;
+                        index++
+                      )
+                        Container(
+                          width: 18,
+                          height: 4,
+                          margin: const EdgeInsets.only(right: 3),
+                          decoration: BoxDecoration(
+                            color: index < completed
+                                ? PopColors.green
+                                : index == completed
+                                ? PopColors.yellow
+                                : Colors.white24,
+                            borderRadius: BorderRadius.circular(4),
+                          ),
+                        ),
+                    ],
+                  ),
+                ],
+              ),
+            ),
+            TextButton(
+              key: const ValueKey('tutorial-skip'),
+              onPressed: onSkip,
+              style: TextButton.styleFrom(
+                foregroundColor: Colors.white,
+                minimumSize: const Size(44, 44),
+              ),
+              child: const PopText(
+                'YA SÉ JUGAR',
+                style: TextStyle(fontSize: 10, fontWeight: FontWeight.w900),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _TutorialCompletionCard extends StatelessWidget {
+  const _TutorialCompletionCard({required this.onDone});
+
+  final VoidCallback onDone;
+
+  @override
+  Widget build(BuildContext context) => ColoredBox(
+    color: const Color(0xB3020B27),
+    child: Center(
+      child: ConstrainedBox(
+        constraints: const BoxConstraints(maxWidth: 340),
+        child: Material(
+          key: const ValueKey('tutorial-complete-card'),
+          color: Colors.white,
+          elevation: 14,
+          borderRadius: BorderRadius.circular(26),
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(24, 24, 24, 20),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Container(
+                  width: 70,
+                  height: 70,
+                  decoration: const BoxDecoration(
+                    color: PopColors.green,
+                    shape: BoxShape.circle,
+                  ),
+                  child: const Icon(
+                    Icons.emoji_events_rounded,
+                    color: Colors.white,
+                    size: 40,
+                  ),
+                ),
+                const SizedBox(height: 15),
+                const PopText(
+                  '¡TUTORIAL LISTO!',
+                  textAlign: TextAlign.center,
+                  style: TextStyle(
+                    color: PopColors.navy,
+                    fontSize: 24,
+                    fontWeight: FontWeight.w900,
+                  ),
+                ),
+                const SizedBox(height: 7),
+                const PopText(
+                  'Ya sabes tirar, sacar una ficha, elegir un movimiento, '
+                  'usar seguros, capturar y entrar a meta.',
+                  textAlign: TextAlign.center,
+                  style: TextStyle(color: Color(0xFF667085), height: 1.3),
+                ),
+                const SizedBox(height: 18),
+                SizedBox(
+                  width: double.infinity,
+                  child: FilledButton.icon(
+                    key: const ValueKey('tutorial-complete-done'),
+                    onPressed: onDone,
+                    icon: const Icon(Icons.check_circle_rounded),
+                    label: const PopText('LISTO PARA JUGAR'),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    ),
+  );
 }
 
 class _OwnedCosmeticsPicker extends StatelessWidget {
@@ -7544,6 +8647,7 @@ class _SafeChatBanner extends StatelessWidget {
 class _GameQuickBar extends StatelessWidget {
   const _GameQuickBar({
     required this.chaos,
+    required this.matchFormat,
     required this.compact,
     this.phoneLandscape = false,
     required this.attached,
@@ -7556,6 +8660,7 @@ class _GameQuickBar extends StatelessWidget {
   });
 
   final bool chaos;
+  final MatchFormat matchFormat;
   final bool compact;
   final bool phoneLandscape;
   final bool attached;
@@ -7568,8 +8673,13 @@ class _GameQuickBar extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final modeLabel = matchFormat == MatchFormat.quickPop
+        ? 'Quick Pop'
+        : chaos
+        ? 'Caos'
+        : 'Tradicional';
     final iconSize = compact ? (phoneLandscape ? 19.0 : 18.0) : 20.0;
-    final height = compact ? (phoneLandscape ? 44.0 : 36.0) : 42.0;
+    final height = compact ? (phoneLandscape ? 44.0 : 48.0) : 44.0;
     final borderRadius = attached
         ? const BorderRadius.only(
             bottomLeft: Radius.circular(14),
@@ -7585,67 +8695,79 @@ class _GameQuickBar extends StatelessWidget {
       clipBehavior: Clip.antiAlias,
       child: SizedBox(
         height: height,
-        child: Row(
-          children: [
-            _GameBackAction(
-              tooltip: appTranslate(context, 'Volver al inicio'),
-              compact: compact,
-              expandedTarget: phoneLandscape,
-              onPressed: onBack,
-            ),
-            Expanded(
-              child: LayoutBuilder(
-                builder: (context, box) => _AutoFitSingleLineText(
-                  key: const ValueKey('game-mode-indicator'),
-                  compact || box.maxWidth < 92
-                      ? (chaos ? 'Caos' : 'Tradicional')
-                      : 'Parchís Pop · ${chaos ? 'Caos' : 'Tradicional'}',
-                  textAlign: TextAlign.center,
-                  style: TextStyle(
-                    color: PopColors.navy,
-                    fontSize: compact ? 11 : 13,
-                    fontWeight: FontWeight.w900,
-                  ),
+        child: LayoutBuilder(
+          builder: (context, constraints) {
+            // Split-screen previews can make this bar much narrower than a
+            // phone. Keep the essential 44-point controls reachable and hide
+            // only secondary labels/help at that extreme width.
+            final veryNarrow = constraints.maxWidth < 280;
+            return Row(
+              children: [
+                _GameBackAction(
+                  tooltip: appTranslate(context, 'Volver al inicio'),
+                  compact: compact,
+                  expandedTarget: phoneLandscape,
+                  onPressed: onBack,
                 ),
-              ),
-            ),
-            if (!compact || phoneLandscape) ...[
-              const SizedBox(width: 3),
-              _MatchTimerBadge(elapsed: elapsed, compact: phoneLandscape),
-              const SizedBox(width: 2),
-            ],
-            if (chaos)
-              _GameQuickAction(
-                tooltip: appTranslate(context, 'Poderes y trampas'),
-                icon: Icons.backpack_rounded,
-                iconSize: iconSize,
-                expandedTarget: phoneLandscape,
-                onPressed: onShowPowers,
-              ),
-            _GameQuickAction(
-              key: const ValueKey('game-history-button'),
-              tooltip: appTranslate(context, 'Historial de eventos'),
-              icon: Icons.history_rounded,
-              iconSize: iconSize,
-              expandedTarget: phoneLandscape,
-              onPressed: onShowHistory,
-            ),
-            _GameQuickAction(
-              tooltip: appTranslate(context, 'Cómo jugar'),
-              icon: Icons.help_rounded,
-              iconSize: iconSize,
-              expandedTarget: phoneLandscape,
-              onPressed: onShowGuide,
-            ),
-            _GameQuickAction(
-              key: const ValueKey('game-settings-button'),
-              tooltip: appTranslate(context, 'Ajustes'),
-              icon: Icons.settings_rounded,
-              iconSize: iconSize,
-              expandedTarget: phoneLandscape,
-              onPressed: onShowSettings,
-            ),
-          ],
+                if (veryNarrow)
+                  const Spacer()
+                else
+                  Expanded(
+                    child: LayoutBuilder(
+                      builder: (context, box) => _AutoFitSingleLineText(
+                        key: const ValueKey('game-mode-indicator'),
+                        compact || box.maxWidth < 92
+                            ? modeLabel
+                            : 'Parchís Pop · $modeLabel',
+                        textAlign: TextAlign.center,
+                        style: TextStyle(
+                          color: PopColors.navy,
+                          fontSize: compact ? 11 : 13,
+                          fontWeight: FontWeight.w900,
+                        ),
+                      ),
+                    ),
+                  ),
+                if (!veryNarrow && (!compact || phoneLandscape)) ...[
+                  const SizedBox(width: 3),
+                  _MatchTimerBadge(elapsed: elapsed, compact: phoneLandscape),
+                  const SizedBox(width: 2),
+                ],
+                if (chaos)
+                  _GameQuickAction(
+                    tooltip: appTranslate(context, 'Poderes y trampas'),
+                    icon: Icons.backpack_rounded,
+                    iconSize: iconSize,
+                    expandedTarget: phoneLandscape,
+                    onPressed: onShowPowers,
+                  ),
+                _GameQuickAction(
+                  key: const ValueKey('game-history-button'),
+                  tooltip: appTranslate(context, 'Historial de eventos'),
+                  icon: Icons.history_rounded,
+                  iconSize: iconSize,
+                  expandedTarget: phoneLandscape,
+                  onPressed: onShowHistory,
+                ),
+                if (!veryNarrow)
+                  _GameQuickAction(
+                    tooltip: appTranslate(context, 'Cómo jugar'),
+                    icon: Icons.help_rounded,
+                    iconSize: iconSize,
+                    expandedTarget: phoneLandscape,
+                    onPressed: onShowGuide,
+                  ),
+                _GameQuickAction(
+                  key: const ValueKey('game-settings-button'),
+                  tooltip: appTranslate(context, 'Ajustes'),
+                  icon: Icons.settings_rounded,
+                  iconSize: iconSize,
+                  expandedTarget: phoneLandscape,
+                  onPressed: onShowSettings,
+                ),
+              ],
+            );
+          },
         ),
       ),
     );
@@ -7671,12 +8793,9 @@ class _GameQuickAction extends StatelessWidget {
   @override
   Widget build(BuildContext context) => IconButton(
     tooltip: tooltip,
-    visualDensity: VisualDensity.compact,
+    visualDensity: VisualDensity.standard,
     padding: EdgeInsets.zero,
-    constraints: BoxConstraints.tightFor(
-      width: expandedTarget ? 44 : (iconSize <= 18 ? 30 : 34),
-      height: expandedTarget ? 44 : 34,
-    ),
+    constraints: const BoxConstraints.tightFor(width: 44, height: 44),
     iconSize: iconSize,
     onPressed: onPressed,
     icon: Icon(icon),
@@ -7701,39 +8820,46 @@ class _GameBackAction extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final size = expandedTarget ? 38.0 : (compact ? 29.0 : 33.0);
+    final visualSize = expandedTarget ? 38.0 : (compact ? 29.0 : 33.0);
     return Tooltip(
       message: tooltip,
       child: Padding(
-        padding: const EdgeInsets.only(left: 5),
+        padding: const EdgeInsets.only(left: 2),
         child: Material(
           color: Colors.transparent,
-          child: InkWell(
-            onTap: onPressed,
-            borderRadius: BorderRadius.circular(size / 2),
-            child: Ink(
-              width: size,
-              height: size,
-              decoration: BoxDecoration(
-                gradient: const LinearGradient(
-                  begin: Alignment.topLeft,
-                  end: Alignment.bottomRight,
-                  colors: [Color(0xFFFF6B78), PopColors.red],
-                ),
-                shape: BoxShape.circle,
-                border: Border.all(color: Colors.white, width: 1.6),
-                boxShadow: const [
-                  BoxShadow(
-                    color: Color(0x4AF04452),
-                    blurRadius: 5,
-                    offset: Offset(0, 2),
+          child: SizedBox(
+            key: const ValueKey('game-back-button'),
+            width: 44,
+            height: 44,
+            child: InkWell(
+              onTap: onPressed,
+              borderRadius: BorderRadius.circular(22),
+              child: Center(
+                child: Ink(
+                  width: visualSize,
+                  height: visualSize,
+                  decoration: BoxDecoration(
+                    gradient: const LinearGradient(
+                      begin: Alignment.topLeft,
+                      end: Alignment.bottomRight,
+                      colors: [Color(0xFFFF6B78), PopColors.red],
+                    ),
+                    shape: BoxShape.circle,
+                    border: Border.all(color: Colors.white, width: 1.6),
+                    boxShadow: const [
+                      BoxShadow(
+                        color: Color(0x4AF04452),
+                        blurRadius: 5,
+                        offset: Offset(0, 2),
+                      ),
+                    ],
                   ),
-                ],
-              ),
-              child: Icon(
-                Icons.arrow_back_rounded,
-                color: Colors.white,
-                size: compact ? 18 : 20,
+                  child: Icon(
+                    Icons.arrow_back_rounded,
+                    color: Colors.white,
+                    size: compact ? 18 : 20,
+                  ),
+                ),
               ),
             ),
           ),
@@ -8022,6 +9148,7 @@ class _GameSideRail extends StatefulWidget {
     this.onlineSession,
     this.revealTrapDetails = false,
     this.wideShortLandscape = false,
+    this.visibleRemainingDice,
   });
 
   final GameEngine engine;
@@ -8043,6 +9170,7 @@ class _GameSideRail extends StatefulWidget {
   final OnlineMatchSession? onlineSession;
   final bool revealTrapDetails;
   final bool wideShortLandscape;
+  final List<int>? visibleRemainingDice;
 
   @override
   State<_GameSideRail> createState() => _GameSideRailState();
@@ -8101,6 +9229,7 @@ class _GameSideRailState extends State<_GameSideRail> {
                     landscapeHud: true,
                     diceStyleId: widget.diceStyleId,
                     avatarIds: widget.avatarIds,
+                    visibleRemainingDice: widget.visibleRemainingDice,
                   ),
                   const SizedBox(height: 5),
                   _LandscapePlayerStrip(
@@ -8130,6 +9259,7 @@ class _GameSideRailState extends State<_GameSideRail> {
                     compact: true,
                     diceStyleId: widget.diceStyleId,
                     avatarIds: widget.avatarIds,
+                    visibleRemainingDice: widget.visibleRemainingDice,
                   ),
                   if (showRosterBelowControls) ...[
                     const SizedBox(height: 7),
@@ -8467,10 +9597,11 @@ class _LandscapePlayerMiniTile extends StatelessWidget {
     final traps = engine.activeTrapsFor(player.color).length;
     final held = player.inventory;
     final displayName = participant?.displayName ?? player.name;
+    final requiredFinishedTokens = engine.rules.tokensRequiredToWin;
     return Tooltip(
       message: appTranslate(
         context,
-        '$displayName · $completed de 4 en meta'
+        '$displayName · $completed de $requiredFinishedTokens en meta'
         '${held == null ? '' : ' · ${engine.powerUpName(held)}'}'
         '${traps == 0 ? '' : ' · $traps trampas'}',
       ),
@@ -8517,7 +9648,7 @@ class _LandscapePlayerMiniTile extends StatelessWidget {
                   Row(
                     children: [
                       PopText(
-                        '$completed/4',
+                        '$completed/$requiredFinishedTokens',
                         style: TextStyle(
                           color: color,
                           fontSize: 8,
@@ -8613,7 +9744,11 @@ class _GamePowerRail extends StatelessWidget {
               MaterialPageRoute(
                 builder: (_) => engine.isChaos
                     ? const TrapPowerLabScreen()
-                    : const GameGuideScreen(),
+                    : GameGuideScreen(
+                        initialMode: engine.matchFormat == MatchFormat.quickPop
+                            ? GameGuideMode.quickPop
+                            : GameGuideMode.traditional,
+                      ),
               ),
             ),
             icon: const Icon(Icons.menu_book_rounded, size: 18),
@@ -8652,9 +9787,12 @@ class _VictoryCelebration extends StatefulWidget {
   const _VictoryCelebration({
     required this.winner,
     required this.mode,
+    required this.matchFormat,
     required this.elapsed,
     required this.standings,
     required this.standingsComplete,
+    this.rewardCoins = 0,
+    this.doubleRewardCoins = 0,
     this.onContinueWatching,
     this.onWatchRewarded,
     this.rewardInProgress = false,
@@ -8666,9 +9804,12 @@ class _VictoryCelebration extends StatefulWidget {
 
   final PlayerState winner;
   final GameMode mode;
+  final MatchFormat matchFormat;
   final Duration elapsed;
   final List<_FinalStandingEntry> standings;
   final bool standingsComplete;
+  final int rewardCoins;
+  final int doubleRewardCoins;
   final VoidCallback? onContinueWatching;
   final VoidCallback? onWatchRewarded;
   final bool rewardInProgress;
@@ -8685,6 +9826,108 @@ class _VictoryCelebrationState extends State<_VictoryCelebration>
     with TickerProviderStateMixin {
   late final AnimationController entranceController;
   late final AnimationController confettiController;
+
+  Widget? _buildEarlyRewardSummary() {
+    if (widget.rewardCoins <= 0 &&
+        widget.onWatchRewarded == null &&
+        !widget.rewardClaimed) {
+      return null;
+    }
+    return Padding(
+      padding: const EdgeInsets.only(top: 12),
+      child: Column(
+        key: const ValueKey('victory-early-reward'),
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          if (widget.rewardCoins > 0)
+            Container(
+              key: const ValueKey('victory-early-earned-reward'),
+              padding: const EdgeInsets.symmetric(vertical: 11, horizontal: 14),
+              decoration: BoxDecoration(
+                color: PopColors.yellow.withValues(alpha: .22),
+                borderRadius: BorderRadius.circular(16),
+                border: Border.all(color: PopColors.yellow),
+              ),
+              child: PopText(
+                '+${widget.rewardCoins} MONEDAS POR JUGAR',
+                textAlign: TextAlign.center,
+                style: const TextStyle(
+                  color: PopColors.navy,
+                  fontSize: 13,
+                  fontWeight: FontWeight.w900,
+                ),
+              ),
+            ),
+          if (widget.rewardCoins > 0 &&
+              (widget.onWatchRewarded != null || widget.rewardClaimed))
+            const SizedBox(height: 10),
+          if (widget.onWatchRewarded != null)
+            FilledButton.icon(
+              key: const ValueKey('victory-early-rewarded-ad'),
+              onPressed: widget.rewardInProgress
+                  ? null
+                  : widget.onWatchRewarded,
+              style: FilledButton.styleFrom(
+                backgroundColor: PopColors.green,
+                foregroundColor: Colors.white,
+                padding: const EdgeInsets.symmetric(vertical: 13),
+              ),
+              icon: widget.rewardInProgress
+                  ? const SizedBox.square(
+                      dimension: 18,
+                      child: CircularProgressIndicator(
+                        strokeWidth: 2,
+                        color: Colors.white,
+                      ),
+                    )
+                  : const Icon(Icons.play_circle_fill_rounded),
+              label: PopText(
+                widget.rewardInProgress
+                    ? 'CARGANDO ANUNCIO…'
+                    : 'VER ANUNCIO · DUPLICAR\n'
+                          '+${widget.doubleRewardCoins} MONEDAS',
+                textAlign: TextAlign.center,
+                style: const TextStyle(
+                  fontSize: 12,
+                  height: 1.05,
+                  fontWeight: FontWeight.w900,
+                ),
+              ),
+            )
+          else if (widget.rewardClaimed)
+            Container(
+              padding: const EdgeInsets.symmetric(vertical: 12, horizontal: 14),
+              decoration: BoxDecoration(
+                color: PopColors.green.withValues(alpha: .12),
+                borderRadius: BorderRadius.circular(16),
+              ),
+              child: Row(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  const Icon(
+                    Icons.check_circle_rounded,
+                    color: PopColors.green,
+                    size: 18,
+                  ),
+                  const SizedBox(width: 7),
+                  Flexible(
+                    child: PopText(
+                      '+${widget.doubleRewardCoins} MONEDAS DUPLICADAS',
+                      textAlign: TextAlign.center,
+                      style: const TextStyle(
+                        color: PopColors.green,
+                        fontSize: 12,
+                        fontWeight: FontWeight.w900,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+        ],
+      ),
+    );
+  }
 
   @override
   void initState() {
@@ -8726,9 +9969,12 @@ class _VictoryCelebrationState extends State<_VictoryCelebration>
     final winnerLabel = humanWon
         ? 'TÚ ERES EL CAMPEÓN'
         : '${winnerName.toUpperCase()} GANA';
+    final tokenDescription = widget.matchFormat == MatchFormat.quickPop
+        ? 'dos fichas'
+        : 'cuatro fichas';
     final description = humanWon
-        ? 'Tus cuatro fichas llegaron a la meta.'
-        : '$winnerName llevó sus cuatro fichas a la meta. '
+        ? 'Tus $tokenDescription llegaron a la meta.'
+        : '$winnerName llevó sus $tokenDescription a la meta. '
               '¡La revancha está lista!';
     final semanticsLabel = widget.standingsComplete
         ? '$title. La partida terminó. Estos son los resultados.'
@@ -8900,6 +10146,39 @@ class _VictoryCelebrationState extends State<_VictoryCelebration>
                                       const SizedBox(height: 16),
                                       _FinalRanking(entries: widget.standings),
                                       const SizedBox(height: 12),
+                                      if (widget.rewardCoins > 0) ...[
+                                        Container(
+                                          key: const ValueKey(
+                                            'victory-earned-reward',
+                                          ),
+                                          width: double.infinity,
+                                          padding: const EdgeInsets.symmetric(
+                                            vertical: 11,
+                                            horizontal: 14,
+                                          ),
+                                          decoration: BoxDecoration(
+                                            color: PopColors.yellow.withValues(
+                                              alpha: .22,
+                                            ),
+                                            borderRadius: BorderRadius.circular(
+                                              16,
+                                            ),
+                                            border: Border.all(
+                                              color: PopColors.yellow,
+                                            ),
+                                          ),
+                                          child: PopText(
+                                            '+${widget.rewardCoins} MONEDAS POR JUGAR',
+                                            textAlign: TextAlign.center,
+                                            style: const TextStyle(
+                                              color: PopColors.navy,
+                                              fontSize: 13,
+                                              fontWeight: FontWeight.w900,
+                                            ),
+                                          ),
+                                        ),
+                                        const SizedBox(height: 10),
+                                      ],
                                       if (widget.onWatchRewarded != null)
                                         SizedBox(
                                           width: double.infinity,
@@ -8934,7 +10213,8 @@ class _VictoryCelebrationState extends State<_VictoryCelebration>
                                             label: PopText(
                                               widget.rewardInProgress
                                                   ? 'CARGANDO ANUNCIO…'
-                                                  : 'VER ANUNCIO\n+100 MONEDAS',
+                                                  : 'VER ANUNCIO · DUPLICAR\n'
+                                                        '+${widget.doubleRewardCoins} MONEDAS',
                                               textAlign: TextAlign.center,
                                               style: const TextStyle(
                                                 fontSize: 12,
@@ -8959,21 +10239,21 @@ class _VictoryCelebrationState extends State<_VictoryCelebration>
                                               16,
                                             ),
                                           ),
-                                          child: const Row(
+                                          child: Row(
                                             mainAxisAlignment:
                                                 MainAxisAlignment.center,
                                             children: [
-                                              Icon(
+                                              const Icon(
                                                 Icons.check_circle_rounded,
                                                 color: PopColors.green,
                                                 size: 18,
                                               ),
-                                              SizedBox(width: 7),
+                                              const SizedBox(width: 7),
                                               Flexible(
                                                 child: PopText(
-                                                  '+100 MONEDAS RECIBIDAS',
+                                                  '+${widget.doubleRewardCoins} MONEDAS DUPLICADAS',
                                                   textAlign: TextAlign.center,
-                                                  style: TextStyle(
+                                                  style: const TextStyle(
                                                     color: PopColors.green,
                                                     fontSize: 12,
                                                     fontWeight: FontWeight.w900,
@@ -8984,18 +10264,6 @@ class _VictoryCelebrationState extends State<_VictoryCelebration>
                                           ),
                                         ),
                                       const SizedBox(height: 10),
-                                      const PopText(
-                                        'Volviendo al inicio…',
-                                        key: ValueKey(
-                                          'final-return-home-message',
-                                        ),
-                                        textAlign: TextAlign.center,
-                                        style: TextStyle(
-                                          color: Color(0xFF667085),
-                                          fontSize: 12,
-                                          fontWeight: FontWeight.w800,
-                                        ),
-                                      ),
                                     ] else ...[
                                       Container(
                                         padding: const EdgeInsets.symmetric(
@@ -9073,7 +10341,11 @@ class _VictoryCelebrationState extends State<_VictoryCelebration>
                                         children: [
                                           _VictoryStat(
                                             icon: Icons.flag_rounded,
-                                            label: '4 / 4 EN META',
+                                            label:
+                                                widget.matchFormat ==
+                                                    MatchFormat.quickPop
+                                                ? '2 / 2 EN META'
+                                                : '4 / 4 EN META',
                                             color: winnerColor,
                                           ),
                                           _VictoryStat(
@@ -9081,7 +10353,11 @@ class _VictoryCelebrationState extends State<_VictoryCelebration>
                                                 ? Icons.bolt_rounded
                                                 : Icons
                                                       .workspace_premium_rounded,
-                                            label: widget.mode == GameMode.chaos
+                                            label:
+                                                widget.matchFormat ==
+                                                    MatchFormat.quickPop
+                                                ? 'QUICK POP'
+                                                : widget.mode == GameMode.chaos
                                                 ? 'MODO CAOS'
                                                 : 'TRADICIONAL',
                                             color: widget.mode == GameMode.chaos
@@ -9152,6 +10428,7 @@ class _VictoryCelebrationState extends State<_VictoryCelebration>
                                           ],
                                         ),
                                       ),
+                                      ?_buildEarlyRewardSummary(),
                                     ],
                                     const SizedBox(height: 22),
                                     if (widget.onContinueWatching != null) ...[
@@ -10154,12 +11431,14 @@ class _BoardMoveCalloutLayout {
 }
 
 Size _boardMoveCalloutSize(MoveDestinationPreview preview) {
-  if (preview.usesAllDice) return const Size(100, 48);
-  if (preview.isHomeEntryCapture) return const Size(104, 48);
+  // Leave a small margin above the 48-point accessibility minimum because
+  // the complete board can be fractionally scaled on short phones.
+  if (preview.usesAllDice) return const Size(100, 50);
+  if (preview.isHomeEntryCapture) return const Size(104, 50);
   if (preview.isExit || preview.isGoal || preview.value == 20) {
-    return const Size(92, 48);
+    return const Size(92, 50);
   }
-  return Size(preview.value >= 10 ? 90 : 84, 48);
+  return Size(preview.value >= 10 ? 90 : 84, 50);
 }
 
 _MoveCalloutPointerSide _moveCalloutPointerSide(Rect rect, Offset target) {
@@ -10802,6 +12081,7 @@ class GameBoardMockup extends StatefulWidget {
     required this.engine,
     this.compactPhone = false,
     this.selectedToken,
+    this.movePreviews,
     this.themeId,
     this.playerThemeIds = const <PlayerColor, String?>{},
     this.revealAllTraps = false,
@@ -10813,6 +12093,7 @@ class GameBoardMockup extends StatefulWidget {
   final GameEngine engine;
   final bool compactPhone;
   final GameToken? selectedToken;
+  final List<MoveDestinationPreview>? movePreviews;
 
   /// Legacy single-player theme. When supplied it only styles the red/local
   /// quadrant; shared routes and the other three bases remain neutral.
@@ -10868,7 +12149,7 @@ class _GameBoardMockupState extends State<GameBoardMockup>
     );
     effectController = AnimationController(
       vsync: this,
-      duration: const Duration(milliseconds: 2200),
+      duration: const Duration(milliseconds: 900),
     );
     lastEffectSerial = widget.engine.effectSerial;
     lastGameOver = widget.engine.gameOver;
@@ -11104,10 +12385,9 @@ class _GameBoardMockupState extends State<GameBoardMockup>
               playerLabels: widget.playerLabels,
               localPlayerLabel: appTranslate(context, 'TÚ'),
               languageCode: appLanguageCodeOf(context),
-              movePreviews: _moveDestinationPreviews(
-                widget.engine,
-                widget.selectedToken,
-              ),
+              movePreviews:
+                  widget.movePreviews ??
+                  _moveDestinationPreviews(widget.engine, widget.selectedToken),
             ),
             child: const SizedBox.expand(),
           ),
@@ -14174,6 +15454,7 @@ class GameControlPanel extends StatelessWidget {
     this.avatarIds = const <PlayerColor, String?>{},
     this.mobileBoardNavigator,
     this.mobileBoardFullView = false,
+    this.visibleRemainingDice,
   });
   final GameEngine engine;
   final GameToken? selectedToken;
@@ -14193,6 +15474,7 @@ class GameControlPanel extends StatelessWidget {
   final Map<PlayerColor, String?> avatarIds;
   final Widget? mobileBoardNavigator;
   final bool mobileBoardFullView;
+  final List<int>? visibleRemainingDice;
 
   String? get diceId => diceStyleId;
   bool get galaxyDice => diceStyleId == 'dice_galaxy';
@@ -14203,10 +15485,18 @@ class GameControlPanel extends StatelessWidget {
     final activeTraps = engine
         .activeTrapsFor(engine.currentPlayer.color)
         .toList(growable: false);
-    final moveChoices = selectedToken == null || engine.effectResolving
+    final engineMoveChoices = selectedToken == null || engine.effectResolving
         ? const <int>[]
         : engine.legalDieValuesFor(selectedToken!);
-    final allDiceTotal = selectedToken == null || engine.effectResolving
+    final moveChoices = visibleRemainingDice == null
+        ? engineMoveChoices
+        : engineMoveChoices
+              .where(visibleRemainingDice!.contains)
+              .toList(growable: false);
+    final allDiceTotal =
+        visibleRemainingDice != null ||
+            selectedToken == null ||
+            engine.effectResolving
         ? null
         : engine.allDiceTotalFor(selectedToken!);
     final boardCalloutsOwnMoveChoice =
@@ -14283,7 +15573,11 @@ class GameControlPanel extends StatelessWidget {
         ],
       ],
     );
-    final remainingForSlots = [...engine.remainingDice];
+    final remainingForSlots = <int>[
+      ...(visibleRemainingDice ?? engine.remainingDice),
+    ];
+    final remainingDiceForDisplay =
+        visibleRemainingDice ?? engine.remainingDice;
     final dieAvailable = [
       for (final value in engine.dice)
         !engine.hasRolled || remainingForSlots.remove(value),
@@ -14427,9 +15721,9 @@ class GameControlPanel extends StatelessWidget {
                 if (engine.hasRolled) ...[
                   const SizedBox(height: 4),
                   PopText(
-                    engine.remainingDice.length == 1
+                    remainingDiceForDisplay.length == 1
                         ? '1 dado disponible'
-                        : '${engine.remainingDice.length} dados disponibles',
+                        : '${remainingDiceForDisplay.length} dados disponibles',
                     style: const TextStyle(
                       fontSize: 9,
                       color: Color(0xFF667085),
@@ -15940,7 +17234,7 @@ class PlayerRoster extends StatelessWidget {
                 ),
               ),
               PopText(
-                '$completed/4',
+                '$completed/${engine.rules.tokensRequiredToWin}',
                 style: TextStyle(
                   color: color,
                   fontSize: 12,
@@ -16733,7 +18027,12 @@ class _ShopScreenState extends State<ShopScreen> {
   void didChangeDependencies() {
     super.didChangeDependencies();
     final ads = MobileAdsScope.maybeOf(context);
-    if (rewardedOfferAnalyticsLogged || ads == null || !ads.supported) return;
+    if (!shopRewardedCoinsEnabled ||
+        rewardedOfferAnalyticsLogged ||
+        ads == null ||
+        !ads.supported) {
+      return;
+    }
     rewardedOfferAnalyticsLogged = true;
     unawaited(
       widget.analytics.logEvent(
@@ -16754,6 +18053,7 @@ class _ShopScreenState extends State<ShopScreen> {
   }
 
   Future<void> _watchRewardedAd(AppAdsController ads) async {
+    final balanceBefore = wallet.balance;
     unawaited(
       widget.analytics.logEvent(
         RewardedAdEvent(
@@ -16796,6 +18096,7 @@ class _ShopScreenState extends State<ShopScreen> {
             flow: CurrencyFlow.earned,
             source: CurrencySource.rewardedAd,
             amount: 100,
+            balanceBefore: balanceBefore,
             balanceAfter: wallet.balance,
             anonymousTransactionId: _newAnalyticsReference(
               'reward_transaction',
@@ -17228,6 +18529,7 @@ class _ShopScreenState extends State<ShopScreen> {
       },
     );
     if (confirmed != true) return;
+    final balanceBefore = wallet.balance;
     final result = await wallet.purchase(productId);
     if (result == PurchaseResult.purchased) {
       await wallet.equip(productId);
@@ -17237,6 +18539,7 @@ class _ShopScreenState extends State<ShopScreen> {
             flow: CurrencyFlow.spent,
             source: CurrencySource.shopPurchase,
             amount: product.price,
+            balanceBefore: balanceBefore,
             balanceAfter: wallet.balance,
             anonymousTransactionId: _newAnalyticsReference('shop_transaction'),
             correlation: analyticsCorrelation,
@@ -17360,7 +18663,7 @@ class _ShopScreenState extends State<ShopScreen> {
                   onAdd: () => _showAddCoinsDialog(context, wallet),
                 ),
               ],
-              if (ads?.supported == true) ...[
+              if (shopRewardedCoinsEnabled && ads?.supported == true) ...[
                 const SizedBox(height: 10),
                 _ShopRewardedCoinsCard(
                   controller: ads!,
@@ -19211,13 +20514,21 @@ class _HomeProfileDialog extends StatelessWidget {
   const _HomeProfileDialog({
     required this.profile,
     required this.wallet,
+    this.progression,
+    this.tutorial,
     required this.authGateway,
+    required this.analytics,
+    this.onLocalDataDeleted,
     required this.onProfileChanged,
   });
 
   final PlayerProfile profile;
   final WalletController wallet;
+  final PlayerProgressionController? progression;
+  final TutorialController? tutorial;
   final PlayerAuthGateway authGateway;
+  final GameAnalytics analytics;
+  final Future<void> Function()? onLocalDataDeleted;
   final ValueChanged<PlayerProfile> onProfileChanged;
 
   Future<void> _deleteAccountAndData(BuildContext context) async {
@@ -19232,8 +20543,8 @@ class _HomeProfileDialog extends StatelessWidget {
         title: const PopText('Eliminar cuenta y datos'),
         content: const PopText(
           'Se borrarán de este dispositivo el perfil, las credenciales '
-          'locales, las monedas y los cosméticos. Esta acción no se puede '
-          'deshacer.',
+          'locales, las partidas guardadas, el progreso, las monedas, los '
+          'cosméticos y las preferencias. Esta acción no se puede deshacer.',
           textAlign: TextAlign.center,
         ),
         actions: [
@@ -19251,8 +20562,20 @@ class _HomeProfileDialog extends StatelessWidget {
     );
     if (confirmed != true || !context.mounted) return;
     await authGateway.deleteAccount();
+    await progression?.resetLocalData();
     await wallet.resetLocalData();
-    onProfileChanged(PlayerProfile.guest);
+    await tutorial?.resetLocalData();
+    final analyticsControl = analytics;
+    if (analyticsControl is AnalyticsPrivacyControl) {
+      await (analyticsControl as AnalyticsPrivacyControl)
+          .setAnalyticsCollectionEnabled(false);
+    }
+    final store = await SharedPreferences.getInstance();
+    await store.clear();
+    await onLocalDataDeleted?.call();
+    if (onLocalDataDeleted == null) {
+      onProfileChanged(PlayerProfile.guest);
+    }
     if (context.mounted) Navigator.pop(context, false);
   }
 
@@ -19783,9 +21106,14 @@ class ProfileView extends StatelessWidget {
 }
 
 class SettingsScreen extends StatefulWidget {
-  const SettingsScreen({super.key, this.themeId});
+  const SettingsScreen({
+    super.key,
+    this.themeId,
+    this.analytics = const NoopGameAnalytics(),
+  });
 
   final String? themeId;
+  final GameAnalytics analytics;
 
   @override
   State<SettingsScreen> createState() => _SettingsScreenState();
@@ -19796,12 +21124,18 @@ class _SettingsScreenState extends State<SettingsScreen> {
   bool music = true;
   bool vibration = true;
   bool rollGuide = true;
+  bool anonymousAnalytics = false;
   DiceHandPreference diceHand = DiceHandPreference.right;
   final AppLanguageController localLanguage = AppLanguageController();
 
   @override
   void initState() {
     super.initState();
+    final analytics = widget.analytics;
+    if (analytics is AnalyticsPrivacyControl) {
+      anonymousAnalytics =
+          (analytics as AnalyticsPrivacyControl).analyticsCollectionEnabled;
+    }
     localLanguage.initialize();
     _loadSettings();
   }
@@ -19834,6 +21168,23 @@ class _SettingsScreenState extends State<SettingsScreen> {
   Future<void> _setStringPreference(String key, String value) async {
     final store = await SharedPreferences.getInstance();
     await store.setString(key, value);
+  }
+
+  Future<void> _setAnonymousAnalytics(bool value) async {
+    final analytics = widget.analytics;
+    if (analytics is! AnalyticsPrivacyControl) return;
+    try {
+      await (analytics as AnalyticsPrivacyControl)
+          .setAnalyticsCollectionEnabled(value);
+      if (mounted) setState(() => anonymousAnalytics = value);
+    } catch (_) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: PopText('No se pudo guardar la preferencia de analítica.'),
+        ),
+      );
+    }
   }
 
   Future<void> _selectLanguage(
@@ -20158,6 +21509,19 @@ class _SettingsScreenState extends State<SettingsScreen> {
                             trailing: const Icon(Icons.chevron_right),
                             onTap: () => _showLanguagePicker(language),
                           ),
+                          if (widget.analytics is AnalyticsPrivacyControl)
+                            SwitchListTile(
+                              key: const ValueKey(
+                                'settings-anonymous-analytics',
+                              ),
+                              value: anonymousAnalytics,
+                              onChanged: _setAnonymousAnalytics,
+                              title: const PopText('Analítica anónima'),
+                              subtitle: const PopText(
+                                'Ayuda a mejorar el juego sin enviar tu nombre ni correo',
+                              ),
+                              secondary: const Icon(Icons.insights_rounded),
+                            ),
                           ListTile(
                             leading: const Icon(Icons.privacy_tip_rounded),
                             title: const PopText('Privacidad y políticas'),
@@ -20316,8 +21680,8 @@ class PoliciesScreen extends StatelessWidget {
               'Publicidad',
               'Android y iOS pueden mostrar banners únicamente fuera de la '
                   'partida, la guía y la búsqueda de jugadores. Los anuncios '
-                  'recompensados son voluntarios en la tienda o al finalizar '
-                  'la mesa. Jugar otra vez, Volver al inicio y Reanudar nunca '
+                  'recompensados son voluntarios al finalizar la mesa. Jugar '
+                  'otra vez, Volver al inicio y Reanudar nunca '
                   'abren anuncios. '
                   'Puedes administrar el consentimiento y las preferencias '
                   'disponibles desde esta pantalla. La versión de macOS no '
@@ -20341,7 +21705,8 @@ class PoliciesScreen extends StatelessWidget {
               'El perfil y sus credenciales se guardan localmente. Desde Mi '
                   'perfil puedes usar Eliminar cuenta y datos para borrar del '
                   'dispositivo el perfil, la contraseña protegida, las '
-                  'monedas, los cosméticos y las preferencias asociadas.',
+                  'partidas guardadas, el tutorial, el progreso, las monedas, '
+                  'los cosméticos y las preferencias asociadas.',
             ),
           ),
         ],

@@ -1,7 +1,27 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:parchesepop/game_analytics.dart';
 import 'package:parchesepop/main.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+
+class _ConsentAwareAnalytics
+    implements TypedGameAnalytics, AnalyticsPrivacyControl {
+  bool enabled = true;
+
+  @override
+  bool get analyticsCollectionEnabled => enabled;
+
+  @override
+  Future<void> setAnalyticsCollectionEnabled(bool enabled) async {
+    this.enabled = enabled;
+  }
+
+  @override
+  Future<void> logEvent(GameAnalyticsEvent event) async {}
+
+  @override
+  Future<void> logMatchStarted(MatchStartEvent event) async {}
+}
 
 void _useViewport(WidgetTester tester, Size size) {
   tester.view.devicePixelRatio = 1;
@@ -125,7 +145,7 @@ void main() {
         await _pumpLoadedHome(tester);
 
         for (final label in const [
-          'PARTIDA ONLINE',
+          'MESA RÁPIDA',
           'CONTRA CPU',
           'Tienda',
           'Mi perfil',
@@ -181,7 +201,7 @@ void main() {
 
       await _pumpLoadedHome(tester);
       for (final label in const [
-        'PARTIDA ONLINE',
+        'MESA RÁPIDA',
         'CONTRA CPU',
         'Tienda',
         'Mi perfil',
@@ -229,7 +249,7 @@ void main() {
         });
         expect(isExcludedFromSemantics, isTrue);
         expect(
-          find.bySemanticsLabel(RegExp('PARTIDA ONLINE')),
+          find.bySemanticsLabel(RegExp('MESA RÁPIDA')),
           findsAtLeastNWidgets(1),
         );
         expect(
@@ -301,9 +321,88 @@ void main() {
 
     expect(find.byKey(const ValueKey('home-profile-dialog')), findsNothing);
     expect(find.byType(HomeScreen), findsOneWidget);
-    expect(find.text('PARTIDA ONLINE'), findsOneWidget);
+    expect(find.text('MESA RÁPIDA'), findsOneWidget);
     expect(tester.takeException(), isNull);
   });
+
+  testWidgets(
+    'account deletion clears every local record and mounted player state',
+    (tester) async {
+      _useSpanish();
+      _useViewport(tester, const Size(390, 844));
+      final analytics = _ConsentAwareAnalytics();
+      SharedPreferences.setMockInitialValues({
+        'profile_name': 'JuanPop',
+        'profile_email': 'juan@example.com',
+        'profile_flag': '🇩🇴',
+        'profile_level': 8,
+        'player_auth_email': 'juan@example.com',
+        'player_auth_salt': 'local-salt',
+        'player_auth_digest': 'local-digest',
+        'player_auth_signed_in': false,
+        'active_match_board_layout_version': activeMatchBoardLayoutVersion,
+        'active_match_checkpoint': '{"players":[]}',
+        'parchesepop.wallet.balance.v1': 1800,
+        'parchesepop.wallet.owned.v1': ['avatar_ninja'],
+        'parchesepop.wallet.equipped.v1.avatar': 'avatar_ninja',
+        'parchesepop.tutorial.progress.v1':
+            '{"schemaVersion":1,"lifecycle":"completed",'
+            '"completedSteps":["firstRoll","releaseToken","chooseMove",'
+            '"safeSquare","capture","reachHome"],'
+            '"recordedAnalytics":[],"startedAtMilliseconds":1}',
+        'settings_sound': false,
+        'settings_language': 'es',
+        analyticsCollectionPreferenceKey: true,
+        'private-test-marker': 'must be removed',
+      });
+
+      await tester.pumpWidget(ParchesePopApp(analytics: analytics));
+      for (var attempt = 0; attempt < 30; attempt++) {
+        await tester.pump(const Duration(milliseconds: 100));
+        if (find.byType(HomeScreen).evaluate().isNotEmpty) break;
+      }
+
+      expect(find.byKey(const ValueKey('resume-saved-match-button')), findsOne);
+      expect(find.text('JuanPop 🇩🇴'), findsOneWidget);
+      expect(find.text('1,800'), findsOneWidget);
+      expect(
+        find.byKey(const ValueKey('start-contextual-tutorial')),
+        findsNothing,
+      );
+      expect(analytics.analyticsCollectionEnabled, isTrue);
+
+      await tester.tap(find.byKey(const ValueKey('home-game-hero')));
+      await _expectProfileDialog(tester);
+      await tester.ensureVisible(
+        find.byKey(const ValueKey('home-profile-delete')),
+      );
+      await tester.tap(find.byKey(const ValueKey('home-profile-delete')));
+      await tester.pumpAndSettle();
+      expect(find.text('Eliminar definitivamente'), findsOneWidget);
+
+      await tester.tap(find.text('Eliminar definitivamente'));
+      await tester.pumpAndSettle();
+
+      final preferences = await SharedPreferences.getInstance();
+      expect(preferences.getKeys(), isEmpty);
+      expect(analytics.analyticsCollectionEnabled, isFalse);
+      expect(
+        find.byKey(const ValueKey('resume-saved-match-button')),
+        findsNothing,
+      );
+      expect(find.text('¡Listo para jugar!'), findsOneWidget);
+      expect(
+        find.byKey(const ValueKey('home-avatar-avatar_default')),
+        findsOne,
+      );
+      expect(find.text('250'), findsOneWidget);
+      expect(
+        find.byKey(const ValueKey('start-contextual-tutorial')),
+        findsOneWidget,
+      );
+      expect(find.byKey(const ValueKey('home-profile-dialog')), findsNothing);
+    },
+  );
 
   testWidgets('profile editing can be cancelled back to the game home', (
     tester,
@@ -334,7 +433,7 @@ void main() {
     );
     expect(find.byKey(const ValueKey('home-profile-dialog')), findsNothing);
     expect(find.byType(HomeScreen), findsOneWidget);
-    expect(find.text('PARTIDA ONLINE').hitTestable(), findsOneWidget);
+    expect(find.text('MESA RÁPIDA').hitTestable(), findsOneWidget);
     expect(tester.takeException(), isNull);
   });
 
@@ -366,7 +465,7 @@ void main() {
     );
     expect(find.byKey(const ValueKey('home-profile-dialog')), findsNothing);
     expect(find.byType(HomeScreen), findsOneWidget);
-    expect(find.text('PARTIDA ONLINE').hitTestable(), findsOneWidget);
+    expect(find.text('MESA RÁPIDA').hitTestable(), findsOneWidget);
     expect(tester.takeException(), isNull);
   });
 }

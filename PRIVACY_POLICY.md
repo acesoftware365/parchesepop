@@ -19,11 +19,13 @@ digest. You may play against the CPU without creating a profile.
 
 ## Analytics
 
-Parchís Pop uses Google Firebase Analytics to understand how the game is used
-and improve its design. Analytics events may include whether a match was started
-online or against the CPU, the selected game mode, and CPU difficulty. The game
-does not intentionally include your display name, email, chat messages, flag, or
-avatar in these analytics events.
+Anonymous analytics collection is off by default. You may enable or disable it
+at any time from **Settings > Anonymous analytics**. When enabled, Parchís Pop
+uses Google Firebase Analytics to understand how the game is used and improve
+its design. Analytics events may include whether a match was started online or
+against the CPU, the selected game mode, and CPU difficulty. The game does not
+intentionally include your display name, email, chat messages, flag, or avatar
+in these analytics events.
 
 Google may process technical information such as device identifiers, app
 instance information, approximate location derived from IP address, operating
@@ -35,9 +37,9 @@ The Android and iOS versions use Google AdMob:
 
 - adaptive banner advertisements may appear only outside gameplay, the game
   guide, and matchmaking; and
-- optional rewarded advertisements may be offered in the shop and after the
-  whole table finishes. A reward is granted only after the advertisement is
-  completed.
+- an optional rewarded advertisement may be offered after the whole table
+  finishes to double an eligible match reward. A reward is granted only after
+  the advertisement is completed.
 
 Resume, Play Again, and Back to Home never open an advertisement.
 
@@ -141,11 +143,13 @@ resumen cifrado con sal. Puedes jugar contra el CPU sin crear un perfil.
 
 ## Analíticas
 
-Parchís Pop utiliza Google Firebase Analytics para comprender cómo se usa el
-juego y mejorar su diseño. Los eventos pueden indicar si una partida comenzó
-online o contra CPU, el modo seleccionado y la dificultad. El juego no incluye
-intencionalmente tu nombre visible, correo, mensajes, bandera ni avatar en estos
-eventos de analíticas.
+La recopilación de analíticas anónimas está apagada por defecto. Puedes
+activarla o desactivarla en cualquier momento desde **Ajustes > Analítica
+anónima**. Cuando está activa, Parchís Pop utiliza Google Firebase Analytics
+para comprender cómo se usa el juego y mejorar su diseño. Los eventos pueden
+indicar si una partida comenzó online o contra CPU, el modo seleccionado y la
+dificultad. El juego no incluye intencionalmente tu nombre visible, correo,
+mensajes, bandera ni avatar en estos eventos de analíticas.
 
 Google puede procesar información técnica, como identificadores del dispositivo,
 información de la instancia de la aplicación, ubicación aproximada derivada de
@@ -158,9 +162,9 @@ Las versiones de Android e iOS utilizan Google AdMob:
 
 - pueden mostrar anuncios adaptables únicamente fuera de la partida, la guía
   del juego y la búsqueda de jugadores; y
-- pueden ofrecer anuncios recompensados voluntarios en la tienda y después de
-  que termine la mesa completa. La recompensa se entrega únicamente después de
-  completar el anuncio.
+- pueden ofrecer un anuncio recompensado voluntario después de que termine la
+  mesa completa para duplicar una recompensa de partida elegible. La recompensa
+  se entrega únicamente después de completar el anuncio.
 
 Reanudar, Jugar otra vez y Volver al inicio nunca abren un anuncio.
 
