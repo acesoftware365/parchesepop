@@ -446,6 +446,135 @@ void main() {
       await tester.pumpWidget(const SizedBox.shrink());
     });
 
+    testWidgets(
+      'iPhone final results keep Back to Home visible above the banner',
+      (tester) async {
+        _configureIPhone14View(tester);
+        final engine = _completedMatch();
+        final ads = _FakeAdsController(
+          supported: true,
+          adsReady: true,
+          rewardedReady: true,
+        );
+        addTearDown(engine.dispose);
+        addTearDown(ads.dispose);
+
+        await tester.pumpWidget(
+          MobileAdsScope(
+            controller: ads,
+            child: MaterialApp(
+              builder: (context, child) => MobileAdShell(
+                controller: ads,
+                child: child ?? const SizedBox.shrink(),
+              ),
+              home: GameScreen(opponent: 'CPU • Fácil', gameEngine: engine),
+              routes: {
+                '/home': (_) => const Scaffold(
+                  body: SizedBox(key: ValueKey('home-route-marker')),
+                ),
+              },
+            ),
+          ),
+        );
+        await tester.pump(const Duration(milliseconds: 1900));
+
+        final celebration = find.byKey(const ValueKey('victory-celebration'));
+        final home = find.byKey(const ValueKey('victory-home'));
+        final version = find.byKey(const ValueKey('version-above-ad-banner'));
+        expect(celebration, findsOneWidget);
+        expect(find.byKey(const ValueKey('final-ranking')), findsOneWidget);
+        expect(
+          find.byKey(const ValueKey('fake-mobile-banner')),
+          findsOneWidget,
+        );
+        expect(home.hitTestable(), findsOneWidget);
+        expect(tester.getRect(home).height, greaterThanOrEqualTo(44));
+        expect(
+          tester.getRect(home).bottom,
+          lessThanOrEqualTo(tester.getRect(version).top),
+        );
+
+        final scrollable = find.descendant(
+          of: celebration,
+          matching: find.byType(Scrollable),
+        );
+        expect(scrollable, findsOneWidget);
+        final scrollState = tester.state<ScrollableState>(scrollable);
+        expect(scrollState.position.pixels, 0);
+        expect(scrollState.position.maxScrollExtent, 0);
+
+        await tester.tap(home);
+        await tester.pump();
+        await tester.pump(const Duration(seconds: 1));
+
+        expect(ads.rewardedShowCount, 0);
+        expect(find.byKey(const ValueKey('home-route-marker')), findsOneWidget);
+        expect(find.byType(GameScreen), findsNothing);
+
+        await tester.pumpWidget(const SizedBox.shrink());
+      },
+    );
+
+    testWidgets(
+      'iPhone first-place result keeps every action visible without scrolling',
+      (tester) async {
+        _configureIPhone14View(tester);
+        final engine = _firstWinnerMatch();
+        final ads = _FakeAdsController(
+          supported: true,
+          adsReady: true,
+          rewardedReady: true,
+        );
+        addTearDown(engine.dispose);
+        addTearDown(ads.dispose);
+
+        await tester.pumpWidget(
+          MobileAdsScope(
+            controller: ads,
+            child: MaterialApp(
+              builder: (context, child) => MobileAdShell(
+                controller: ads,
+                child: child ?? const SizedBox.shrink(),
+              ),
+              home: GameScreen(opponent: 'CPU • Fácil', gameEngine: engine),
+            ),
+          ),
+        );
+        await tester.pump(const Duration(milliseconds: 1900));
+
+        final celebration = find.byKey(const ValueKey('victory-celebration'));
+        final version = find.byKey(const ValueKey('version-above-ad-banner'));
+        expect(
+          find.byKey(const ValueKey('victory-action-dock')),
+          findsOneWidget,
+        );
+        for (final key in const [
+          ValueKey('victory-continue-watching'),
+          ValueKey('victory-play-again'),
+          ValueKey('victory-home'),
+        ]) {
+          final action = find.byKey(key);
+          expect(action.hitTestable(), findsOneWidget);
+          expect(tester.getRect(action).height, greaterThanOrEqualTo(44));
+          expect(
+            tester.getRect(action).bottom,
+            lessThanOrEqualTo(tester.getRect(version).top),
+          );
+        }
+
+        final scrollable = find.descendant(
+          of: celebration,
+          matching: find.byType(Scrollable),
+        );
+        expect(scrollable, findsOneWidget);
+        final scrollState = tester.state<ScrollableState>(scrollable);
+        expect(scrollState.position.pixels, 0);
+        expect(scrollState.position.maxScrollExtent, 0);
+
+        await tester.pumpWidget(const SizedBox.shrink());
+      },
+    );
+
     testWidgets('desktop/no-op hosts navigate without requesting a reward', (
       tester,
     ) async {
@@ -888,6 +1017,14 @@ GameEngine _finishedVictoryEngine() {
     ..gameOver = true
     ..hasRolled = false
     ..remainingDice.clear();
+  return engine;
+}
+
+GameEngine _firstWinnerMatch() {
+  final engine = GameEngine();
+  _putCurrentPlayerOneMoveFromFinishing(engine);
+  expect(engine.moveToken(engine.currentPlayer.tokens.last, die: 1), isTrue);
+  expect(engine.canContinueAfterWinner, isTrue);
   return engine;
 }
 

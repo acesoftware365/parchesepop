@@ -10214,6 +10214,120 @@ class _VictoryCelebrationState extends State<_VictoryCelebration>
     );
   }
 
+  Widget _buildVictoryActions(BuildContext context, {required bool compact}) {
+    final compactPlayAgainLabel = appLanguageCodeOf(context) == 'en'
+        ? 'PLAY AGAIN'
+        : 'OTRA VEZ';
+    final compactHomeLabel = appLanguageCodeOf(context) == 'en'
+        ? 'HOME'
+        : 'INICIO';
+    final buttonHeight = compact ? 48.0 : 0.0;
+
+    Widget playAgainButton() => Semantics(
+      label: appTranslate(context, 'JUGAR OTRA VEZ'),
+      button: true,
+      enabled: !widget.navigationInProgress,
+      onTap: widget.navigationInProgress ? null : widget.onPlayAgain,
+      excludeSemantics: true,
+      child: FilledButton.icon(
+        key: const ValueKey('victory-play-again'),
+        onPressed: widget.navigationInProgress ? null : widget.onPlayAgain,
+        style: FilledButton.styleFrom(
+          backgroundColor: PopColors.blue,
+          foregroundColor: Colors.white,
+          minimumSize: compact ? Size(0, buttonHeight) : null,
+          padding: EdgeInsets.symmetric(vertical: compact ? 12 : 16),
+        ),
+        icon: Icon(Icons.replay_rounded, size: compact ? 20 : 24),
+        label: FittedBox(
+          fit: BoxFit.scaleDown,
+          child: PopText(compact ? compactPlayAgainLabel : 'JUGAR OTRA VEZ'),
+        ),
+      ),
+    );
+
+    Widget homeButton() => Semantics(
+      label: appTranslate(context, 'VOLVER AL INICIO'),
+      button: true,
+      enabled: !widget.navigationInProgress,
+      onTap: widget.navigationInProgress ? null : widget.onHome,
+      excludeSemantics: true,
+      child: OutlinedButton.icon(
+        key: const ValueKey('victory-home'),
+        onPressed: widget.navigationInProgress ? null : widget.onHome,
+        style: OutlinedButton.styleFrom(
+          foregroundColor: PopColors.navy,
+          minimumSize: compact ? Size(0, buttonHeight) : null,
+          padding: EdgeInsets.symmetric(vertical: compact ? 12 : 14),
+          side: BorderSide(
+            color: PopColors.navy.withValues(alpha: .24),
+            width: 1.5,
+          ),
+        ),
+        icon: Icon(Icons.home_rounded, size: compact ? 20 : 24),
+        label: FittedBox(
+          fit: BoxFit.scaleDown,
+          child: PopText(compact ? compactHomeLabel : 'VOLVER AL INICIO'),
+        ),
+      ),
+    );
+
+    final continueWatching = widget.onContinueWatching == null
+        ? null
+        : SizedBox(
+            width: double.infinity,
+            child: FilledButton.icon(
+              key: const ValueKey('victory-continue-watching'),
+              onPressed: widget.navigationInProgress
+                  ? null
+                  : widget.onContinueWatching,
+              style: FilledButton.styleFrom(
+                backgroundColor: PopColors.green,
+                foregroundColor: Colors.white,
+                minimumSize: compact ? Size(0, buttonHeight) : null,
+                padding: EdgeInsets.symmetric(vertical: compact ? 12 : 15),
+              ),
+              icon: Icon(Icons.visibility_rounded, size: compact ? 20 : 24),
+              label: const FittedBox(
+                fit: BoxFit.scaleDown,
+                child: PopText('SEGUIR VIENDO LA PARTIDA'),
+              ),
+            ),
+          );
+
+    if (compact) {
+      return Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          if (continueWatching != null) ...[
+            continueWatching,
+            const SizedBox(height: 8),
+          ],
+          Row(
+            children: [
+              Expanded(child: playAgainButton()),
+              const SizedBox(width: 8),
+              Expanded(child: homeButton()),
+            ],
+          ),
+        ],
+      );
+    }
+
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        if (continueWatching != null) ...[
+          continueWatching,
+          const SizedBox(height: 9),
+        ],
+        SizedBox(width: double.infinity, child: playAgainButton()),
+        const SizedBox(height: 9),
+        SizedBox(width: double.infinity, child: homeButton()),
+      ],
+    );
+  }
+
   @override
   void initState() {
     super.initState();
@@ -10278,518 +10392,478 @@ class _VictoryCelebrationState extends State<_VictoryCelebration>
             final scale =
                 .72 +
                 Curves.elasticOut.transform(entranceController.value) * .28;
-            return Stack(
-              key: const ValueKey('victory-celebration'),
-              children: [
-                Positioned.fill(
-                  child: ColoredBox(
-                    color: PopColors.navy.withValues(alpha: .88 * fade),
-                  ),
-                ),
-                Positioned.fill(
-                  child: IgnorePointer(
-                    child: CustomPaint(
-                      painter: _ConfettiPainter(
-                        progress: confettiController.value,
+            return LayoutBuilder(
+              builder: (context, viewport) {
+                final pinActions =
+                    viewport.maxWidth <= 600 && viewport.maxHeight < 820;
+                final actionDockHeight = widget.onContinueWatching == null
+                    ? 68.0
+                    : 124.0;
+                return Stack(
+                  key: const ValueKey('victory-celebration'),
+                  children: [
+                    Positioned.fill(
+                      child: ColoredBox(
+                        color: PopColors.navy.withValues(alpha: .88 * fade),
                       ),
                     ),
-                  ),
-                ),
-                Positioned.fill(
-                  child: SingleChildScrollView(
-                    padding: const EdgeInsets.symmetric(
-                      horizontal: 20,
-                      vertical: 24,
-                    ),
-                    child: ConstrainedBox(
-                      constraints: BoxConstraints(
-                        minHeight: math.max(
-                          0.0,
-                          MediaQuery.sizeOf(context).height - 96,
+                    Positioned.fill(
+                      child: IgnorePointer(
+                        child: CustomPaint(
+                          painter: _ConfettiPainter(
+                            progress: confettiController.value,
+                          ),
                         ),
                       ),
-                      child: Center(
-                        child: Opacity(
-                          opacity: fade,
-                          child: Transform.scale(
-                            scale: scale,
-                            child: ConstrainedBox(
-                              constraints: const BoxConstraints(maxWidth: 460),
-                              child: Container(
-                                key: const ValueKey('victory-card'),
-                                padding: const EdgeInsets.fromLTRB(
-                                  24,
-                                  22,
-                                  24,
-                                  24,
-                                ),
-                                decoration: BoxDecoration(
-                                  gradient: const LinearGradient(
-                                    begin: Alignment.topLeft,
-                                    end: Alignment.bottomRight,
-                                    colors: [
-                                      Color(0xFFFFFFFF),
-                                      Color(0xFFFFF8DC),
-                                      Color(0xFFF1F7FF),
-                                    ],
+                    ),
+                    Positioned.fill(
+                      child: SingleChildScrollView(
+                        padding: EdgeInsets.fromLTRB(
+                          20,
+                          pinActions ? 12 : 24,
+                          20,
+                          pinActions ? actionDockHeight + 28 : 24,
+                        ),
+                        child: ConstrainedBox(
+                          constraints: BoxConstraints(
+                            minHeight: math.max(
+                              0.0,
+                              viewport.maxHeight -
+                                  (pinActions ? actionDockHeight + 40 : 48),
+                            ),
+                          ),
+                          child: Center(
+                            child: Opacity(
+                              opacity: fade,
+                              child: Transform.scale(
+                                scale: scale,
+                                child: ConstrainedBox(
+                                  constraints: const BoxConstraints(
+                                    maxWidth: 460,
                                   ),
-                                  borderRadius: BorderRadius.circular(34),
-                                  border: Border.all(
-                                    color: Colors.white,
-                                    width: 4,
-                                  ),
-                                  boxShadow: [
-                                    BoxShadow(
-                                      color: Colors.black.withValues(
-                                        alpha: .32,
-                                      ),
-                                      blurRadius: 34,
-                                      offset: const Offset(0, 18),
+                                  child: Container(
+                                    key: const ValueKey('victory-card'),
+                                    padding: EdgeInsets.fromLTRB(
+                                      pinActions ? 16 : 24,
+                                      pinActions ? 14 : 22,
+                                      pinActions ? 16 : 24,
+                                      pinActions ? 16 : 24,
                                     ),
-                                    BoxShadow(
-                                      color: PopColors.yellow.withValues(
-                                        alpha: .36,
+                                    decoration: BoxDecoration(
+                                      gradient: const LinearGradient(
+                                        begin: Alignment.topLeft,
+                                        end: Alignment.bottomRight,
+                                        colors: [
+                                          Color(0xFFFFFFFF),
+                                          Color(0xFFFFF8DC),
+                                          Color(0xFFF1F7FF),
+                                        ],
                                       ),
-                                      blurRadius: 28,
-                                      spreadRadius: 3,
-                                    ),
-                                  ],
-                                ),
-                                child: Column(
-                                  mainAxisSize: MainAxisSize.min,
-                                  children: [
-                                    Transform.rotate(
-                                      angle:
-                                          math.sin(
-                                            confettiController.value *
-                                                math.pi *
-                                                2,
-                                          ) *
-                                          .035,
-                                      child: Container(
-                                        width: 92,
-                                        height: 92,
-                                        decoration: BoxDecoration(
-                                          shape: BoxShape.circle,
-                                          gradient: const LinearGradient(
-                                            begin: Alignment.topLeft,
-                                            end: Alignment.bottomRight,
-                                            colors: [
-                                              Color(0xFFFFE56A),
-                                              Color(0xFFFFB514),
-                                              Color(0xFFFF8A24),
-                                            ],
-                                          ),
-                                          border: Border.all(
-                                            color: Colors.white,
-                                            width: 5,
-                                          ),
-                                          boxShadow: [
-                                            BoxShadow(
-                                              color: PopColors.yellow
-                                                  .withValues(alpha: .55),
-                                              blurRadius: 22,
-                                              offset: const Offset(0, 9),
-                                            ),
-                                          ],
-                                        ),
-                                        child: const Icon(
-                                          Icons.emoji_events_rounded,
-                                          color: Colors.white,
-                                          size: 54,
-                                        ),
+                                      borderRadius: BorderRadius.circular(34),
+                                      border: Border.all(
+                                        color: Colors.white,
+                                        width: 4,
                                       ),
-                                    ),
-                                    const SizedBox(height: 14),
-                                    PopText(
-                                      title,
-                                      key: const ValueKey('victory-title'),
-                                      textAlign: TextAlign.center,
-                                      style: TextStyle(
-                                        color:
-                                            widget.standingsComplete || humanWon
-                                            ? PopColors.navy
-                                            : winnerColor,
-                                        fontSize: 34,
-                                        height: 1,
-                                        fontWeight: FontWeight.w900,
-                                        letterSpacing: .3,
-                                      ),
-                                    ),
-                                    const SizedBox(height: 12),
-                                    if (widget.standingsComplete) ...[
-                                      const PopText(
-                                        'La partida terminó. Estos son los resultados.',
-                                        textAlign: TextAlign.center,
-                                        style: TextStyle(
-                                          color: Color(0xFF526078),
-                                          fontSize: 15,
-                                          height: 1.25,
-                                          fontWeight: FontWeight.w700,
+                                      boxShadow: [
+                                        BoxShadow(
+                                          color: Colors.black.withValues(
+                                            alpha: .32,
+                                          ),
+                                          blurRadius: 34,
+                                          offset: const Offset(0, 18),
                                         ),
-                                      ),
-                                      const SizedBox(height: 16),
-                                      _FinalRanking(entries: widget.standings),
-                                      const SizedBox(height: 12),
-                                      if (widget.rewardCoins > 0) ...[
-                                        Container(
-                                          key: const ValueKey(
-                                            'victory-earned-reward',
+                                        BoxShadow(
+                                          color: PopColors.yellow.withValues(
+                                            alpha: .36,
                                           ),
-                                          width: double.infinity,
-                                          padding: const EdgeInsets.symmetric(
-                                            vertical: 11,
-                                            horizontal: 14,
-                                          ),
-                                          decoration: BoxDecoration(
-                                            color: PopColors.yellow.withValues(
-                                              alpha: .22,
-                                            ),
-                                            borderRadius: BorderRadius.circular(
-                                              16,
-                                            ),
-                                            border: Border.all(
-                                              color: PopColors.yellow,
-                                            ),
-                                          ),
-                                          child: PopText(
-                                            '+${widget.rewardCoins} MONEDAS POR JUGAR',
-                                            textAlign: TextAlign.center,
-                                            style: const TextStyle(
-                                              color: PopColors.navy,
-                                              fontSize: 13,
-                                              fontWeight: FontWeight.w900,
-                                            ),
-                                          ),
+                                          blurRadius: 28,
+                                          spreadRadius: 3,
                                         ),
-                                        const SizedBox(height: 10),
                                       ],
-                                      if (widget.onWatchRewarded != null)
-                                        SizedBox(
-                                          width: double.infinity,
-                                          child: FilledButton.icon(
-                                            key: const ValueKey(
-                                              'victory-rewarded-ad',
+                                    ),
+                                    child: Column(
+                                      mainAxisSize: MainAxisSize.min,
+                                      children: [
+                                        Transform.rotate(
+                                          angle:
+                                              math.sin(
+                                                confettiController.value *
+                                                    math.pi *
+                                                    2,
+                                              ) *
+                                              .035,
+                                          child: Container(
+                                            width: pinActions ? 58 : 92,
+                                            height: pinActions ? 58 : 92,
+                                            decoration: BoxDecoration(
+                                              shape: BoxShape.circle,
+                                              gradient: const LinearGradient(
+                                                begin: Alignment.topLeft,
+                                                end: Alignment.bottomRight,
+                                                colors: [
+                                                  Color(0xFFFFE56A),
+                                                  Color(0xFFFFB514),
+                                                  Color(0xFFFF8A24),
+                                                ],
+                                              ),
+                                              border: Border.all(
+                                                color: Colors.white,
+                                                width: pinActions ? 4 : 5,
+                                              ),
+                                              boxShadow: [
+                                                BoxShadow(
+                                                  color: PopColors.yellow
+                                                      .withValues(alpha: .55),
+                                                  blurRadius: 22,
+                                                  offset: const Offset(0, 9),
+                                                ),
+                                              ],
                                             ),
-                                            onPressed: widget.rewardInProgress
-                                                ? null
-                                                : widget.onWatchRewarded,
-                                            style: FilledButton.styleFrom(
-                                              backgroundColor: PopColors.green,
-                                              foregroundColor: Colors.white,
+                                            child: Icon(
+                                              Icons.emoji_events_rounded,
+                                              color: Colors.white,
+                                              size: pinActions ? 34 : 54,
+                                            ),
+                                          ),
+                                        ),
+                                        SizedBox(height: pinActions ? 8 : 14),
+                                        PopText(
+                                          title,
+                                          key: const ValueKey('victory-title'),
+                                          textAlign: TextAlign.center,
+                                          style: TextStyle(
+                                            color:
+                                                widget.standingsComplete ||
+                                                    humanWon
+                                                ? PopColors.navy
+                                                : winnerColor,
+                                            fontSize: pinActions ? 28 : 34,
+                                            height: 1,
+                                            fontWeight: FontWeight.w900,
+                                            letterSpacing: .3,
+                                          ),
+                                        ),
+                                        SizedBox(height: pinActions ? 8 : 12),
+                                        if (widget.standingsComplete) ...[
+                                          PopText(
+                                            'La partida terminó. Estos son los resultados.',
+                                            textAlign: TextAlign.center,
+                                            style: TextStyle(
+                                              color: const Color(0xFF526078),
+                                              fontSize: pinActions ? 13 : 15,
+                                              height: 1.25,
+                                              fontWeight: FontWeight.w700,
+                                            ),
+                                          ),
+                                          SizedBox(
+                                            height: pinActions ? 10 : 16,
+                                          ),
+                                          _FinalRanking(
+                                            entries: widget.standings,
+                                            compact: pinActions,
+                                          ),
+                                          SizedBox(height: pinActions ? 8 : 12),
+                                          if (widget.rewardCoins > 0) ...[
+                                            Container(
+                                              key: const ValueKey(
+                                                'victory-earned-reward',
+                                              ),
+                                              width: double.infinity,
                                               padding:
                                                   const EdgeInsets.symmetric(
-                                                    vertical: 13,
+                                                    vertical: 11,
+                                                    horizontal: 14,
                                                   ),
-                                            ),
-                                            icon: widget.rewardInProgress
-                                                ? const SizedBox.square(
-                                                    dimension: 18,
-                                                    child:
-                                                        CircularProgressIndicator(
-                                                          strokeWidth: 2,
-                                                          color: Colors.white,
-                                                        ),
-                                                  )
-                                                : const Icon(
-                                                    Icons
-                                                        .play_circle_fill_rounded,
-                                                  ),
-                                            label: PopText(
-                                              widget.rewardInProgress
-                                                  ? 'CARGANDO ANUNCIO…'
-                                                  : 'VER ANUNCIO · DUPLICAR\n'
-                                                        '+${widget.doubleRewardCoins} MONEDAS',
-                                              textAlign: TextAlign.center,
-                                              style: const TextStyle(
-                                                fontSize: 12,
-                                                height: 1.05,
-                                                fontWeight: FontWeight.w900,
+                                              decoration: BoxDecoration(
+                                                color: PopColors.yellow
+                                                    .withValues(alpha: .22),
+                                                borderRadius:
+                                                    BorderRadius.circular(16),
+                                                border: Border.all(
+                                                  color: PopColors.yellow,
+                                                ),
+                                              ),
+                                              child: PopText(
+                                                '+${widget.rewardCoins} MONEDAS POR JUGAR',
+                                                textAlign: TextAlign.center,
+                                                style: const TextStyle(
+                                                  color: PopColors.navy,
+                                                  fontSize: 13,
+                                                  fontWeight: FontWeight.w900,
+                                                ),
                                               ),
                                             ),
-                                          ),
-                                        )
-                                      else if (widget.rewardClaimed)
-                                        Container(
-                                          width: double.infinity,
-                                          padding: const EdgeInsets.symmetric(
-                                            vertical: 12,
-                                            horizontal: 14,
-                                          ),
-                                          decoration: BoxDecoration(
-                                            color: PopColors.green.withValues(
-                                              alpha: .12,
-                                            ),
-                                            borderRadius: BorderRadius.circular(
-                                              16,
-                                            ),
-                                          ),
-                                          child: Row(
-                                            mainAxisAlignment:
-                                                MainAxisAlignment.center,
-                                            children: [
-                                              const Icon(
-                                                Icons.check_circle_rounded,
-                                                color: PopColors.green,
-                                                size: 18,
-                                              ),
-                                              const SizedBox(width: 7),
-                                              Flexible(
-                                                child: PopText(
-                                                  '+${widget.doubleRewardCoins} MONEDAS DUPLICADAS',
+                                            const SizedBox(height: 10),
+                                          ],
+                                          if (widget.onWatchRewarded != null)
+                                            SizedBox(
+                                              width: double.infinity,
+                                              child: FilledButton.icon(
+                                                key: const ValueKey(
+                                                  'victory-rewarded-ad',
+                                                ),
+                                                onPressed:
+                                                    widget.rewardInProgress
+                                                    ? null
+                                                    : widget.onWatchRewarded,
+                                                style: FilledButton.styleFrom(
+                                                  backgroundColor:
+                                                      PopColors.green,
+                                                  foregroundColor: Colors.white,
+                                                  padding:
+                                                      const EdgeInsets.symmetric(
+                                                        vertical: 13,
+                                                      ),
+                                                ),
+                                                icon: widget.rewardInProgress
+                                                    ? const SizedBox.square(
+                                                        dimension: 18,
+                                                        child:
+                                                            CircularProgressIndicator(
+                                                              strokeWidth: 2,
+                                                              color:
+                                                                  Colors.white,
+                                                            ),
+                                                      )
+                                                    : const Icon(
+                                                        Icons
+                                                            .play_circle_fill_rounded,
+                                                      ),
+                                                label: PopText(
+                                                  widget.rewardInProgress
+                                                      ? 'CARGANDO ANUNCIO…'
+                                                      : 'VER ANUNCIO · DUPLICAR\n'
+                                                            '+${widget.doubleRewardCoins} MONEDAS',
                                                   textAlign: TextAlign.center,
                                                   style: const TextStyle(
+                                                    fontSize: 12,
+                                                    height: 1.05,
+                                                    fontWeight: FontWeight.w900,
+                                                  ),
+                                                ),
+                                              ),
+                                            )
+                                          else if (widget.rewardClaimed)
+                                            Container(
+                                              width: double.infinity,
+                                              padding:
+                                                  const EdgeInsets.symmetric(
+                                                    vertical: 12,
+                                                    horizontal: 14,
+                                                  ),
+                                              decoration: BoxDecoration(
+                                                color: PopColors.green
+                                                    .withValues(alpha: .12),
+                                                borderRadius:
+                                                    BorderRadius.circular(16),
+                                              ),
+                                              child: Row(
+                                                mainAxisAlignment:
+                                                    MainAxisAlignment.center,
+                                                children: [
+                                                  const Icon(
+                                                    Icons.check_circle_rounded,
+                                                    color: PopColors.green,
+                                                    size: 18,
+                                                  ),
+                                                  const SizedBox(width: 7),
+                                                  Flexible(
+                                                    child: PopText(
+                                                      '+${widget.doubleRewardCoins} MONEDAS DUPLICADAS',
+                                                      textAlign:
+                                                          TextAlign.center,
+                                                      style: const TextStyle(
+                                                        color: PopColors.green,
+                                                        fontSize: 12,
+                                                        fontWeight:
+                                                            FontWeight.w900,
+                                                      ),
+                                                    ),
+                                                  ),
+                                                ],
+                                              ),
+                                            ),
+                                          const SizedBox(height: 10),
+                                        ] else ...[
+                                          Container(
+                                            padding: const EdgeInsets.symmetric(
+                                              horizontal: 16,
+                                              vertical: 9,
+                                            ),
+                                            decoration: BoxDecoration(
+                                              color: winnerColor,
+                                              borderRadius:
+                                                  BorderRadius.circular(22),
+                                              boxShadow: [
+                                                BoxShadow(
+                                                  color: winnerColor.withValues(
+                                                    alpha: .30,
+                                                  ),
+                                                  blurRadius: 10,
+                                                  offset: const Offset(0, 5),
+                                                ),
+                                              ],
+                                            ),
+                                            child: Row(
+                                              mainAxisSize: MainAxisSize.min,
+                                              children: [
+                                                if (winnerStanding?.avatarId
+                                                    case final avatarId?)
+                                                  _AvatarArt(
+                                                    avatarId: avatarId,
+                                                    size: 24,
+                                                    withFrame: false,
+                                                  )
+                                                else
+                                                  Icon(
+                                                    humanWon
+                                                        ? Icons.star_rounded
+                                                        : Icons
+                                                              .smart_toy_rounded,
+                                                    color: Colors.white,
+                                                    size: 20,
+                                                  ),
+                                                const SizedBox(width: 7),
+                                                Flexible(
+                                                  child: PopText(
+                                                    winnerLabel,
+                                                    key: const ValueKey(
+                                                      'victory-winner',
+                                                    ),
+                                                    textAlign: TextAlign.center,
+                                                    style: const TextStyle(
+                                                      color: Colors.white,
+                                                      fontSize: 14,
+                                                      fontWeight:
+                                                          FontWeight.w900,
+                                                      letterSpacing: .3,
+                                                    ),
+                                                  ),
+                                                ),
+                                              ],
+                                            ),
+                                          ),
+                                          const SizedBox(height: 13),
+                                          PopText(
+                                            description,
+                                            textAlign: TextAlign.center,
+                                            style: const TextStyle(
+                                              color: Color(0xFF526078),
+                                              fontSize: 15,
+                                              height: 1.25,
+                                              fontWeight: FontWeight.w700,
+                                            ),
+                                          ),
+                                          const SizedBox(height: 14),
+                                          Wrap(
+                                            alignment: WrapAlignment.center,
+                                            spacing: 8,
+                                            runSpacing: 8,
+                                            children: [
+                                              _VictoryStat(
+                                                icon: Icons.flag_rounded,
+                                                label:
+                                                    widget.matchFormat ==
+                                                        MatchFormat.quickPop
+                                                    ? '2 / 2 EN META'
+                                                    : '4 / 4 EN META',
+                                                color: winnerColor,
+                                              ),
+                                              _VictoryStat(
+                                                icon:
+                                                    widget.mode ==
+                                                        GameMode.chaos
+                                                    ? Icons.bolt_rounded
+                                                    : Icons
+                                                          .workspace_premium_rounded,
+                                                label:
+                                                    widget.matchFormat ==
+                                                        MatchFormat.quickPop
+                                                    ? 'QUICK POP'
+                                                    : widget.mode ==
+                                                          GameMode.chaos
+                                                    ? 'MODO CAOS'
+                                                    : 'TRADICIONAL',
+                                                color:
+                                                    widget.mode ==
+                                                        GameMode.chaos
+                                                    ? const Color(0xFF7B61FF)
+                                                    : PopColors.yellow,
+                                              ),
+                                              _VictoryStat(
+                                                icon: Icons.timer_outlined,
+                                                label:
+                                                    '${appTranslate(context, 'TIEMPO')} '
+                                                    '${_formatMatchDuration(widget.elapsed)}',
+                                                color: PopColors.blue,
+                                              ),
+                                              if (winnerStanding
+                                                  case final standing?)
+                                                if (standing.level != null)
+                                                  _VictoryStat(
+                                                    icon: Icons
+                                                        .military_tech_rounded,
+                                                    label:
+                                                        '${standing.flag ?? ''}  '
+                                                        'NIVEL ${standing.level}',
+                                                    color: winnerColor,
+                                                  ),
+                                            ],
+                                          ),
+                                          const SizedBox(height: 16),
+                                          Container(
+                                            width: double.infinity,
+                                            padding: const EdgeInsets.symmetric(
+                                              horizontal: 14,
+                                              vertical: 11,
+                                            ),
+                                            decoration: BoxDecoration(
+                                              color: PopColors.green.withValues(
+                                                alpha: .10,
+                                              ),
+                                              borderRadius:
+                                                  BorderRadius.circular(18),
+                                              border: Border.all(
+                                                color: PopColors.green
+                                                    .withValues(alpha: .28),
+                                              ),
+                                            ),
+                                            child: const Column(
+                                              children: [
+                                                PopText(
+                                                  'PARTIDA EN PAUSA',
+                                                  style: TextStyle(
                                                     color: PopColors.green,
                                                     fontSize: 12,
                                                     fontWeight: FontWeight.w900,
                                                   ),
                                                 ),
-                                              ),
-                                            ],
-                                          ),
-                                        ),
-                                      const SizedBox(height: 10),
-                                    ] else ...[
-                                      Container(
-                                        padding: const EdgeInsets.symmetric(
-                                          horizontal: 16,
-                                          vertical: 9,
-                                        ),
-                                        decoration: BoxDecoration(
-                                          color: winnerColor,
-                                          borderRadius: BorderRadius.circular(
-                                            22,
-                                          ),
-                                          boxShadow: [
-                                            BoxShadow(
-                                              color: winnerColor.withValues(
-                                                alpha: .30,
-                                              ),
-                                              blurRadius: 10,
-                                              offset: const Offset(0, 5),
-                                            ),
-                                          ],
-                                        ),
-                                        child: Row(
-                                          mainAxisSize: MainAxisSize.min,
-                                          children: [
-                                            if (winnerStanding?.avatarId
-                                                case final avatarId?)
-                                              _AvatarArt(
-                                                avatarId: avatarId,
-                                                size: 24,
-                                                withFrame: false,
-                                              )
-                                            else
-                                              Icon(
-                                                humanWon
-                                                    ? Icons.star_rounded
-                                                    : Icons.smart_toy_rounded,
-                                                color: Colors.white,
-                                                size: 20,
-                                              ),
-                                            const SizedBox(width: 7),
-                                            Flexible(
-                                              child: PopText(
-                                                winnerLabel,
-                                                key: const ValueKey(
-                                                  'victory-winner',
+                                                SizedBox(height: 3),
+                                                PopText(
+                                                  'Los demás jugadores siguen compitiendo por su posición.',
+                                                  textAlign: TextAlign.center,
+                                                  style: TextStyle(
+                                                    color: Color(0xFF526078),
+                                                    fontSize: 12,
+                                                    height: 1.2,
+                                                    fontWeight: FontWeight.w700,
+                                                  ),
                                                 ),
-                                                textAlign: TextAlign.center,
-                                                style: const TextStyle(
-                                                  color: Colors.white,
-                                                  fontSize: 14,
-                                                  fontWeight: FontWeight.w900,
-                                                  letterSpacing: .3,
-                                                ),
-                                              ),
+                                              ],
                                             ),
-                                          ],
-                                        ),
-                                      ),
-                                      const SizedBox(height: 13),
-                                      PopText(
-                                        description,
-                                        textAlign: TextAlign.center,
-                                        style: const TextStyle(
-                                          color: Color(0xFF526078),
-                                          fontSize: 15,
-                                          height: 1.25,
-                                          fontWeight: FontWeight.w700,
-                                        ),
-                                      ),
-                                      const SizedBox(height: 14),
-                                      Wrap(
-                                        alignment: WrapAlignment.center,
-                                        spacing: 8,
-                                        runSpacing: 8,
-                                        children: [
-                                          _VictoryStat(
-                                            icon: Icons.flag_rounded,
-                                            label:
-                                                widget.matchFormat ==
-                                                    MatchFormat.quickPop
-                                                ? '2 / 2 EN META'
-                                                : '4 / 4 EN META',
-                                            color: winnerColor,
                                           ),
-                                          _VictoryStat(
-                                            icon: widget.mode == GameMode.chaos
-                                                ? Icons.bolt_rounded
-                                                : Icons
-                                                      .workspace_premium_rounded,
-                                            label:
-                                                widget.matchFormat ==
-                                                    MatchFormat.quickPop
-                                                ? 'QUICK POP'
-                                                : widget.mode == GameMode.chaos
-                                                ? 'MODO CAOS'
-                                                : 'TRADICIONAL',
-                                            color: widget.mode == GameMode.chaos
-                                                ? const Color(0xFF7B61FF)
-                                                : PopColors.yellow,
-                                          ),
-                                          _VictoryStat(
-                                            icon: Icons.timer_outlined,
-                                            label:
-                                                '${appTranslate(context, 'TIEMPO')} '
-                                                '${_formatMatchDuration(widget.elapsed)}',
-                                            color: PopColors.blue,
-                                          ),
-                                          if (winnerStanding
-                                              case final standing?)
-                                            if (standing.level != null)
-                                              _VictoryStat(
-                                                icon:
-                                                    Icons.military_tech_rounded,
-                                                label:
-                                                    '${standing.flag ?? ''}  '
-                                                    'NIVEL ${standing.level}',
-                                                color: winnerColor,
-                                              ),
+                                          ?_buildEarlyRewardSummary(),
                                         ],
-                                      ),
-                                      const SizedBox(height: 16),
-                                      Container(
-                                        width: double.infinity,
-                                        padding: const EdgeInsets.symmetric(
-                                          horizontal: 14,
-                                          vertical: 11,
-                                        ),
-                                        decoration: BoxDecoration(
-                                          color: PopColors.green.withValues(
-                                            alpha: .10,
+                                        if (!pinActions) ...[
+                                          const SizedBox(height: 22),
+                                          _buildVictoryActions(
+                                            context,
+                                            compact: false,
                                           ),
-                                          borderRadius: BorderRadius.circular(
-                                            18,
-                                          ),
-                                          border: Border.all(
-                                            color: PopColors.green.withValues(
-                                              alpha: .28,
-                                            ),
-                                          ),
-                                        ),
-                                        child: const Column(
-                                          children: [
-                                            PopText(
-                                              'PARTIDA EN PAUSA',
-                                              style: TextStyle(
-                                                color: PopColors.green,
-                                                fontSize: 12,
-                                                fontWeight: FontWeight.w900,
-                                              ),
-                                            ),
-                                            SizedBox(height: 3),
-                                            PopText(
-                                              'Los demás jugadores siguen compitiendo por su posición.',
-                                              textAlign: TextAlign.center,
-                                              style: TextStyle(
-                                                color: Color(0xFF526078),
-                                                fontSize: 12,
-                                                height: 1.2,
-                                                fontWeight: FontWeight.w700,
-                                              ),
-                                            ),
-                                          ],
-                                        ),
-                                      ),
-                                      ?_buildEarlyRewardSummary(),
-                                    ],
-                                    const SizedBox(height: 22),
-                                    if (widget.onContinueWatching != null) ...[
-                                      SizedBox(
-                                        width: double.infinity,
-                                        child: FilledButton.icon(
-                                          key: const ValueKey(
-                                            'victory-continue-watching',
-                                          ),
-                                          onPressed: widget.navigationInProgress
-                                              ? null
-                                              : widget.onContinueWatching,
-                                          style: FilledButton.styleFrom(
-                                            backgroundColor: PopColors.green,
-                                            foregroundColor: Colors.white,
-                                            padding: const EdgeInsets.symmetric(
-                                              vertical: 15,
-                                            ),
-                                          ),
-                                          icon: const Icon(
-                                            Icons.visibility_rounded,
-                                          ),
-                                          label: const PopText(
-                                            'SEGUIR VIENDO LA PARTIDA',
-                                          ),
-                                        ),
-                                      ),
-                                      const SizedBox(height: 9),
-                                    ],
-                                    SizedBox(
-                                      width: double.infinity,
-                                      child: FilledButton.icon(
-                                        key: const ValueKey(
-                                          'victory-play-again',
-                                        ),
-                                        onPressed: widget.navigationInProgress
-                                            ? null
-                                            : widget.onPlayAgain,
-                                        style: FilledButton.styleFrom(
-                                          backgroundColor: PopColors.blue,
-                                          foregroundColor: Colors.white,
-                                          padding: const EdgeInsets.symmetric(
-                                            vertical: 16,
-                                          ),
-                                        ),
-                                        icon: const Icon(Icons.replay_rounded),
-                                        label: const PopText('JUGAR OTRA VEZ'),
-                                      ),
+                                        ],
+                                      ],
                                     ),
-                                    const SizedBox(height: 9),
-                                    SizedBox(
-                                      width: double.infinity,
-                                      child: OutlinedButton.icon(
-                                        key: const ValueKey('victory-home'),
-                                        onPressed: widget.navigationInProgress
-                                            ? null
-                                            : widget.onHome,
-                                        style: OutlinedButton.styleFrom(
-                                          foregroundColor: PopColors.navy,
-                                          padding: const EdgeInsets.symmetric(
-                                            vertical: 14,
-                                          ),
-                                          side: BorderSide(
-                                            color: PopColors.navy.withValues(
-                                              alpha: .24,
-                                            ),
-                                            width: 1.5,
-                                          ),
-                                        ),
-                                        icon: const Icon(Icons.home_rounded),
-                                        label: const PopText(
-                                          'VOLVER AL INICIO',
-                                        ),
-                                      ),
-                                    ),
-                                  ],
+                                  ),
                                 ),
                               ),
                             ),
@@ -10797,9 +10871,39 @@ class _VictoryCelebrationState extends State<_VictoryCelebration>
                         ),
                       ),
                     ),
-                  ),
-                ),
-              ],
+                    if (pinActions)
+                      Positioned(
+                        left: 20,
+                        right: 20,
+                        bottom: 12,
+                        child: Opacity(
+                          opacity: fade,
+                          child: Container(
+                            key: const ValueKey('victory-action-dock'),
+                            padding: const EdgeInsets.all(10),
+                            decoration: BoxDecoration(
+                              gradient: const LinearGradient(
+                                begin: Alignment.topLeft,
+                                end: Alignment.bottomRight,
+                                colors: [Color(0xFFFFFFFF), Color(0xFFFFF8DC)],
+                              ),
+                              borderRadius: BorderRadius.circular(24),
+                              border: Border.all(color: Colors.white, width: 3),
+                              boxShadow: [
+                                BoxShadow(
+                                  color: Colors.black.withValues(alpha: .28),
+                                  blurRadius: 22,
+                                  offset: const Offset(0, 10),
+                                ),
+                              ],
+                            ),
+                            child: _buildVictoryActions(context, compact: true),
+                          ),
+                        ),
+                      ),
+                  ],
+                );
+              },
             );
           },
         ),
@@ -10809,9 +10913,10 @@ class _VictoryCelebrationState extends State<_VictoryCelebration>
 }
 
 class _FinalRanking extends StatelessWidget {
-  const _FinalRanking({required this.entries});
+  const _FinalRanking({required this.entries, this.compact = false});
 
   final List<_FinalStandingEntry> entries;
+  final bool compact;
 
   @override
   Widget build(BuildContext context) {
@@ -10823,10 +10928,15 @@ class _FinalRanking extends StatelessWidget {
       child: Container(
         key: const ValueKey('final-ranking'),
         width: double.infinity,
-        padding: const EdgeInsets.fromLTRB(9, 9, 9, 10),
+        padding: EdgeInsets.fromLTRB(
+          compact ? 6 : 9,
+          compact ? 6 : 9,
+          compact ? 6 : 9,
+          compact ? 7 : 10,
+        ),
         decoration: BoxDecoration(
           color: PopColors.navy,
-          borderRadius: BorderRadius.circular(24),
+          borderRadius: BorderRadius.circular(compact ? 20 : 24),
           border: Border.all(color: Colors.white, width: 3),
           boxShadow: [
             BoxShadow(
@@ -10840,7 +10950,12 @@ class _FinalRanking extends StatelessWidget {
           mainAxisSize: MainAxisSize.min,
           children: [
             Padding(
-              padding: const EdgeInsets.fromLTRB(9, 2, 9, 8),
+              padding: EdgeInsets.fromLTRB(
+                compact ? 6 : 9,
+                compact ? 0 : 2,
+                compact ? 6 : 9,
+                compact ? 5 : 8,
+              ),
               child: Row(
                 children: [
                   const Icon(
@@ -10874,8 +10989,8 @@ class _FinalRanking extends StatelessWidget {
             ),
             for (final entry in sortedEntries)
               Padding(
-                padding: const EdgeInsets.only(bottom: 6),
-                child: _FinalRankingRow(entry: entry),
+                padding: EdgeInsets.only(bottom: compact ? 4 : 6),
+                child: _FinalRankingRow(entry: entry, compact: compact),
               ),
           ],
         ),
@@ -10885,9 +11000,10 @@ class _FinalRanking extends StatelessWidget {
 }
 
 class _FinalRankingRow extends StatelessWidget {
-  const _FinalRankingRow({required this.entry});
+  const _FinalRankingRow({required this.entry, required this.compact});
 
   final _FinalStandingEntry entry;
+  final bool compact;
 
   Color get medalColor => switch (entry.placement) {
     1 => const Color(0xFFFFBE24),
@@ -10923,8 +11039,13 @@ class _FinalRankingRow extends StatelessWidget {
           '${appTranslate(context, 'PUNTOS')}',
       child: Container(
         key: ValueKey('final-ranking-${entry.placement}'),
-        constraints: const BoxConstraints(minHeight: 58),
-        padding: const EdgeInsets.fromLTRB(8, 7, 10, 7),
+        constraints: BoxConstraints(minHeight: compact ? 46 : 58),
+        padding: EdgeInsets.fromLTRB(
+          compact ? 6 : 8,
+          compact ? 4 : 7,
+          compact ? 7 : 10,
+          compact ? 4 : 7,
+        ),
         decoration: BoxDecoration(
           gradient: LinearGradient(
             colors: [Colors.white, Color.lerp(Colors.white, playerColor, .10)!],
@@ -10947,8 +11068,8 @@ class _FinalRankingRow extends StatelessWidget {
         child: Row(
           children: [
             Container(
-              width: 36,
-              height: 36,
+              width: compact ? 30 : 36,
+              height: compact ? 30 : 36,
               alignment: Alignment.center,
               decoration: BoxDecoration(
                 color: medalColor,
@@ -10964,21 +11085,21 @@ class _FinalRankingRow extends StatelessWidget {
               ),
               child: PopText(
                 placementLabel,
-                style: const TextStyle(
+                style: TextStyle(
                   color: Colors.white,
-                  fontSize: 13,
+                  fontSize: compact ? 11 : 13,
                   fontWeight: FontWeight.w900,
                 ),
               ),
             ),
-            const SizedBox(width: 7),
+            SizedBox(width: compact ? 5 : 7),
             _AvatarArt(
               avatarId:
                   entry.avatarId ??
                   (entry.player.isHuman ? 'avatar_default' : 'avatar_robot'),
-              size: 38,
+              size: compact ? 31 : 38,
             ),
-            const SizedBox(width: 9),
+            SizedBox(width: compact ? 6 : 9),
             Expanded(
               child: Column(
                 mainAxisSize: MainAxisSize.min,
@@ -10996,9 +11117,9 @@ class _FinalRankingRow extends StatelessWidget {
                           if (flag != null && flag.isNotEmpty) flag,
                         ].join(' '),
                         maxLines: 1,
-                        style: const TextStyle(
+                        style: TextStyle(
                           color: PopColors.navy,
-                          fontSize: 15,
+                          fontSize: compact ? 13 : 15,
                           fontWeight: FontWeight.w900,
                         ),
                       ),
@@ -11009,7 +11130,7 @@ class _FinalRankingRow extends StatelessWidget {
                       'Nivel $level',
                       style: TextStyle(
                         color: playerColor,
-                        fontSize: 10,
+                        fontSize: compact ? 9 : 10,
                         fontWeight: FontWeight.w900,
                       ),
                     )
@@ -11018,18 +11139,21 @@ class _FinalRankingRow extends StatelessWidget {
                       entry.reachedGoal ? 'EN META' : 'ÚLTIMO LUGAR',
                       style: TextStyle(
                         color: playerColor,
-                        fontSize: 10,
+                        fontSize: compact ? 9 : 10,
                         fontWeight: FontWeight.w900,
                       ),
                     ),
                 ],
               ),
             ),
-            const SizedBox(width: 7),
+            SizedBox(width: compact ? 5 : 7),
             Container(
               key: ValueKey('final-ranking-points-${entry.placement}'),
-              constraints: const BoxConstraints(minWidth: 58),
-              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 7),
+              constraints: BoxConstraints(minWidth: compact ? 49 : 58),
+              padding: EdgeInsets.symmetric(
+                horizontal: compact ? 6 : 8,
+                vertical: compact ? 5 : 7,
+              ),
               decoration: BoxDecoration(
                 color: playerColor,
                 borderRadius: BorderRadius.circular(12),
@@ -11044,9 +11168,9 @@ class _FinalRankingRow extends StatelessWidget {
               child: PopText(
                 '${entry.points} PTS',
                 textAlign: TextAlign.center,
-                style: const TextStyle(
+                style: TextStyle(
                   color: Colors.white,
-                  fontSize: 12,
+                  fontSize: compact ? 10 : 12,
                   fontWeight: FontWeight.w900,
                 ),
               ),
