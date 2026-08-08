@@ -46,17 +46,18 @@ void main() {
   });
 
   testWidgets(
-    'iPhone 14 exposes eight featured products and every catalog category',
+    'iPhone 14 exposes visible featured products and every shop category',
     (tester) async {
       final wallet = await _pumpShop(tester);
       addTearDown(wallet.dispose);
       addTearDown(() => tester.binding.setSurfaceSize(null));
 
-      final featured = walletCatalog
+      final featured = shopCatalog
           .where((product) => product.featured)
           .toList(growable: false);
-      expect(walletCatalog, hasLength(33));
-      expect(featured, hasLength(8));
+      expect(walletCatalog, hasLength(37));
+      expect(shopCatalog, hasLength(32));
+      expect(featured, hasLength(9));
       expect(find.byType(Card), findsNWidgets(featured.length));
       for (final product in featured) {
         expect(
@@ -76,7 +77,7 @@ void main() {
 
       for (final entry in filters.entries) {
         await _selectShopFilter(tester, entry.value);
-        final products = walletCatalog
+        final products = shopCatalog
             .where((product) => product.category == entry.key)
             .toList(growable: false);
 
@@ -97,10 +98,7 @@ void main() {
         );
       }
 
-      expect(
-        seenProductIds,
-        walletCatalog.map((product) => product.id).toSet(),
-      );
+      expect(seenProductIds, shopCatalog.map((product) => product.id).toSet());
     },
   );
 
@@ -120,7 +118,7 @@ void main() {
         'Fichas' => CosmeticCategory.tokens,
         _ => CosmeticCategory.avatar,
       };
-      final products = walletCatalog.where(
+      final products = shopCatalog.where(
         (product) => product.category == category,
       );
 
@@ -145,11 +143,16 @@ void main() {
     addTearDown(() => tester.binding.setSurfaceSize(null));
     await _selectShopFilter(tester, 'Temas');
 
-    const productId = 'theme_tropical_splash';
+    const productId = 'theme_cosmic_realms_yellow';
     final previewButton = find.byKey(
       const ValueKey('shop-preview-button-$productId'),
     );
     expect(previewButton, findsOneWidget);
+    final compactBoard = find.byKey(
+      const ValueKey('shop-theme-board-$productId'),
+    );
+    expect(compactBoard, findsOneWidget);
+    final compactBoardSize = tester.getSize(compactBoard);
     await tester.tap(previewButton);
     await tester.pumpAndSettle();
 
@@ -165,6 +168,16 @@ void main() {
     expect(
       find.byKey(const ValueKey('shop-preview-action-$productId')),
       findsOneWidget,
+    );
+    final largeBoard = find.byKey(
+      const ValueKey('shop-theme-board-$productId-large'),
+    );
+    expect(largeBoard, findsOneWidget);
+    final largeBoardSize = tester.getSize(largeBoard);
+    expect(largeBoardSize.width, closeTo(largeBoardSize.height, .1));
+    expect(
+      largeBoardSize.shortestSide,
+      greaterThan(compactBoardSize.shortestSide),
     );
 
     await tester.tap(find.byIcon(Icons.close_rounded).last);
@@ -186,7 +199,7 @@ void main() {
       addTearDown(() => tester.binding.setSurfaceSize(null));
 
       final wallet = await WalletController.create(initialBalance: 10000);
-      const themeId = 'theme_tropical_splash';
+      const themeId = 'theme_cosmic_realms_blue';
       const diceId = 'dice_ocean_pearl';
       const tokenId = 'tokens_crystal';
       const avatarId = 'avatar_comet';
@@ -217,10 +230,24 @@ void main() {
       );
       final selectedTheme = themeVisualSpecFor(themeId);
 
-      expect(board.themeId, selectedTheme.id);
-      expect(themeVisualSpecFor(board.themeId), same(selectedTheme));
+      expect(board.resolvedPlayerThemeIds[PlayerColor.red], selectedTheme.id);
+      expect(
+        themeVisualSpecFor(board.resolvedPlayerThemeIds[PlayerColor.red]),
+        same(selectedTheme),
+      );
+      expect(
+        board.resolvedPlayerThemeIds.keys.where(
+          (color) => color != PlayerColor.red,
+        ),
+        isEmpty,
+        reason: 'A local purchase must only decorate the local red side.',
+      );
       expect(controls.diceId, diceId);
-      expect(board.tokenStyleIds, containsPair(PlayerColor.red, tokenId));
+      expect(
+        board.tokenStyleIds,
+        containsPair(PlayerColor.red, 'tokens_cosmic_realms_blue'),
+      );
+      expect(wallet.equippedProductId(CosmeticCategory.tokens), tokenId);
       expect(wallet.equippedProductId(CosmeticCategory.avatar), avatarId);
       expect(tester.takeException(), isNull);
 

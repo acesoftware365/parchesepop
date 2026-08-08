@@ -143,7 +143,7 @@ void main() {
     );
   });
 
-  testWidgets('both replacement themes expose their animated shop previews', (
+  testWidgets('archived replacement themes are hidden from the current shop', (
     tester,
   ) async {
     _useViewport(tester, _iPhone14Portrait);
@@ -169,15 +169,10 @@ void main() {
 
     for (final entry in _replacementThemes.entries) {
       final id = entry.key;
-      expect(find.text(entry.value.name), findsOneWidget);
-      expect(find.byKey(ValueKey('shop-preview-$id')), findsOneWidget);
-      expect(find.byKey(ValueKey('shop-preview-button-$id')), findsOneWidget);
-
-      final scene = find.byKey(ValueKey('shop-theme-scene-$id'));
-      expect(scene, findsOneWidget);
-      final paint = tester.widget<CustomPaint>(scene);
-      expect(paint.painter, isA<ThemeScenePainter>());
-      expect((paint.painter! as ThemeScenePainter).theme.id, id);
+      expect(find.text(entry.value.name), findsNothing);
+      expect(find.byKey(ValueKey('shop-preview-$id')), findsNothing);
+      expect(find.byKey(ValueKey('shop-preview-button-$id')), findsNothing);
+      expect(find.byKey(ValueKey('shop-theme-scene-$id')), findsNothing);
     }
     expect(tester.takeException(), isNull);
   });
@@ -214,13 +209,26 @@ void main() {
       final board = tester.widget<GameBoardMockup>(
         find.byType(GameBoardMockup),
       );
-      expect(board.themeId, id);
+      expect(board.playerThemeIds, {PlayerColor.red: id});
+      expect(board.resolvedPlayerThemeIds[PlayerColor.red], id);
+      expect(
+        board.resolvedPlayerThemeIds.keys.where(
+          (color) => color != PlayerColor.red,
+        ),
+        isEmpty,
+      );
 
-      final backdrop = find.byKey(ValueKey('game-theme-backdrop-$id'));
+      final backdrop = find.byKey(
+        const ValueKey('game-theme-backdrop-theme_default'),
+      );
       expect(backdrop, findsOneWidget);
       final paint = tester.widget<CustomPaint>(backdrop);
       expect(paint.painter, isA<ThemeScenePainter>());
-      expect((paint.painter! as ThemeScenePainter).theme.id, id);
+      expect(
+        (paint.painter! as ThemeScenePainter).theme.id,
+        defaultThemeVisualSpec.id,
+      );
+      expect(find.byKey(ValueKey('game-theme-backdrop-$id')), findsNothing);
       expect(tester.takeException(), isNull);
 
       await tester.pumpWidget(const SizedBox.shrink());

@@ -34,8 +34,12 @@ system, and interaction data according to Google's policies.
 The Android and iOS versions use Google AdMob:
 
 - adaptive banner advertisements may appear at the bottom of app screens; and
-- optional rewarded advertisements may be offered in the shop. A reward is
-  granted only after the rewarded advertisement is completed.
+- rewarded advertisements may appear after a match when the player explicitly
+  chooses Play Again or Back to Home; and
+- optional rewarded advertisements may also be offered in the shop. A reward
+  is granted only after the rewarded advertisement is completed. If a
+  post-match ad is unavailable or dismissed, the requested navigation still
+  continues.
 
 The macOS version does not request or display AdMob banner or rewarded
 advertisements.
@@ -153,8 +157,12 @@ políticas.
 Las versiones de Android e iOS utilizan Google AdMob:
 
 - pueden mostrar anuncios adaptables en la parte inferior de las pantallas; y
-- pueden ofrecer anuncios recompensados voluntarios en la tienda. La recompensa
-  se entrega únicamente después de completar el anuncio.
+- pueden mostrar anuncios recompensados después de una partida cuando el
+  jugador elige expresamente Jugar otra vez o Volver al inicio; y
+- también pueden ofrecer anuncios recompensados voluntarios en la tienda. La
+  recompensa se entrega únicamente después de completar el anuncio. Si un
+  anuncio posterior a la partida no está disponible o se cierra, la navegación
+  solicitada continúa.
 
 La versión de macOS no solicita ni muestra banners o anuncios recompensados de
 AdMob.

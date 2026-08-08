@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:parchesepop/game_engine.dart';
@@ -19,7 +20,10 @@ Future<void> _resize(WidgetTester tester, Size size) async {
 Future<void> _tapBoardCell(WidgetTester tester, Offset cell) async {
   final board = find.byKey(const ValueKey('game-board'));
   final rect = tester.getRect(board);
-  const frameGutterCells = .26;
+  final boardWidget = tester.widget<GameBoardMockup>(
+    find.byType(GameBoardMockup),
+  );
+  final frameGutterCells = boardWidget.compactPhone ? .08 : .26;
   final boardCell = rect.width / (20 + frameGutterCells * 2);
   final inset = boardCell * frameGutterCells;
   await tester.tapAt(
@@ -154,6 +158,7 @@ void main() {
 
   tearDown(() {
     binding.platformDispatcher.clearLocaleTestValue();
+    debugDefaultTargetPlatformOverride = null;
   });
 
   test('the app allows portrait and both landscape directions', () {
@@ -166,6 +171,73 @@ void main() {
       ]),
     );
     expect(supportedAppOrientations, hasLength(3));
+  });
+
+  testWidgets('compact board artwork is limited to phones on iOS and Android', (
+    tester,
+  ) async {
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+
+    Future<void> expectProfile({
+      required Size size,
+      required TargetPlatform platform,
+      required bool compact,
+      EdgeInsets safePadding = EdgeInsets.zero,
+    }) async {
+      final engine = GameEngine();
+      debugDefaultTargetPlatformOverride = platform;
+      await tester.binding.setSurfaceSize(size);
+      await tester.pumpWidget(
+        MaterialApp(
+          home: MediaQuery(
+            data: MediaQueryData(size: size, padding: safePadding),
+            child: GameScreen(opponent: 'CPU • Normal', gameEngine: engine),
+          ),
+        ),
+      );
+      await tester.pump(const Duration(milliseconds: 100));
+      expect(
+        tester
+            .widget<GameBoardMockup>(find.byType(GameBoardMockup))
+            .compactPhone,
+        compact,
+      );
+      await tester.pumpWidget(const SizedBox.shrink());
+      engine.dispose();
+      debugDefaultTargetPlatformOverride = null;
+    }
+
+    await expectProfile(
+      size: _portrait,
+      platform: TargetPlatform.iOS,
+      compact: true,
+    );
+    await expectProfile(
+      size: _portrait,
+      platform: TargetPlatform.android,
+      compact: true,
+    );
+    await expectProfile(
+      size: const Size(600, 960),
+      platform: TargetPlatform.iOS,
+      compact: false,
+    );
+    await expectProfile(
+      size: const Size(960, 600),
+      platform: TargetPlatform.android,
+      compact: false,
+      safePadding: const EdgeInsets.only(bottom: 120),
+    );
+    await expectProfile(
+      size: _portrait,
+      platform: TargetPlatform.macOS,
+      compact: false,
+    );
+    await expectProfile(
+      size: _portrait,
+      platform: TargetPlatform.windows,
+      compact: false,
+    );
   });
 
   testWidgets('the active game survives portrait-landscape-portrait rotation', (

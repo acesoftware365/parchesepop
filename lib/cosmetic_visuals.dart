@@ -21,7 +21,7 @@ enum DiceMotif {
 /// richer scenes now attached to those products:
 /// neon = futuristic city, golden = pyramid temple, tropical = living jungle,
 /// retro = pixel arcade and aurora = arctic northern lights.
-enum ThemeMotif { classic, neon, golden, tropical, retro, aurora }
+enum ThemeMotif { classic, neon, golden, tropical, retro, aurora, cosmic }
 
 /// Center marks painted inside a piece while preserving its team color.
 enum TokenMotif {
@@ -35,6 +35,7 @@ enum TokenMotif {
   jungleTotem,
   pixelBlaster,
   auroraShard,
+  cosmicCore,
 }
 
 /// Original, code-drawn avatar identities. No platform emoji is required.
@@ -347,6 +348,70 @@ const Map<String, ThemeVisualSpec> themeVisualSpecs = {
     sceneGlowColor: Color(0xFFD9FFFF),
     motif: ThemeMotif.aurora,
   ),
+  'theme_cosmic_realms_red': ThemeVisualSpec(
+    id: 'theme_cosmic_realms_red',
+    gameBackgroundColor: Color(0xFF160611),
+    boardSurfaceColor: Color(0xFF2A0A1D),
+    framePrimaryColor: Color(0xFF7E1738),
+    frameAccentColor: Color(0xFFFFD56A),
+    trackSurfaceColor: Color(0xFF3C102A),
+    outlineColor: Color(0xFF16091B),
+    stageColor: Color(0xFF14040F),
+    sceneSkyColor: Color(0xFF190617),
+    sceneGroundColor: Color(0xFF05040D),
+    scenePrimaryColor: Color(0xFFE42E62),
+    sceneSecondaryColor: Color(0xFF8C3DFF),
+    sceneGlowColor: Color(0xFFFFD76B),
+    motif: ThemeMotif.cosmic,
+  ),
+  'theme_cosmic_realms_yellow': ThemeVisualSpec(
+    id: 'theme_cosmic_realms_yellow',
+    gameBackgroundColor: Color(0xFF160F02),
+    boardSurfaceColor: Color(0xFF2D1C05),
+    framePrimaryColor: Color(0xFF7A5200),
+    frameAccentColor: Color(0xFFFFF0A3),
+    trackSurfaceColor: Color(0xFF3E2907),
+    outlineColor: Color(0xFF171006),
+    stageColor: Color(0xFF120C02),
+    sceneSkyColor: Color(0xFF1C1204),
+    sceneGroundColor: Color(0xFF05040B),
+    scenePrimaryColor: Color(0xFFF2B51D),
+    sceneSecondaryColor: Color(0xFFFF7A3D),
+    sceneGlowColor: Color(0xFFFFF2A6),
+    motif: ThemeMotif.cosmic,
+  ),
+  'theme_cosmic_realms_blue': ThemeVisualSpec(
+    id: 'theme_cosmic_realms_blue',
+    gameBackgroundColor: Color(0xFF030D1E),
+    boardSurfaceColor: Color(0xFF071B36),
+    framePrimaryColor: Color(0xFF0B4F9B),
+    frameAccentColor: Color(0xFF72E7FF),
+    trackSurfaceColor: Color(0xFF0B294E),
+    outlineColor: Color(0xFF041023),
+    stageColor: Color(0xFF020A18),
+    sceneSkyColor: Color(0xFF051329),
+    sceneGroundColor: Color(0xFF020611),
+    scenePrimaryColor: Color(0xFF248BFF),
+    sceneSecondaryColor: Color(0xFF26D8D2),
+    sceneGlowColor: Color(0xFFA7F3FF),
+    motif: ThemeMotif.cosmic,
+  ),
+  'theme_cosmic_realms_green': ThemeVisualSpec(
+    id: 'theme_cosmic_realms_green',
+    gameBackgroundColor: Color(0xFF02150E),
+    boardSurfaceColor: Color(0xFF06281C),
+    framePrimaryColor: Color(0xFF08724D),
+    frameAccentColor: Color(0xFFBDFB72),
+    trackSurfaceColor: Color(0xFF0B3A29),
+    outlineColor: Color(0xFF03150E),
+    stageColor: Color(0xFF020F0A),
+    sceneSkyColor: Color(0xFF041C14),
+    sceneGroundColor: Color(0xFF020A08),
+    scenePrimaryColor: Color(0xFF20C982),
+    sceneSecondaryColor: Color(0xFF62E85D),
+    sceneGlowColor: Color(0xFFD8FF8C),
+    motif: ThemeMotif.cosmic,
+  ),
 };
 
 const Set<String> supportedThemeStyleIds = {
@@ -356,6 +421,10 @@ const Set<String> supportedThemeStyleIds = {
   'theme_tropical_splash',
   'theme_celestial_carnival',
   'theme_velvet_lounge',
+  'theme_cosmic_realms_red',
+  'theme_cosmic_realms_yellow',
+  'theme_cosmic_realms_blue',
+  'theme_cosmic_realms_green',
 };
 
 ThemeVisualSpec themeVisualSpecFor(String? productId) =>
@@ -408,6 +477,8 @@ class ThemeScenePainter extends CustomPainter {
         _paintRetroArcade(canvas, size);
       case ThemeMotif.aurora:
         _paintArcticAurora(canvas, size);
+      case ThemeMotif.cosmic:
+        _paintCosmicRealm(canvas, size);
     }
     canvas.restore();
   }
@@ -430,6 +501,83 @@ class ThemeScenePainter extends CustomPainter {
       unit * .13,
       Paint()..color = spec.sceneGlowColor.withValues(alpha: .36),
     );
+  }
+
+  void _paintCosmicRealm(Canvas canvas, Size size) {
+    final p = _progress;
+    final unit = size.shortestSide;
+    final bounds = Offset.zero & size;
+    final nebulaCenter = Offset(
+      size.width * (.34 + math.sin(p * math.pi * 2) * .025),
+      size.height * (.43 + math.cos(p * math.pi * 2) * .018),
+    );
+    canvas.drawOval(
+      Rect.fromCenter(
+        center: nebulaCenter,
+        width: size.width * .88,
+        height: size.height * .62,
+      ),
+      Paint()
+        ..shader = RadialGradient(
+          colors: [
+            spec.scenePrimaryColor.withValues(alpha: .54),
+            spec.sceneSecondaryColor.withValues(alpha: .24),
+            Colors.transparent,
+          ],
+        ).createShader(bounds)
+        ..maskFilter = MaskFilter.blur(BlurStyle.normal, unit * .07),
+    );
+    final orbitCenter = Offset(size.width * .64, size.height * .40);
+    for (var orbit = 0; orbit < 3; orbit++) {
+      final orbitRect = Rect.fromCenter(
+        center: orbitCenter,
+        width: size.width * (.30 + orbit * .15),
+        height: size.height * (.16 + orbit * .09),
+      );
+      canvas.save();
+      canvas.translate(orbitCenter.dx, orbitCenter.dy);
+      canvas.rotate(p * math.pi * 2 + orbit * .72);
+      canvas.translate(-orbitCenter.dx, -orbitCenter.dy);
+      canvas.drawArc(
+        orbitRect,
+        orbit * .9,
+        math.pi * 1.16,
+        false,
+        Paint()
+          ..color =
+              (orbit.isEven ? spec.sceneGlowColor : spec.sceneSecondaryColor)
+                  .withValues(alpha: .38)
+          ..style = PaintingStyle.stroke
+          ..strokeWidth = math.max(1, unit * .012)
+          ..strokeCap = StrokeCap.round,
+      );
+      canvas.restore();
+    }
+    const stars = [
+      Offset(.06, .14),
+      Offset(.14, .74),
+      Offset(.24, .26),
+      Offset(.34, .84),
+      Offset(.43, .12),
+      Offset(.53, .68),
+      Offset(.64, .18),
+      Offset(.72, .78),
+      Offset(.81, .31),
+      Offset(.91, .60),
+      Offset(.96, .12),
+    ];
+    for (var index = 0; index < stars.length; index++) {
+      final seed = stars[index];
+      final twinkle =
+          .42 + math.sin((p + index * .137) * math.pi * 2).abs() * .50;
+      canvas.drawCircle(
+        Offset(seed.dx * size.width, seed.dy * size.height),
+        math.max(1, unit * (.007 + (index % 3) * .003)),
+        Paint()
+          ..color = (index % 4 == 0 ? spec.sceneGlowColor : Colors.white)
+              .withValues(alpha: twinkle),
+      );
+    }
   }
 
   void _paintFuturisticCity(Canvas canvas, Size size) {
@@ -1349,6 +1497,42 @@ const Map<String, TokenVisualSpec> tokenVisualSpecs = {
     stageColor: Color(0xFF06162E),
     motif: TokenMotif.auroraShard,
   ),
+  'tokens_cosmic_realms_red': TokenVisualSpec(
+    id: 'tokens_cosmic_realms_red',
+    detailColor: Color(0xFFFFD76B),
+    highlightColor: Color(0xFFFFEEF6),
+    outlineColor: Color(0xFFFFFFFF),
+    glowColor: Color(0xCCE42E62),
+    stageColor: Color(0xFF160611),
+    motif: TokenMotif.cosmicCore,
+  ),
+  'tokens_cosmic_realms_yellow': TokenVisualSpec(
+    id: 'tokens_cosmic_realms_yellow',
+    detailColor: Color(0xFFFFE071),
+    highlightColor: Color(0xFFFFF8D4),
+    outlineColor: Color(0xFFFFFFFF),
+    glowColor: Color(0xCCF2B51D),
+    stageColor: Color(0xFF160F02),
+    motif: TokenMotif.cosmicCore,
+  ),
+  'tokens_cosmic_realms_blue': TokenVisualSpec(
+    id: 'tokens_cosmic_realms_blue',
+    detailColor: Color(0xFF79E9FF),
+    highlightColor: Color(0xFFEAFBFF),
+    outlineColor: Color(0xFFFFFFFF),
+    glowColor: Color(0xCC248BFF),
+    stageColor: Color(0xFF030D1E),
+    motif: TokenMotif.cosmicCore,
+  ),
+  'tokens_cosmic_realms_green': TokenVisualSpec(
+    id: 'tokens_cosmic_realms_green',
+    detailColor: Color(0xFFD4FF7A),
+    highlightColor: Color(0xFFEFFFF4),
+    outlineColor: Color(0xFFFFFFFF),
+    glowColor: Color(0xCC20C982),
+    stageColor: Color(0xFF02150E),
+    motif: TokenMotif.cosmicCore,
+  ),
 };
 
 const Set<String> supportedTokenStyleIds = {
@@ -1362,6 +1546,10 @@ const Set<String> supportedTokenStyleIds = {
   'tokens_jungle_totem',
   'tokens_pixel_blaster',
   'tokens_aurora_shard',
+  'tokens_cosmic_realms_red',
+  'tokens_cosmic_realms_yellow',
+  'tokens_cosmic_realms_blue',
+  'tokens_cosmic_realms_green',
 };
 
 TokenVisualSpec tokenVisualSpecFor(String? productId) =>
@@ -1369,8 +1557,8 @@ TokenVisualSpec tokenVisualSpecFor(String? productId) =>
 
 /// Matching pieces used to present every board theme as a coordinated set.
 ///
-/// The products remain independently purchasable and equippable, so choosing a
-/// board never silently replaces a player's preferred pieces.
+/// Most products remain independently purchasable and equippable. A small
+/// number of complete packs deliberately bundle their matching pieces.
 const Map<String, String> matchingTokenStyleIdByThemeId = {
   'theme_default': 'tokens_default',
   'theme_neon_rush': 'tokens_neon_pulse',
@@ -1378,7 +1566,27 @@ const Map<String, String> matchingTokenStyleIdByThemeId = {
   'theme_tropical_splash': 'tokens_jungle_totem',
   'theme_celestial_carnival': 'tokens_pixel_blaster',
   'theme_velvet_lounge': 'tokens_aurora_shard',
+  'theme_cosmic_realms_red': 'tokens_cosmic_realms_red',
+  'theme_cosmic_realms_yellow': 'tokens_cosmic_realms_yellow',
+  'theme_cosmic_realms_blue': 'tokens_cosmic_realms_blue',
+  'theme_cosmic_realms_green': 'tokens_cosmic_realms_green',
 };
+
+/// Complete packs whose piece design is part of the purchased board theme.
+const Map<String, String> bundledTokenStyleIdByThemeId = {
+  'theme_cosmic_realms_red': 'tokens_cosmic_realms_red',
+  'theme_cosmic_realms_yellow': 'tokens_cosmic_realms_yellow',
+  'theme_cosmic_realms_blue': 'tokens_cosmic_realms_blue',
+  'theme_cosmic_realms_green': 'tokens_cosmic_realms_green',
+};
+
+String? bundledTokenStyleIdForTheme(String? themeId) =>
+    bundledTokenStyleIdByThemeId[themeId];
+
+String? resolvedTokenStyleIdForTheme({
+  required String? themeId,
+  required String? selectedTokenStyleId,
+}) => bundledTokenStyleIdForTheme(themeId) ?? selectedTokenStyleId;
 
 String? matchingTokenStyleIdForTheme(String? themeId) =>
     matchingTokenStyleIdByThemeId[themeId];

@@ -1,6 +1,10 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:parchesepop/main.dart' show ParchesePopApp, ShopScreen;
+import 'package:parchesepop/game_engine.dart';
+import 'package:parchesepop/main.dart'
+    show GameScreen, ParchesePopApp, ShopScreen;
 import 'package:parchesepop/mobile_ads.dart';
 import 'package:parchesepop/wallet.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -111,7 +115,11 @@ void main() {
         );
 
         expect(MediaQuery.paddingOf(probeContext).bottom, 0);
-        expect(banner.top - content.bottom, closeTo(2, .01));
+        expect(
+          find.byKey(const ValueKey('version-above-ad-banner')),
+          findsOneWidget,
+        );
+        expect(banner.top - content.bottom, closeTo(21, .01));
 
         await tester.pumpWidget(const SizedBox.shrink());
         controller.dispose();
@@ -171,7 +179,7 @@ void main() {
       expect(dock.bottom, lessThanOrEqualTo(banner.top));
 
       for (final label in const [
-        'PARTIDA RÁPIDA',
+        'PARTIDA ONLINE',
         'CONTRA CPU',
         'Tienda',
         'Mi perfil',
@@ -224,12 +232,198 @@ void main() {
     test('NoopAppAdsController never grants a reward', () async {
       final controller = NoopAppAdsController();
 
+      controller.preloadRewarded();
       expect(controller.rewardedReady, isFalse);
       expect(await controller.showRewarded(), isFalse);
 
       controller.dispose();
     });
   });
+
+  group('victory navigation rewarded ads', () {
+    setUp(() => SharedPreferences.setMockInitialValues({}));
+
+    testWidgets(
+      'Play Again waits for one rewarded ad and still continues when dismissed',
+      (tester) async {
+        final engine = _finishedVictoryEngine();
+        final rewarded = Completer<bool>();
+        final ads = _FakeAdsController(
+          supported: true,
+          adsReady: true,
+          rewardedReady: true,
+          onShowRewarded: () => rewarded.future,
+        );
+        addTearDown(engine.dispose);
+        addTearDown(ads.dispose);
+        addTearDown(() => tester.binding.setSurfaceSize(null));
+
+        await tester.binding.setSurfaceSize(const Size(390, 844));
+        await tester.pumpWidget(
+          MobileAdsScope(
+            controller: ads,
+            child: MaterialApp(
+              home: GameScreen(opponent: 'CPU • Fácil', gameEngine: engine),
+            ),
+          ),
+        );
+        await tester.pump(const Duration(milliseconds: 1400));
+
+        expect(ads.rewardedPreloadCount, greaterThanOrEqualTo(1));
+
+        final playAgain = find.byKey(const ValueKey('victory-play-again'));
+        await tester.tap(playAgain);
+        await tester.pump();
+
+        expect(ads.rewardedShowCount, 1);
+        expect(find.byKey(const ValueKey('victory-celebration')), findsOne);
+        expect(tester.widget<FilledButton>(playAgain).onPressed, isNull);
+
+        rewarded.complete(false);
+        await tester.pump();
+        await tester.pump(const Duration(seconds: 1));
+
+        expect(ads.rewardedShowCount, 1);
+        expect(find.byKey(const ValueKey('victory-celebration')), findsNothing);
+        expect(find.byKey(const ValueKey('game-board')), findsOneWidget);
+
+        await tester.pumpWidget(const SizedBox.shrink());
+      },
+    );
+
+    testWidgets('Back to Home waits for its rewarded ad before navigating', (
+      tester,
+    ) async {
+      final engine = _finishedVictoryEngine();
+      final rewarded = Completer<bool>();
+      final ads = _FakeAdsController(
+        supported: true,
+        adsReady: true,
+        rewardedReady: true,
+        onShowRewarded: () => rewarded.future,
+      );
+      addTearDown(engine.dispose);
+      addTearDown(ads.dispose);
+      addTearDown(() => tester.binding.setSurfaceSize(null));
+
+      await tester.binding.setSurfaceSize(const Size(390, 844));
+      await tester.pumpWidget(
+        MobileAdsScope(
+          controller: ads,
+          child: MaterialApp(
+            home: GameScreen(opponent: 'CPU • Fácil', gameEngine: engine),
+            routes: {
+              '/home': (_) => const Scaffold(
+                body: SizedBox(key: ValueKey('home-route-marker')),
+              ),
+            },
+          ),
+        ),
+      );
+      await tester.pump(const Duration(milliseconds: 1400));
+
+      final home = find.byKey(const ValueKey('victory-home'));
+      await tester.tap(home);
+      await tester.pump();
+
+      expect(ads.rewardedShowCount, 1);
+      expect(find.byKey(const ValueKey('home-route-marker')), findsNothing);
+      expect(tester.widget<OutlinedButton>(home).onPressed, isNull);
+
+      rewarded.complete(true);
+      await tester.pump();
+      await tester.pump(const Duration(seconds: 1));
+
+      expect(ads.rewardedShowCount, 1);
+      expect(find.byKey(const ValueKey('home-route-marker')), findsOneWidget);
+      expect(find.byType(GameScreen), findsNothing);
+
+      await tester.pumpWidget(const SizedBox.shrink());
+    });
+
+    testWidgets('desktop/no-op hosts navigate without requesting a reward', (
+      tester,
+    ) async {
+      final engine = _finishedVictoryEngine();
+      final ads = _FakeAdsController(supported: false, adsReady: false);
+      addTearDown(engine.dispose);
+      addTearDown(ads.dispose);
+      addTearDown(() => tester.binding.setSurfaceSize(null));
+
+      await tester.binding.setSurfaceSize(const Size(390, 844));
+      await tester.pumpWidget(
+        MobileAdsScope(
+          controller: ads,
+          child: MaterialApp(
+            home: GameScreen(opponent: 'CPU • Fácil', gameEngine: engine),
+          ),
+        ),
+      );
+      await tester.pump(const Duration(milliseconds: 1400));
+      await tester.tap(find.byKey(const ValueKey('victory-play-again')));
+      await tester.pump();
+      await tester.pump(const Duration(seconds: 1));
+
+      expect(ads.rewardedShowCount, 0);
+      expect(find.byKey(const ValueKey('victory-celebration')), findsNothing);
+      expect(find.byKey(const ValueKey('game-board')), findsOneWidget);
+
+      await tester.pumpWidget(const SizedBox.shrink());
+    });
+  });
+
+  testWidgets('rewarded ads are warmed when a match opens and app resumes', (
+    tester,
+  ) async {
+    SharedPreferences.setMockInitialValues({});
+    final engine = GameEngine();
+    final ads = _FakeAdsController(
+      supported: true,
+      adsReady: true,
+      rewardedReady: false,
+    );
+    addTearDown(engine.dispose);
+    addTearDown(ads.dispose);
+
+    await tester.pumpWidget(
+      MobileAdsScope(
+        controller: ads,
+        child: MaterialApp(
+          home: GameScreen(opponent: 'CPU • Fácil', gameEngine: engine),
+        ),
+      ),
+    );
+    await tester.pump();
+
+    expect(ads.rewardedPreloadCount, 1);
+
+    tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.paused);
+    tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.resumed);
+    await tester.pump();
+
+    expect(ads.rewardedPreloadCount, 2);
+
+    await tester.pumpWidget(const SizedBox.shrink());
+  });
+
+  testWidgets(
+    'app shell warms rewarded ads again after returning to foreground',
+    (tester) async {
+      SharedPreferences.setMockInitialValues({});
+      final ads = _FakeAdsController(supported: true, adsReady: true);
+
+      await tester.pumpWidget(ParchesePopApp(adsController: ads));
+      await tester.pump(const Duration(milliseconds: 200));
+
+      tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.paused);
+      tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.resumed);
+      await tester.pump();
+
+      expect(ads.rewardedPreloadCount, 1);
+
+      await tester.pumpWidget(const SizedBox.shrink());
+    },
+  );
 
   group('ShopScreen rewarded coins integration', () {
     testWidgets('adds exactly 100 coins after an earned mobile reward', (
@@ -364,6 +558,7 @@ class _FakeAdsController extends AppAdsController {
     required bool adsReady,
     this.rewardedReady = false,
     this.rewardedResult = false,
+    this.onShowRewarded,
   }) : _adsReady = adsReady;
 
   @override
@@ -381,7 +576,9 @@ class _FakeAdsController extends AppAdsController {
   bool get privacyOptionsRequired => false;
 
   final bool rewardedResult;
+  final Future<bool> Function()? onShowRewarded;
   int rewardedShowCount = 0;
+  int rewardedPreloadCount = 0;
 
   void setAdsReady(bool value) {
     if (_adsReady == value) return;
@@ -402,11 +599,30 @@ class _FakeAdsController extends AppAdsController {
   Future<void> initialize() async {}
 
   @override
+  void preloadRewarded() {
+    rewardedPreloadCount += 1;
+  }
+
+  @override
   Future<bool> showRewarded() async {
     rewardedShowCount += 1;
+    if (onShowRewarded != null) return onShowRewarded!();
     return rewardedResult;
   }
 
   @override
   Future<void> showPrivacyOptions() async {}
+}
+
+GameEngine _finishedVictoryEngine() {
+  final engine = GameEngine();
+  for (final token in engine.currentPlayer.tokens) {
+    token.progress = GameEngine.finishProgress;
+  }
+  engine
+    ..winner = engine.currentPlayer
+    ..gameOver = true
+    ..hasRolled = false
+    ..remainingDice.clear();
+  return engine;
 }

@@ -87,6 +87,26 @@ Future<void> _expectProfileDialog(WidgetTester tester) async {
 }
 
 void main() {
+  testWidgets(
+    'compact-board checkpoint is discarded during 68-cell migration',
+    (tester) async {
+      _useViewport(tester, const Size(390, 844));
+      SharedPreferences.setMockInitialValues({
+        'active_match_board_layout_version': 2,
+        'active_match_checkpoint': '{"players":[]}',
+      });
+
+      await _pumpLoadedHome(tester);
+
+      final preferences = await SharedPreferences.getInstance();
+      expect(preferences.getString('active_match_checkpoint'), isNull);
+      expect(
+        preferences.getInt('active_match_board_layout_version'),
+        activeMatchBoardLayoutVersion,
+      );
+    },
+  );
+
   for (final viewport in <String, Size>{
     'iPhone 14 portrait': const Size(390, 844),
     'macOS game window': const Size(1180, 820),
@@ -105,7 +125,7 @@ void main() {
         await _pumpLoadedHome(tester);
 
         for (final label in const [
-          'PARTIDA RÁPIDA',
+          'PARTIDA ONLINE',
           'CONTRA CPU',
           'Tienda',
           'Mi perfil',
@@ -161,7 +181,7 @@ void main() {
 
       await _pumpLoadedHome(tester);
       for (final label in const [
-        'PARTIDA RÁPIDA',
+        'PARTIDA ONLINE',
         'CONTRA CPU',
         'Tienda',
         'Mi perfil',
@@ -209,7 +229,7 @@ void main() {
         });
         expect(isExcludedFromSemantics, isTrue);
         expect(
-          find.bySemanticsLabel(RegExp('PARTIDA RÁPIDA')),
+          find.bySemanticsLabel(RegExp('PARTIDA ONLINE')),
           findsAtLeastNWidgets(1),
         );
         expect(
@@ -281,7 +301,7 @@ void main() {
 
     expect(find.byKey(const ValueKey('home-profile-dialog')), findsNothing);
     expect(find.byType(HomeScreen), findsOneWidget);
-    expect(find.text('PARTIDA RÁPIDA'), findsOneWidget);
+    expect(find.text('PARTIDA ONLINE'), findsOneWidget);
     expect(tester.takeException(), isNull);
   });
 
@@ -314,7 +334,7 @@ void main() {
     );
     expect(find.byKey(const ValueKey('home-profile-dialog')), findsNothing);
     expect(find.byType(HomeScreen), findsOneWidget);
-    expect(find.text('PARTIDA RÁPIDA').hitTestable(), findsOneWidget);
+    expect(find.text('PARTIDA ONLINE').hitTestable(), findsOneWidget);
     expect(tester.takeException(), isNull);
   });
 
@@ -346,7 +366,7 @@ void main() {
     );
     expect(find.byKey(const ValueKey('home-profile-dialog')), findsNothing);
     expect(find.byType(HomeScreen), findsOneWidget);
-    expect(find.text('PARTIDA RÁPIDA').hitTestable(), findsOneWidget);
+    expect(find.text('PARTIDA ONLINE').hitTestable(), findsOneWidget);
     expect(tester.takeException(), isNull);
   });
 }

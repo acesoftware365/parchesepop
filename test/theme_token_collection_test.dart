@@ -17,6 +17,10 @@ const _matchingThemeTokens = <String, String>{
   'theme_tropical_splash': 'tokens_jungle_totem',
   'theme_celestial_carnival': 'tokens_pixel_blaster',
   'theme_velvet_lounge': 'tokens_aurora_shard',
+  'theme_cosmic_realms_red': 'tokens_cosmic_realms_red',
+  'theme_cosmic_realms_yellow': 'tokens_cosmic_realms_yellow',
+  'theme_cosmic_realms_blue': 'tokens_cosmic_realms_blue',
+  'theme_cosmic_realms_green': 'tokens_cosmic_realms_green',
 };
 
 const _premiumTokenProducts =
@@ -91,8 +95,16 @@ void main() {
         .map((product) => product.id)
         .toSet();
 
-    expect(tokenVisualSpecs.keys.toSet(), catalogTokenIds);
-    expect(supportedTokenStyleIds, catalogTokenIds);
+    const bundledTokenIds = {
+      'tokens_cosmic_realms_red',
+      'tokens_cosmic_realms_yellow',
+      'tokens_cosmic_realms_blue',
+      'tokens_cosmic_realms_green',
+    };
+    final expectedVisualIds = {...catalogTokenIds, ...bundledTokenIds};
+    expect(tokenVisualSpecs.keys.toSet(), expectedVisualIds);
+    expect(supportedTokenStyleIds, expectedVisualIds);
+    expect(bundledTokenStyleIdByThemeId.values.toSet(), bundledTokenIds);
     expect(
       catalogTokenIds,
       containsAll(_premiumTokenProducts.keys),
@@ -117,7 +129,7 @@ void main() {
     }
   });
 
-  test('five premium themes have distinct coordinated token visuals', () {
+  test('premium themes have distinct coordinated token visuals', () {
     expect(matchingTokenStyleIdByThemeId, _matchingThemeTokens);
     expect(
       matchingTokenStyleIdByThemeId.keys.toSet(),
@@ -238,12 +250,32 @@ void main() {
       }
 
       await _selectShopFilter(tester, 'Temas');
-      for (final entry in _matchingThemeTokens.entries.skip(1)) {
-        for (var index = 0; index < teamColors.length; index++) {
+      final visibleThemeIds = shopCatalog
+          .where((product) => product.category == CosmeticCategory.theme)
+          .map((product) => product.id)
+          .toSet();
+      for (final entry in _matchingThemeTokens.entries.where(
+        (entry) =>
+            entry.key != 'theme_default' && visibleThemeIds.contains(entry.key),
+      )) {
+        expect(
+          find.byKey(ValueKey('shop-theme-board-${entry.key}')),
+          findsOneWidget,
+        );
+        expect(
+          shopThemePreviewTokenStyleIdForPlayer(entry.key, PlayerColor.red),
+          entry.value,
+          reason: '${entry.key} must preview its bundled local pieces.',
+        );
+        for (final color in const [
+          PlayerColor.blue,
+          PlayerColor.yellow,
+          PlayerColor.green,
+        ]) {
           expect(
-            find.byKey(ValueKey('shop-theme-token-${entry.key}-$index')),
-            findsOneWidget,
-            reason: '${entry.key} must preview its companion ${entry.value}.',
+            shopThemePreviewTokenStyleIdForPlayer(entry.key, color),
+            'tokens_default',
+            reason: 'Other players keep their own/default pieces.',
           );
         }
       }

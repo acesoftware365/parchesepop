@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:parchesepop/game_engine.dart';
 import 'package:parchesepop/main.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 void _putCurrentPlayerOneMoveFromFinishing(GameEngine engine) {
   final player = engine.currentPlayer;
@@ -45,7 +46,28 @@ GameEngine _matchWithOnlyFirstPlaceDecided() {
   return engine;
 }
 
+Future<void> _pumpUntilHome(WidgetTester tester) async {
+  final homeMarker = find.byKey(const ValueKey('home-route-marker'));
+  for (var attempt = 0; attempt < 30; attempt++) {
+    if (homeMarker.evaluate().isNotEmpty &&
+        find.byType(GameScreen).evaluate().isEmpty) {
+      return;
+    }
+    await tester.pump(const Duration(milliseconds: 100));
+  }
+  expect(
+    homeMarker,
+    findsOneWidget,
+    reason: 'The completed match should return to the home route promptly.',
+  );
+  expect(find.byType(GameScreen), findsNothing);
+}
+
 void main() {
+  setUp(() {
+    SharedPreferences.setMockInitialValues({});
+  });
+
   testWidgets(
     'first winner stays on the result screen while other places are pending',
     (tester) async {
@@ -110,7 +132,9 @@ void main() {
       expect(find.byKey(const ValueKey('home-route-marker')), findsNothing);
 
       await tester.pump(const Duration(milliseconds: 101));
-      await tester.pumpAndSettle();
+      // The game backdrop is intentionally animated forever, so waiting for
+      // every frame to settle would time out even after navigation succeeds.
+      await _pumpUntilHome(tester);
 
       expect(find.byKey(const ValueKey('home-route-marker')), findsOneWidget);
       expect(find.byType(GameScreen), findsNothing);
@@ -149,7 +173,9 @@ void main() {
 
     await tester.tap(exitButton);
     await tester.pump();
-    await tester.pumpAndSettle();
+    // Allow the asynchronous checkpoint cleanup and route replacement to
+    // complete without waiting on the continuously animated home backdrop.
+    await _pumpUntilHome(tester);
 
     expect(find.byKey(const ValueKey('home-route-marker')), findsOneWidget);
     expect(find.byType(GameScreen), findsNothing);

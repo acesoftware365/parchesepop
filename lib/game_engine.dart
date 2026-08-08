@@ -167,7 +167,9 @@ class GameEngine extends ChangeNotifier {
     final modeName = checkpoint['mode'] as String?;
     final engine = GameEngine(
       cpuLevel: checkpoint['cpuLevel'] as String? ?? 'Normal',
-      mode: modeName == GameMode.chaos.name ? GameMode.chaos : GameMode.traditional,
+      mode: modeName == GameMode.chaos.name
+          ? GameMode.chaos
+          : GameMode.traditional,
       humanName: red?['name'] as String? ?? 'Tú',
       cpuNames: [
         playerName(PlayerColor.green, 'CPU 1'),
@@ -182,13 +184,19 @@ class GameEngine extends ChangeNotifier {
       );
       if (saved == null) continue;
       final tokens = saved['tokens'] as List<dynamic>? ?? const [];
-      for (var index = 0; index < player.tokens.length && index < tokens.length; index++) {
+      for (
+        var index = 0;
+        index < player.tokens.length && index < tokens.length;
+        index++
+      ) {
         player.tokens[index].progress = tokens[index] as int? ?? -1;
       }
       final powerName = saved['inventory'] as String?;
       player.inventory = powerName == null
           ? null
-          : PowerUp.values.where((power) => power.name == powerName).firstOrNull;
+          : PowerUp.values
+                .where((power) => power.name == powerName)
+                .firstOrNull;
       player.shielded = saved['shielded'] as bool? ?? false;
       player.skippedTurns = saved['skippedTurns'] as int? ?? 0;
     }
@@ -218,14 +226,33 @@ class GameEngine extends ChangeNotifier {
       ..addAll(
         (checkpoint['items'] as List<dynamic>? ?? const []).whereType<int>(),
       );
-    engine._chaosItemsPerSide = checkpoint['chaosItemsPerSide'] as int? ?? 1;
+    // Chaos now keeps one surprise item per area for the entire match. Older
+    // checkpoints may contain the former timed-escalation items, so retain at
+    // most one valid item from each colour side when they are restored.
+    engine._chaosItemsPerSide = 1;
+    if (engine.isChaos) {
+      final oneItemPerSide = <int>{};
+      for (final side in PlayerColor.values) {
+        final items =
+            engine._itemLoopIndices
+                .where((index) => engine.itemSideForLoopIndex(index) == side)
+                .toList()
+              ..sort();
+        if (items.isNotEmpty) oneItemPerSide.add(items.first);
+      }
+      engine._itemLoopIndices
+        ..clear()
+        ..addAll(oneItemPerSide);
+    }
     final currentColor = checkpoint['currentPlayer'] as String?;
     engine.currentPlayerIndex = PlayerColor.values.indexWhere(
       (color) => color.name == currentColor,
     );
     if (engine.currentPlayerIndex < 0) engine.currentPlayerIndex = 0;
     engine.turnNumber = checkpoint['turn'] as int? ?? 1;
-    engine.dice = List<int>.from(checkpoint['dice'] as List<dynamic>? ?? const [1, 1]);
+    engine.dice = List<int>.from(
+      checkpoint['dice'] as List<dynamic>? ?? const [1, 1],
+    );
     engine.remainingDice
       ..clear()
       ..addAll(
@@ -358,12 +385,15 @@ class GameEngine extends ChangeNotifier {
     }
   }
 
+  /// The complete board has 68 visible spaces. A piece travels the original
+  /// 64-space common route from its departure square through its colored
+  /// entry, then turns into the seven-space home lane.
   static const int loopLength = 68;
   static const int commonPathLength = 64;
   static const int homeLaneLength = 7;
   static const int finishProgress = commonPathLength + homeLaneLength;
 
-  /// Centers of the 68 numbered cells on the reference board's 20×20 grid.
+  /// Centers of the 68 numbered cells on the complete 20×20 board.
   /// Index 0 is square 1 and index 67 is square 68.
   static const List<Offset> loop = [
     Offset(4.5, 12),
@@ -550,27 +580,6 @@ class GameEngine extends ChangeNotifier {
     return _itemLoopIndices
         .where((index) => index >= range.$1 && index <= range.$2)
         .length;
-  }
-
-  /// Raises the number of visible Chaos pickups in every colour area.
-  /// It never removes an item already on the table, so a timed escalation
-  /// cannot invalidate a player's planned move.
-  void setChaosItemsPerSide(int target) {
-    if (!isChaos) return;
-    final nextTarget = target.clamp(1, 3).toInt();
-    if (nextTarget <= _chaosItemsPerSide) return;
-    _chaosItemsPerSide = nextTarget;
-    for (final side in PlayerColor.values) {
-      while (itemCountForSide(side) < _chaosItemsPerSide) {
-        final countBefore = _itemLoopIndices.length;
-        _spawnItemForSide(side);
-        if (_itemLoopIndices.length == countBefore) break;
-      }
-    }
-    message =
-        '¡El caos aumentó! Ahora hay $_chaosItemsPerSide objetos sorpresa por área.';
-    _recordEvent(type: GameEventType.powerUp, description: message);
-    notifyListeners();
   }
 
   void _spawnItemForSide(PlayerColor side, {int? previousIndex}) {

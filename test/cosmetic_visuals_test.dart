@@ -23,8 +23,12 @@ void main() {
     'theme_tropical_splash',
     'theme_celestial_carnival',
     'theme_velvet_lounge',
+    'theme_cosmic_realms_red',
+    'theme_cosmic_realms_yellow',
+    'theme_cosmic_realms_blue',
+    'theme_cosmic_realms_green',
   };
-  const expectedTokenIds = {
+  const expectedCatalogTokenIds = {
     'tokens_default',
     'tokens_robot',
     'tokens_crystal',
@@ -35,6 +39,13 @@ void main() {
     'tokens_jungle_totem',
     'tokens_pixel_blaster',
     'tokens_aurora_shard',
+  };
+  const expectedTokenIds = {
+    ...expectedCatalogTokenIds,
+    'tokens_cosmic_realms_red',
+    'tokens_cosmic_realms_yellow',
+    'tokens_cosmic_realms_blue',
+    'tokens_cosmic_realms_green',
   };
   const expectedAvatarIds = {
     'avatar_default',
@@ -58,7 +69,10 @@ void main() {
 
     expect(catalogIdsByCategory[CosmeticCategory.dice], expectedDiceIds);
     expect(catalogIdsByCategory[CosmeticCategory.theme], expectedThemeIds);
-    expect(catalogIdsByCategory[CosmeticCategory.tokens], expectedTokenIds);
+    expect(
+      catalogIdsByCategory[CosmeticCategory.tokens],
+      expectedCatalogTokenIds,
+    );
     expect(catalogIdsByCategory[CosmeticCategory.avatar], expectedAvatarIds);
 
     expect(diceVisualSpecs.keys.toSet(), expectedDiceIds);

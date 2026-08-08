@@ -143,7 +143,7 @@ void main() {
 
     await tester.pumpWidget(const ParchesePopApp());
     await tester.pumpAndSettle();
-    await tester.tap(find.text('PARTIDA RÁPIDA'));
+    await tester.tap(find.text('PARTIDA ONLINE'));
     await tester.pump();
     await tester.pump(const Duration(milliseconds: 450));
 
@@ -181,7 +181,7 @@ void main() {
 
     await tester.pumpWidget(const ParchesePopApp());
     await tester.pumpAndSettle();
-    await tester.tap(find.text('PARTIDA RÁPIDA'));
+    await tester.tap(find.text('PARTIDA ONLINE'));
     await tester.pump();
     await tester.pump(const Duration(milliseconds: 450));
 
@@ -207,7 +207,7 @@ void main() {
 
         await tester.pumpWidget(const ParchesePopApp());
         await tester.pumpAndSettle();
-        await tester.tap(find.text('PARTIDA RÁPIDA'));
+        await tester.tap(find.text('PARTIDA ONLINE'));
         await tester.pump();
         await tester.pump(const Duration(milliseconds: 450));
         await tester.tap(
@@ -363,7 +363,9 @@ void main() {
     expect(find.text('SALDO PARA PROBAR'), findsNothing);
     expect(find.byKey(const ValueKey('test-balance-dialog')), findsNothing);
 
-    await tester.tap(find.byKey(const ValueKey('shop-action-theme_neon_rush')));
+    await tester.tap(
+      find.byKey(const ValueKey('shop-action-theme_cosmic_realms_red')),
+    );
     await tester.pumpAndSettle();
 
     expect(
@@ -410,13 +412,21 @@ void main() {
       find.byType(GameControlPanel),
     );
     final scaffold = tester.widget<Scaffold>(find.byType(Scaffold).first);
-    expect(board.themeId, 'theme_neon_rush');
+    expect(board.playerThemeIds, {PlayerColor.red: 'theme_neon_rush'});
+    expect(board.resolvedPlayerThemeIds[PlayerColor.red], 'theme_neon_rush');
+    expect(
+      board.resolvedPlayerThemeIds.keys.where(
+        (color) => color != PlayerColor.red,
+      ),
+      isEmpty,
+      reason: 'A local purchase must only decorate the local red side.',
+    );
     expect(board.robotTokens, isTrue);
     expect(controls.diceId, 'dice_ice_crystal');
     expect(controls.galaxyDice, isFalse);
     expect(
       scaffold.backgroundColor,
-      themeVisualSpecFor('theme_neon_rush').gameBackgroundColor,
+      defaultThemeVisualSpec.gameBackgroundColor,
     );
     expect(tester.takeException(), isNull);
 
@@ -496,6 +506,19 @@ void main() {
       for (final participant in session.participants)
         participant.color: participant.loadout.tokensId,
     });
+    expect(board.playerThemeIds, {
+      for (final participant in session.participants)
+        participant.color: participant.loadout.themeId,
+    });
+    for (final participant in session.participants) {
+      expect(
+        board.playerThemeIds[participant.color],
+        participant.loadout.themeId,
+        reason:
+            '${participant.displayName} must keep the theme assigned to '
+            'their own side.',
+      );
+    }
     expect(board.robotTokenColors.length, lessThan(PlayerColor.values.length));
 
     await tester.tap(find.byTooltip('Poderes y trampas'));
@@ -522,7 +545,7 @@ void main() {
         (widget) =>
             widget is Text &&
             (widget.data?.startsWith('Nivel ') ?? false) &&
-            (widget.data?.endsWith(' · Rival automático') ?? false),
+            (widget.data?.endsWith(' · Rival online') ?? false),
       ),
       findsNWidgets(3),
     );
@@ -557,7 +580,7 @@ void main() {
       findsNothing,
     );
     expect(find.byKey(const ValueKey('matchmaking-seats')), findsOneWidget);
-    expect(find.text('Preparando rivales automáticos…'), findsOneWidget);
+    expect(find.text('Buscando jugadores online · 6s'), findsOneWidget);
     final localName = find.text('JugadorCompleto 🇩🇴');
     expect(localName, findsOneWidget);
     expect(
@@ -565,20 +588,26 @@ void main() {
       findsOneWidget,
     );
     expect(find.text('Preparando…'), findsNWidgets(3));
-    expect(find.text('RIVAL AUTOMÁTICO'), findsNothing);
+    expect(find.text('RIVAL ONLINE'), findsNothing);
 
-    await tester.pump(const Duration(seconds: 1));
+    for (var second = 0; second < 6; second++) {
+      await tester.pump(const Duration(seconds: 1));
+    }
     expect(find.byType(MatchmakingScreen), findsOneWidget);
-    expect(find.text('Rivales listos · 1/3'), findsOneWidget);
-    expect(find.text('RIVAL AUTOMÁTICO'), findsOneWidget);
+    expect(find.text('Buscando jugadores online · 0s'), findsOneWidget);
+    expect(find.text('RIVAL ONLINE'), findsNothing);
 
     await tester.pump(const Duration(seconds: 1));
-    expect(find.text('Rivales listos · 2/3'), findsOneWidget);
-    expect(find.text('RIVAL AUTOMÁTICO'), findsNWidgets(2));
+    expect(find.text('Completando la mesa · 1/3'), findsOneWidget);
+    expect(find.text('RIVAL ONLINE'), findsOneWidget);
 
     await tester.pump(const Duration(seconds: 1));
-    expect(find.text('Rivales listos · 3/3'), findsOneWidget);
-    expect(find.text('RIVAL AUTOMÁTICO'), findsNWidgets(3));
+    expect(find.text('Completando la mesa · 2/3'), findsOneWidget);
+    expect(find.text('RIVAL ONLINE'), findsNWidgets(2));
+
+    await tester.pump(const Duration(seconds: 1));
+    expect(find.text('Completando la mesa · 3/3'), findsOneWidget);
+    expect(find.text('RIVAL ONLINE'), findsNWidgets(3));
     expect(
       find.textContaining(RegExp('virtual', caseSensitive: false)),
       findsNothing,
@@ -625,6 +654,54 @@ void main() {
     expect(tester.takeException(), isNull);
   });
 
+  testWidgets('dice hand and roll guide preferences persist', (tester) async {
+    SharedPreferences.setMockInitialValues({
+      settingsRollGuideKey: false,
+      settingsDiceHandKey: DiceHandPreference.left.name,
+    });
+    useViewport(tester, const Size(390, 844));
+
+    await tester.pumpWidget(const MaterialApp(home: SettingsScreen()));
+    await tester.pumpAndSettle();
+
+    var guideSwitch = tester.widget<SwitchListTile>(
+      find.byKey(const ValueKey('settings-roll-guide')),
+    );
+    var handSelector = tester.widget<SegmentedButton<DiceHandPreference>>(
+      find.byKey(const ValueKey('settings-dice-hand')),
+    );
+    expect(guideSwitch.value, isFalse);
+    expect(handSelector.selected, {DiceHandPreference.left});
+
+    await tester.ensureVisible(
+      find.byKey(const ValueKey('settings-roll-guide')),
+    );
+    await tester.tap(find.byKey(const ValueKey('settings-roll-guide')));
+    await tester.pumpAndSettle();
+    await tester.ensureVisible(
+      find.byKey(const ValueKey('settings-dice-hand-right')),
+    );
+    await tester.tap(find.byKey(const ValueKey('settings-dice-hand-right')));
+    await tester.pumpAndSettle();
+
+    final store = await SharedPreferences.getInstance();
+    expect(store.getBool(settingsRollGuideKey), isTrue);
+    expect(store.getString(settingsDiceHandKey), DiceHandPreference.right.name);
+
+    await tester.pumpWidget(const SizedBox.shrink());
+    await tester.pumpWidget(const MaterialApp(home: SettingsScreen()));
+    await tester.pumpAndSettle();
+    guideSwitch = tester.widget<SwitchListTile>(
+      find.byKey(const ValueKey('settings-roll-guide')),
+    );
+    handSelector = tester.widget<SegmentedButton<DiceHandPreference>>(
+      find.byKey(const ValueKey('settings-dice-hand')),
+    );
+    expect(guideSwitch.value, isTrue);
+    expect(handSelector.selected, {DiceHandPreference.right});
+    expect(tester.takeException(), isNull);
+  });
+
   testWidgets('settings defaults to system and offers system Spanish English', (
     tester,
   ) async {
@@ -645,6 +722,7 @@ void main() {
       'system',
     );
 
+    await tester.ensureVisible(find.byKey(const ValueKey('settings-language')));
     await tester.tap(find.byKey(const ValueKey('settings-language')));
     await tester.pumpAndSettle();
     expect(
@@ -675,6 +753,7 @@ void main() {
     expect(find.text('Settings'), findsOneWidget);
     expect(find.text('English'), findsOneWidget);
 
+    await tester.ensureVisible(find.byKey(const ValueKey('settings-language')));
     await tester.tap(find.byKey(const ValueKey('settings-language')));
     await tester.pumpAndSettle();
     await tester.tap(find.byKey(const ValueKey('settings-language-es')));
@@ -701,7 +780,7 @@ void main() {
 
     await tester.pumpWidget(const ParchesePopApp());
     await tester.pumpAndSettle();
-    expect(find.text('QUICK MATCH'), findsOneWidget);
+    expect(find.text('ONLINE MATCH'), findsOneWidget);
     expect(find.text('PLAY CPU'), findsOneWidget);
     expect(
       Localizations.localeOf(tester.element(find.byType(HomeScreen))),
@@ -713,6 +792,7 @@ void main() {
     expect(find.text('Settings'), findsOneWidget);
     expect(find.text('System · English'), findsOneWidget);
 
+    await tester.ensureVisible(find.byKey(const ValueKey('settings-language')));
     await tester.tap(find.byKey(const ValueKey('settings-language')));
     await tester.pumpAndSettle();
     await tester.tap(find.byKey(const ValueKey('settings-language-es')));
@@ -724,9 +804,10 @@ void main() {
       'es',
     );
 
+    await tester.ensureVisible(find.byKey(const ValueKey('settings-back')));
     await tester.tap(find.byKey(const ValueKey('settings-back')));
     await tester.pumpAndSettle();
-    expect(find.text('PARTIDA RÁPIDA'), findsOneWidget);
+    expect(find.text('PARTIDA ONLINE'), findsOneWidget);
     expect(find.text('CONTRA CPU'), findsOneWidget);
     expect(
       Localizations.localeOf(tester.element(find.byType(HomeScreen))),
@@ -741,7 +822,7 @@ void main() {
 
     await tester.pumpWidget(const ParchesePopApp());
     await tester.pumpAndSettle();
-    expect(find.text('QUICK MATCH'), findsOneWidget);
+    expect(find.text('ONLINE MATCH'), findsOneWidget);
     expect(find.text('PLAY CPU'), findsOneWidget);
 
     await tester.ensureVisible(find.text('Shop'));
@@ -768,11 +849,15 @@ void main() {
     await tester.pump();
     await tester.pump(const Duration(milliseconds: 500));
     expect(find.byType(GameScreen), findsOneWidget);
-    expect(find.text('Roll'), findsOneWidget);
-    expect(find.text('Traditional mode'), findsOneWidget);
+    expect(find.text('Roll'), findsNothing);
+    expect(find.text('Traditional mode'), findsNothing);
+    expect(find.byKey(const ValueKey('dice-roll-target')), findsOneWidget);
+    expect(find.byKey(const ValueKey('game-mode-indicator')), findsOneWidget);
 
     await tester.tap(find.byTooltip('Back to home'));
-    await tester.pumpAndSettle();
+    await tester.pump(const Duration(milliseconds: 450));
+    await tester.tap(find.text('SALIR SIN GUARDAR'));
+    await tester.pump(const Duration(milliseconds: 500));
     await tester.ensureVisible(find.text('How to play'));
     await tester.tap(find.text('How to play'));
     await tester.pumpAndSettle();
@@ -809,15 +894,6 @@ void main() {
     expect(find.byKey(const ValueKey('game-quick-bar')), findsOneWidget);
     expect(find.byKey(const ValueKey('match-elapsed-timer')), findsOneWidget);
     expect(find.text('00:00'), findsOneWidget);
-    expect(find.byKey(const ValueKey('game-version-label')), findsOneWidget);
-    expect(find.text('v1.2.3+45'), findsOneWidget);
-    final version = tester.getRect(
-      find.byKey(const ValueKey('game-version-label')),
-    );
-    expect(version.left, greaterThanOrEqualTo(rail.left));
-    expect(version.right, lessThanOrEqualTo(rail.right));
-    expect(version.top, greaterThanOrEqualTo(rail.top));
-    expect(version.bottom, lessThanOrEqualTo(rail.bottom));
 
     await tester.tap(find.byKey(const ValueKey('game-rail-players')));
     await tester.pump(const Duration(milliseconds: 300));
@@ -904,7 +980,6 @@ void main() {
     final actions = tester.getRect(
       find.byKey(const ValueKey('portrait-control-actions')),
     );
-    final roll = tester.getRect(find.byKey(const ValueKey('roll-action')));
     final item = tester.getRect(find.byKey(const ValueKey('item-action')));
     final message = tester.getRect(
       find.byKey(const ValueKey('portrait-message')),
@@ -913,24 +988,20 @@ void main() {
     expect(hud.width, closeTo(312, .5));
     expect(hud.height, lessThanOrEqualTo(215));
     expect(dice.right, lessThan(actions.left));
-    expect(roll.top, lessThan(item.top));
-    expect(roll.height, greaterThanOrEqualTo(44));
     expect(item.height, greaterThanOrEqualTo(40));
     expect(message.top, greaterThan(actions.bottom));
     expect(find.text('Tú'), findsOneWidget);
     expect(find.text('Sin poder ni trampa'), findsOneWidget);
-    expect(find.text('⚡ CAOS'), findsOneWidget);
-    expect(find.text('Lanzar'), findsOneWidget);
+    expect(find.text('⚡ CAOS'), findsNothing);
+    expect(find.text('Lanzar'), findsNothing);
+    expect(find.text('Toca los dados para lanzar.'), findsOneWidget);
     expect(find.text('Sin objeto'), findsOneWidget);
     expect(find.text(engine.message), findsOneWidget);
-    expect(find.byKey(const ValueKey('game-version-label')), findsOneWidget);
-    expect(find.text('v1.2.3+45'), findsOneWidget);
-    final version = tester.getRect(
-      find.byKey(const ValueKey('game-version-label')),
+    expect(find.byKey(const ValueKey('roll-action')), findsNothing);
+    expect(
+      find.byKey(const ValueKey('dice-roll-target')).hitTestable(),
+      findsOne,
     );
-    expect(version.left, greaterThanOrEqualTo(message.left));
-    expect(version.right, lessThanOrEqualTo(message.right));
-    expect(find.byKey(const ValueKey('roll-action')).hitTestable(), findsOne);
     expect(find.byKey(const ValueKey('item-action')).hitTestable(), findsOne);
     final emptyStatus = tester.widget<Container>(
       find.byKey(const ValueKey('empty-red')),
@@ -943,10 +1014,12 @@ void main() {
     expect(contrastRatio, greaterThanOrEqualTo(4.5));
 
     final initialRollSerial = engine.rollSerial;
-    await tester.tap(find.text('Lanzar'));
+    await tester.tap(find.byKey(const ValueKey('dice-roll-target')));
+    await tester.pump();
+    await tester.tap(find.byKey(const ValueKey('dice-roll-target')));
     await tester.pump();
     expect(engine.rollSerial, initialRollSerial + 1);
-    await tester.pump(const Duration(milliseconds: 700));
+    await tester.pump(const Duration(milliseconds: 850));
     expect(tester.takeException(), isNull);
     engine.dispose();
   });

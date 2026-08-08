@@ -591,7 +591,7 @@ void main() {
     game.dispose();
   });
 
-  test('the traditional route contains 68 numbered cells', () {
+  test('the complete route contains 68 numbered cells', () {
     expect(GameEngine.loop, hasLength(68));
     expect(GameEngine.commonPathLength, 64);
     expect(GameEngine.finishProgress, 71);
@@ -600,6 +600,30 @@ void main() {
     expect(GameEngine.startOffset[PlayerColor.green], 17);
     expect(GameEngine.startOffset[PlayerColor.yellow], 34);
     expect(GameEngine.startOffset[PlayerColor.blue], 51);
+  });
+
+  test('the complete board has four equal rotational 17-cell sectors', () {
+    expect(GameEngine.loop.toSet(), hasLength(GameEngine.loopLength));
+
+    const center = Offset(10, 10);
+    for (var index = 0; index < 17; index++) {
+      var expected = GameEngine.loop[index];
+      for (var quarter = 1; quarter < 4; quarter++) {
+        final delta = expected - center;
+        expected = center + Offset(delta.dy, -delta.dx);
+        final actual = GameEngine.loop[index + quarter * 17];
+        expect(actual.dx, closeTo(expected.dx, .00001));
+        expect(actual.dy, closeTo(expected.dy, .00001));
+      }
+    }
+
+    for (final color in PlayerColor.values) {
+      final start = GameEngine.startOffset[color]!;
+      expect(
+        GameEngine.homeEntryOffset[color],
+        (start + GameEngine.commonPathLength - 1) % GameEngine.loopLength,
+      );
+    }
   });
 
   test('each SALIDA arrow points toward its next printed route cells', () {
@@ -638,24 +662,19 @@ void main() {
     }
   });
 
-  test('every piece enters its own home lane after 64 common cells', () {
-    const lastCommonGlobal = {
-      PlayerColor.red: 63,
-      PlayerColor.green: 12,
-      PlayerColor.yellow: 29,
-      PlayerColor.blue: 46,
-    };
+  test('every piece enters its own home lane after the complete route', () {
     for (var playerIndex = 0; playerIndex < 4; playerIndex++) {
       for (var tokenId = 0; tokenId < 4; tokenId++) {
         final game = GameEngine();
         game.currentPlayerIndex = playerIndex;
-        final token = game.currentPlayer.tokens[tokenId]..progress = 63;
+        final token = game.currentPlayer.tokens[tokenId]
+          ..progress = GameEngine.commonPathLength - 1;
         game.hasRolled = true;
         game.remainingDice.addAll([1, 6]);
 
         expect(
           game.loopIndex(token.owner, token.progress),
-          lastCommonGlobal[token.owner],
+          GameEngine.homeEntryOffset[token.owner],
         );
         expect(game.movementCellsFor(token, 1), [
           GameEngine.homeLanes[token.owner]!.first,
@@ -672,8 +691,10 @@ void main() {
     for (var playerIndex = 0; playerIndex < 4; playerIndex++) {
       final game = GameEngine();
       game.currentPlayerIndex = playerIndex;
-      final first = game.currentPlayer.tokens[0]..progress = 65;
-      final second = game.currentPlayer.tokens[1]..progress = 63;
+      final first = game.currentPlayer.tokens[0]
+        ..progress = GameEngine.commonPathLength + 1;
+      final second = game.currentPlayer.tokens[1]
+        ..progress = GameEngine.commonPathLength - 1;
       game.hasRolled = true;
       game.remainingDice.addAll([1, 6]);
 
@@ -688,10 +709,12 @@ void main() {
     for (var playerIndex = 0; playerIndex < 4; playerIndex++) {
       final game = GameEngine();
       game.currentPlayerIndex = playerIndex;
-      final token = game.currentPlayer.tokens.first..progress = 62;
+      final token = game.currentPlayer.tokens.first
+        ..progress = GameEngine.commonPathLength - 2;
       game.hasRolled = true;
       game.remainingDice.addAll([3, 6]);
-      final lastCommon = GameEngine.loop[game.loopIndex(token.owner, 63)];
+      final lastCommon = GameEngine
+          .loop[game.loopIndex(token.owner, GameEngine.commonPathLength - 1)];
 
       expect(game.movementCellsFor(token, 3), [
         lastCommon,
@@ -707,23 +730,11 @@ void main() {
   test(
     'a physical five captures one rival blocking each home entry and keeps moving',
     () {
-      const printedSquareBeforeEntry = {
-        PlayerColor.red: 63,
-        PlayerColor.green: 12,
-        PlayerColor.yellow: 29,
-        PlayerColor.blue: 46,
-      };
-      const printedHomeEntry = {
-        PlayerColor.red: 64,
-        PlayerColor.green: 13,
-        PlayerColor.yellow: 30,
-        PlayerColor.blue: 47,
-      };
-
       for (var playerIndex = 0; playerIndex < 4; playerIndex++) {
         final game = GameEngine();
         game.currentPlayerIndex = playerIndex;
-        final mover = game.currentPlayer.tokens.first..progress = 62;
+        final mover = game.currentPlayer.tokens.first
+          ..progress = GameEngine.commonPathLength - 2;
         for (var tokenId = 1; tokenId < 4; tokenId++) {
           game.currentPlayer.tokens[tokenId].progress = tokenId * 10;
         }
@@ -736,9 +747,9 @@ void main() {
 
         expect(
           game.loopIndex(mover.owner, mover.progress) + 1,
-          printedSquareBeforeEntry[mover.owner],
+          game.loopIndex(mover.owner, GameEngine.commonPathLength - 2) + 1,
         );
-        expect(gate + 1, printedHomeEntry[mover.owner]);
+        expect(gate, GameEngine.homeEntryOffset[mover.owner]);
         for (final blockedDie in [1, 2, 3, 4, 6]) {
           expect(
             game.canMove(mover, blockedDie),
@@ -748,14 +759,17 @@ void main() {
           );
         }
         expect(game.isHomeEntryCaptureMove(mover, 5), isTrue);
-        expect(game.destinationProgressFor(mover, 5), 67);
+        expect(
+          game.destinationProgressFor(mover, 5),
+          GameEngine.commonPathLength + 3,
+        );
         expect(game.movementCellsFor(mover, 5), [
           GameEngine.loop[gate],
           ...GameEngine.homeLanes[mover.owner]!.take(4),
         ]);
 
         expect(game.moveToken(mover, die: 5), isTrue);
-        expect(mover.progress, 67);
+        expect(mover.progress, GameEngine.commonPathLength + 3);
         expect(game.tokenCell(mover), GameEngine.homeLanes[mover.owner]![3]);
         expect(blocker.inNest, isTrue);
         expect(game.remainingDice, [5, 20]);
@@ -767,7 +781,8 @@ void main() {
 
   test('a home entry without a rival uses five as a normal full move', () {
     final game = GameEngine();
-    final mover = game.currentPlayer.tokens.first..progress = 62;
+    final mover = game.currentPlayer.tokens.first
+      ..progress = GameEngine.commonPathLength - 2;
     for (var tokenId = 1; tokenId < 4; tokenId++) {
       game.currentPlayer.tokens[tokenId].progress = tokenId * 10;
     }
@@ -778,7 +793,7 @@ void main() {
     expect(game.isHomeEntryCaptureMove(mover, 5), isFalse);
     expect(game.canMove(mover, 5), isTrue);
     expect(game.moveToken(mover, die: 5), isTrue);
-    expect(mover.progress, 67);
+    expect(mover.progress, GameEngine.commonPathLength + 3);
     expect(game.remainingDice, [2]);
     expect(game.message, 'Avanzaste 5.');
   });
@@ -787,7 +802,8 @@ void main() {
     for (var playerIndex = 0; playerIndex < 4; playerIndex++) {
       final game = GameEngine();
       game.currentPlayerIndex = playerIndex;
-      final mover = game.currentPlayer.tokens.first..progress = 62;
+      final mover = game.currentPlayer.tokens.first
+        ..progress = GameEngine.commonPathLength - 2;
       for (var tokenId = 1; tokenId < 4; tokenId++) {
         game.currentPlayer.tokens[tokenId].progress = tokenId * 10;
       }
@@ -802,7 +818,7 @@ void main() {
       expect(game.isHomeEntryCaptureMove(mover, 5), isFalse);
       expect(game.canMove(mover, 5), isFalse);
       expect(game.moveToken(mover, die: 5), isFalse);
-      expect(mover.progress, 62);
+      expect(mover.progress, GameEngine.commonPathLength - 2);
       expect(game.remainingDice, [5, 5]);
       game.dispose();
     }
@@ -812,7 +828,8 @@ void main() {
     'the special five only works from the square immediately before entry',
     () {
       final game = GameEngine();
-      final mover = game.currentPlayer.tokens.first..progress = 61;
+      final mover = game.currentPlayer.tokens.first
+        ..progress = GameEngine.commonPathLength - 3;
       for (var tokenId = 1; tokenId < 4; tokenId++) {
         game.currentPlayer.tokens[tokenId].progress = tokenId * 10;
       }
@@ -830,7 +847,8 @@ void main() {
 
   test('SALIDA keeps priority over a home-entry capture with five', () {
     final game = GameEngine();
-    final mover = game.currentPlayer.tokens.first..progress = 62;
+    final mover = game.currentPlayer.tokens.first
+      ..progress = GameEngine.commonPathLength - 2;
     game.currentPlayer.tokens[1].progress = 10;
     game.currentPlayer.tokens[2].progress = 20;
     final nested = game.currentPlayer.tokens[3];
@@ -1003,7 +1021,7 @@ void main() {
   test('the capture bonus cannot cross or capture a two-token barrier', () {
     final game = GameEngine();
     final mover = game.currentPlayer.tokens.first..progress = 4;
-    final barrierLoopIndex = game.loopIndex(mover.owner, 12);
+    final barrierLoopIndex = game.loopIndex(mover.owner, 20);
     final firstBarrierToken = placeOnGlobal(game, 1, 0, barrierLoopIndex);
     final secondBarrierToken = placeOnGlobal(game, 1, 1, barrierLoopIndex);
     final firstBarrierProgress = firstBarrierToken.progress;
@@ -1297,10 +1315,10 @@ void main() {
         'from ${trapType.name}', () {
       final game = chaosGame();
       game.traps.add(
-        BoardTrap(owner: PlayerColor.red, type: trapType, loopIndex: 26),
+        BoardTrap(owner: PlayerColor.red, type: trapType, loopIndex: 20),
       );
       game.currentPlayerIndex = 1;
-      final green = placeOnGlobal(game, 1, tokenId, 25);
+      final green = placeOnGlobal(game, 1, tokenId, 19);
       final landingProgress = green.progress + 1;
       game.currentPlayer.inventory = PowerUp.shield;
       game.hasRolled = true;
@@ -1318,7 +1336,7 @@ void main() {
       expect(game.effectPowerUp, PowerUp.shield);
       expect(game.effectKind, PowerEffectKind.blocked);
       expect(game.effectToken, same(green));
-      expect(game.effectLoopIndex, 26);
+      expect(game.effectLoopIndex, 20);
       expect(game.effectResolving, isTrue);
       expect(game.message, contains('¡PROTEGIDO!'));
       expect(game.remainingDice, [5]);
@@ -1331,12 +1349,12 @@ void main() {
       'landing on ${blockedTrap.name} never leaves its owner sharing the square',
       () {
         final game = chaosGame();
-        final trapOwner = placeOnGlobal(game, 0, 0, 26);
+        final trapOwner = placeOnGlobal(game, 0, 0, 20);
         game.traps.add(
-          BoardTrap(owner: PlayerColor.red, type: blockedTrap, loopIndex: 26),
+          BoardTrap(owner: PlayerColor.red, type: blockedTrap, loopIndex: 20),
         );
         game.currentPlayerIndex = 1;
-        final mover = placeOnGlobal(game, 1, 0, 25);
+        final mover = placeOnGlobal(game, 1, 0, 19);
         if (blockedTrap == PowerUp.bomb) {
           game.currentPlayer.inventory = PowerUp.shield;
         }
@@ -1348,7 +1366,7 @@ void main() {
 
         expect(trapOwner.inNest, isTrue);
         expect(mover.inNest, isFalse);
-        expect(game.loopIndex(mover.owner, mover.progress), 26);
+        expect(game.loopIndex(mover.owner, mover.progress), 20);
         expect(game.remainingDice, contains(20));
         expect(
           game.players
@@ -1358,7 +1376,7 @@ void main() {
                     !token.inNest &&
                     !token.finished &&
                     token.progress < GameEngine.commonPathLength &&
-                    game.loopIndex(token.owner, token.progress) == 26,
+                    game.loopIndex(token.owner, token.progress) == 20,
               )
               .map((token) => token.owner)
               .toSet(),
@@ -1414,7 +1432,7 @@ void main() {
       BoardTrap(
         owner: PlayerColor.green,
         type: PowerUp.setbackTrap,
-        loopIndex: 26,
+        loopIndex: 20,
       ),
     ]);
 
@@ -1425,7 +1443,7 @@ void main() {
     );
     expect(
       game.visibleTrapsFor(PlayerColor.green).map((trap) => trap.loopIndex),
-      [26],
+      [20],
     );
     expect(game.visibleTrapsFor(PlayerColor.yellow), isEmpty);
     expect(game.visibleTrapsFor(PlayerColor.blue), isEmpty);
@@ -1433,17 +1451,17 @@ void main() {
 
   test('an armed bomb returns an opponent to the nest', () {
     final game = chaosGame();
-    final green = placeOnGlobal(game, 1, 0, 25);
+    final green = placeOnGlobal(game, 1, 0, 19);
     game.traps.add(
       const BoardTrap(
         owner: PlayerColor.red,
         type: PowerUp.bomb,
-        loopIndex: 26,
+        loopIndex: 20,
       ),
     );
     expect(game.traps.single.owner, PlayerColor.red);
     expect(game.traps.single.type, PowerUp.bomb);
-    expect(game.traps.single.loopIndex, 26);
+    expect(game.traps.single.loopIndex, 20);
 
     game.currentPlayerIndex = 1;
     game.hasRolled = true;
@@ -1457,7 +1475,7 @@ void main() {
     expect(game.traps, isEmpty);
     expect(game.remainingDice, [5]);
     expect(game.effectSerial, previousEffectSerial + 1);
-    expect(game.effectLoopIndex, 26);
+    expect(game.effectLoopIndex, 20);
     expect(game.effectPowerUp, PowerUp.bomb);
     expect(game.effectKind, PowerEffectKind.triggered);
     expect(game.effectToken, same(green));
@@ -1555,20 +1573,20 @@ void main() {
         const BoardTrap(
           owner: PlayerColor.red,
           type: PowerUp.setbackTrap,
-          loopIndex: 26,
+          loopIndex: 20,
         ),
       );
-      placeOnGlobal(game, 0, 0, 25);
-      placeOnGlobal(game, 0, 1, 25);
+      placeOnGlobal(game, 0, 0, 19);
+      placeOnGlobal(game, 0, 1, 19);
       game.currentPlayerIndex = 1;
-      final mover = placeOnGlobal(game, 1, 0, 25);
+      final mover = placeOnGlobal(game, 1, 0, 19);
       game.hasRolled = true;
       game.dice = [1, 5];
       game.remainingDice.addAll([1, 5]);
 
       expect(game.moveToken(mover, die: 1), isTrue);
 
-      expect(game.loopIndex(mover.owner, mover.progress), 26);
+      expect(game.loopIndex(mover.owner, mover.progress), 20);
       expect(game.message, contains('retrocedió 0 pasos'));
       game.dispose();
     },
@@ -1577,12 +1595,12 @@ void main() {
   test('only one trap can affect the same player during one turn', () {
     final game = chaosGame();
     game.traps.addAll(const [
-      BoardTrap(owner: PlayerColor.red, type: PowerUp.glueTrap, loopIndex: 26),
-      BoardTrap(owner: PlayerColor.red, type: PowerUp.bomb, loopIndex: 30),
+      BoardTrap(owner: PlayerColor.red, type: PowerUp.glueTrap, loopIndex: 20),
+      BoardTrap(owner: PlayerColor.red, type: PowerUp.bomb, loopIndex: 24),
     ]);
     game.currentPlayerIndex = 1;
-    final first = placeOnGlobal(game, 1, 0, 25);
-    final second = placeOnGlobal(game, 1, 1, 29);
+    final first = placeOnGlobal(game, 1, 0, 19);
+    final second = placeOnGlobal(game, 1, 1, 23);
     game.hasRolled = true;
     game.dice = [1, 1];
     game.remainingDice.addAll([1, 1]);
@@ -1593,10 +1611,10 @@ void main() {
     expect(game.moveToken(second, die: 1), isTrue);
 
     expect(second.inNest, isFalse);
-    expect(game.loopIndex(second.owner, second.progress), 30);
+    expect(game.loopIndex(second.owner, second.progress), 24);
     expect(game.traps, hasLength(1));
     expect(game.traps.single.type, PowerUp.bomb);
-    expect(game.traps.single.loopIndex, 30);
+    expect(game.traps.single.loopIndex, 24);
     game.dispose();
   });
 
@@ -1810,7 +1828,8 @@ void main() {
 
     test('a 2 + 3 total is not a physical five at an occupied entry', () {
       final game = GameEngine();
-      final mover = game.currentPlayer.tokens.first..progress = 62;
+      final mover = game.currentPlayer.tokens.first
+        ..progress = GameEngine.commonPathLength - 2;
       for (var tokenId = 1; tokenId < 4; tokenId++) {
         game.currentPlayer.tokens[tokenId].progress = tokenId * 10;
       }
@@ -1824,7 +1843,7 @@ void main() {
       expect(game.allDiceTotalFor(mover), isNull);
       expect(game.canMoveUsingAllDice(mover), isFalse);
       expect(game.moveTokenUsingAllDice(mover), isFalse);
-      expect(mover.progress, 62);
+      expect(mover.progress, GameEngine.commonPathLength - 2);
       expect(blocker.inNest, isFalse);
       expect(game.remainingDice, [2, 3]);
       game.dispose();

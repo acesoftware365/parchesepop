@@ -6,7 +6,10 @@ import 'package:parchesepop/main.dart';
 Future<void> _tapBoardCell(WidgetTester tester, Offset cell) async {
   final board = find.byKey(const ValueKey('game-board'));
   final rect = tester.getRect(board);
-  const frameGutterCells = .26;
+  final boardWidget = tester.widget<GameBoardMockup>(
+    find.byType(GameBoardMockup),
+  );
+  final frameGutterCells = boardWidget.compactPhone ? .08 : .26;
   final boardCell = rect.width / (20 + frameGutterCells * 2);
   final inset = boardCell * frameGutterCells;
   await tester.tapAt(
@@ -251,7 +254,10 @@ void main() {
         await _tapBoardCell(tester, GameEngine.loop.first);
         expect(find.text('FICHA 1 · PASOS'), findsOneWidget);
 
-        await _tapBoardCell(tester, const Offset(4.5, 15.5));
+        await _tapBoardCell(
+          tester,
+          displayTokenCellsForTesting(engine, compactPhone: true)[jailedToken]!,
+        );
 
         expect(jailedToken.inNest, isTrue);
         expect(find.byKey(const ValueKey('token-move-popup')), findsNothing);

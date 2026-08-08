@@ -118,6 +118,10 @@ String _translateDynamic(String source) {
       (match) => 'Opponents ready · ${match.group(1)}',
     ),
     (
+      RegExp(r'^Completando la mesa · (.+)$'),
+      (match) => 'Completing the table · ${match.group(1)}',
+    ),
+    (
       RegExp(r'^Nivel (\d+) · (.+)$'),
       (match) => 'Level ${match.group(1)} · ${match.group(2)}',
     ),
@@ -128,6 +132,10 @@ String _translateDynamic(String source) {
       RegExp(r'^¡(.+) comprado y equipado!$'),
       (match) =>
           '${translateForLanguage(match.group(1)!, 'en')} purchased and equipped!',
+    ),
+    (
+      RegExp(r'^(.+) está en uso\.$'),
+      (match) => '${translateForLanguage(match.group(1)!, 'en')} is equipped.',
     ),
     (
       RegExp(r'^(.+) NIVEL (\d+)$'),
@@ -141,6 +149,10 @@ String _translateDynamic(String source) {
       RegExp(r'^(.+) sacó (\d+) y (\d+)\.$'),
       (match) =>
           '${match.group(1)} rolled ${match.group(2)} and ${match.group(3)}.',
+    ),
+    (
+      RegExp(r'^Elige (\d+) o (\d+)$'),
+      (match) => 'Choose ${match.group(1)} or ${match.group(2)}',
     ),
     (
       RegExp(r'^Comenzó la partida en modo (Caos|Tradicional)\.$'),
@@ -620,7 +632,7 @@ const _english = <String, String>{
       'This match uses computer-controlled opponents. It does not require an account or a multiplayer connection.',
   'Preparando…': 'Preparing…',
   'Rival': 'Opponent',
-  'Rival automático': 'Computer-controlled opponent',
+  'Rival online': 'Online opponent',
   'Tú': 'You',
   'TÚ': 'YOU',
   'NV. 12': 'LV. 12',
@@ -658,6 +670,35 @@ const _english = <String, String>{
   'VICTORIA': 'VICTORY',
   'Lanzar': 'Roll',
   'Lanza los dados': 'Roll the dice',
+  'Toca los dados para lanzar.': 'Tap the dice to roll.',
+  'TOCA PARA LANZAR': 'TAP TO ROLL',
+  'Tu movimiento': 'Your move',
+  'Selecciona un dado o revisa el tablero': 'Choose a die or inspect the board',
+  'Lanza los dados o revisa el tablero': 'Roll or inspect the board',
+  'Observa el turno en el tablero': 'Follow the turn on the board',
+  'VISOR': 'VIEWER',
+  'MINIMAPA': 'MINIMAP',
+  'Visor del tablero': 'Board viewer',
+  'Ficha roja': 'Red piece',
+  'Ficha verde': 'Green piece',
+  'Ficha amarilla': 'Yellow piece',
+  'Ficha azul': 'Blue piece',
+  'Arrastra el marco dorado.': 'Drag the gold frame.',
+  'TABLERO COMPLETO': 'FULL BOARD',
+  'Tablero completo': 'Full board',
+  'Siguiendo': 'Following',
+  'Vista manual': 'Manual view',
+  'Vista ampliada': 'Zoomed view',
+  'Toca o arrastra para ampliar una zona del tablero.':
+      'Tap or drag to enlarge a board area.',
+  'Mantén el dedo sobre el minimapa para ampliar y arrastra para mover la vista.':
+      'Hold the minimap to zoom, then drag to move the view.',
+  'MANTÉN PARA AMPLIAR': 'HOLD TO ZOOM',
+  'MANTÉN Y ARRASTRA': 'HOLD AND DRAG',
+  'SUELTA PARA VOLVER': 'RELEASE TO RESET',
+  'AMPLIADO': 'ZOOMED',
+  'Mantén el dedo y arrastra.': 'Hold and drag.',
+  'Suelta para ver el tablero completo.': 'Release to see the full board.',
   'Versión del juego': 'Game version',
   '¡Tu turno! Lanza los dados.': 'Your turn! Roll the dice.',
   '¡Tu turno!': 'Your turn!',
@@ -751,6 +792,7 @@ const _english = <String, String>{
   '¡SORPRESA!': 'SURPRISE!',
   'CAPTURAR': 'CAPTURE',
   'SALIDA': 'START',
+  'PASO': 'STEP',
   'PASOS': 'STEPS',
   'TODOS': 'ALL',
 
@@ -825,6 +867,17 @@ const _english = <String, String>{
   'USAR ESTE DISEÑO': 'USE THIS DESIGN',
   'USAR': 'USE',
   'EN USO': 'EQUIPPED',
+  'Mis diseños': 'My designs',
+  'Cambiar artículos comprados': 'Change purchased items',
+  'MIS DISEÑOS': 'MY DESIGNS',
+  'Cambia aquí los artículos que ya compraste.':
+      'Change the items you already own here.',
+  'TEMAS': 'THEMES',
+  'DADOS': 'DICE',
+  'FICHAS': 'PIECES',
+  'AVATARES': 'AVATARS',
+  'Solo aparecen artículos comprados. Cada jugador conserva su propio lado.':
+      'Only purchased items appear. Each player keeps their own side.',
   'EN COLECCIÓN': 'OWNED',
   'BÁSICO': 'BASIC',
   'ESPECIAL': 'SPECIAL',
@@ -908,6 +961,18 @@ const _english = <String, String>{
       'Pixel sunset and moving neon track',
   'Aurora Ártica': 'Arctic Aurora',
   'Luces polares sobre montañas de hielo': 'Northern lights over icy mountains',
+  'Cosmic Realms Red': 'Cosmic Realms Red',
+  'Pack con fichas, ruta, entradas y estrellas cósmicas':
+      'Pack with cosmic pieces, path, entrances, and safe stars',
+  'Cosmic Realms Yellow': 'Cosmic Realms Yellow',
+  'Pack con fichas, ruta, entradas y estrellas cósmicas amarillas':
+      'Pack with yellow cosmic pieces, path, entrances, and safe stars',
+  'Cosmic Realms Blue': 'Cosmic Realms Blue',
+  'Pack con fichas, ruta, entradas y estrellas cósmicas azules':
+      'Pack with blue cosmic pieces, path, entrances, and safe stars',
+  'Cosmic Realms Green': 'Cosmic Realms Green',
+  'Pack con fichas, ruta, entradas y estrellas cósmicas verdes':
+      'Pack with green cosmic pieces, path, entrances, and safe stars',
   'Dados Perla': 'Pearl Dice',
   'Brillo del océano': 'Ocean shimmer',
   'Dados Prisma': 'Prism Dice',
@@ -947,6 +1012,14 @@ const _english = <String, String>{
   'Menú y música de partida': 'Menu and game music',
   'Vibración': 'Vibration',
   'Respuesta al lanzar y capturar': 'Feedback when rolling and capturing',
+  'Guía de lanzamiento': 'Roll guide',
+  'Señala los dados y las fichas disponibles':
+      'Points to the dice and available pieces',
+  'Mano para los dados': 'Dice hand',
+  'Elige cómo aparece la guía de lanzamiento':
+      'Choose how the roll guide appears',
+  'IZQUIERDA': 'LEFT',
+  'DERECHA': 'RIGHT',
   'Idioma': 'Language',
   'Idioma del sistema': 'System language',
   'Sistema · English': 'System · English',
@@ -977,10 +1050,10 @@ const _english = <String, String>{
       'Parchís Pop is an entertainment game. Coins in this version are for testing, have no monetary value, and do not provide competitive advantages.',
   'No se permiten nombres ofensivos, amenazas, acoso ni contenido sexual. Los mensajes durante la partida se limitarán a frases preaprobadas.':
       'Offensive names, threats, harassment, and sexual content are not allowed. In-game messages are limited to preapproved phrases.',
-  'En Android y iOS se muestran banners adaptables en la parte inferior y anuncios recompensados voluntarios en la tienda. El premio se entrega únicamente al completar el anuncio. La aplicación solicita consentimiento cuando corresponde y ofrece opciones para administrar la privacidad publicitaria. macOS no muestra banners ni anuncios recompensados.':
-      'Android and iOS show adaptive banners at the bottom and optional rewarded ads in the shop. The reward is granted only after the ad is completed. The app requests consent when required and provides options to manage ad privacy. macOS does not show banners or rewarded ads.',
-  'Android y iOS muestran anuncios adaptables y ofrecen anuncios recompensados voluntarios. Puedes administrar el consentimiento y las preferencias disponibles desde esta pantalla. La versión de macOS no muestra estos anuncios.':
-      'Android and iOS show adaptive ads and offer optional rewarded ads. You can manage consent and available preferences from this screen. The macOS version does not show these ads.',
+  'En Android y iOS se muestran banners adaptables en la parte inferior. Al finalizar una partida, Jugar otra vez y Volver al inicio pueden mostrar un anuncio recompensado. También se ofrecen anuncios recompensados voluntarios en la tienda. El premio se entrega únicamente al completar el anuncio. Si un anuncio no está disponible o se cierra, la navegación continúa. La aplicación solicita consentimiento cuando corresponde y ofrece opciones para administrar la privacidad publicitaria. macOS no muestra banners ni anuncios recompensados.':
+      'Android and iOS show adaptive banners at the bottom. After a match, Play Again and Back to Home may show a rewarded ad. Optional rewarded ads are also offered in the shop. The reward is granted only after the ad is completed. If an ad is unavailable or dismissed, navigation continues. The app requests consent when required and provides options to manage ad privacy. macOS does not show banners or rewarded ads.',
+  'Android y iOS muestran anuncios adaptables y pueden mostrar un anuncio recompensado al elegir Jugar otra vez o Volver al inicio después de una partida. También ofrecen anuncios recompensados voluntarios en la tienda. Si el anuncio no está disponible o se cierra, la acción solicitada continúa. Puedes administrar el consentimiento y las preferencias disponibles desde esta pantalla. La versión de macOS no muestra estos anuncios.':
+      'Android and iOS show adaptive ads and may show a rewarded ad when you choose Play Again or Back to Home after a match. Optional rewarded ads are also available in the shop. If an ad is unavailable or dismissed, the requested action continues. You can manage consent and available preferences from this screen. The macOS version does not show these ads.',
   'El perfil actual vive en el dispositivo. El flujo definitivo permitirá borrar tanto los datos locales como la cuenta online cuando el servicio de autenticación esté conectado.':
       'The current profile lives on this device. The final flow will let you delete both local data and the online account once the authentication service is connected.',
   'El perfil y sus credenciales se guardan localmente. Desde Mi perfil puedes usar Eliminar cuenta y datos para borrar del dispositivo el perfil, la contraseña protegida, las monedas, los cosméticos y las preferencias asociadas.':

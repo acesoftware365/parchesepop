@@ -190,6 +190,7 @@ void main() {
           opponent: 'Online',
           gameEngine: engine,
           onlineSession: _rankedSession(),
+          cpuThinkDelayProvider: () => const Duration(milliseconds: 100),
         ),
       ),
     );

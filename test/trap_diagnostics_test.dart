@@ -24,6 +24,11 @@ void main() {
       resolveTrapDiagnosticsVisibility(isDebugBuild: true, requested: false),
       isFalse,
     );
+    expect(
+      resolveTrapDiagnosticsVisibility(isDebugBuild: true),
+      isFalse,
+      reason: 'Normal simulator play must not add a debug row to the board.',
+    );
   });
 
   testWidgets('test mode reveals every trap and uses its owner color', (

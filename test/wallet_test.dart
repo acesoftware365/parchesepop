@@ -10,7 +10,7 @@ void main() {
   test('catalog has valid unique IDs and preserves legacy contracts', () {
     final ids = walletCatalog.map((product) => product.id).toList();
     expect(ids.toSet(), hasLength(ids.length));
-    expect(ids, hasLength(33));
+    expect(ids, hasLength(37));
     for (final product in walletCatalog) {
       expect(product.id, isNotEmpty);
       expect(product.name, isNotEmpty);
@@ -97,6 +97,30 @@ void main() {
       'theme_velvet_lounge': (
         'Aurora Ártica',
         1500,
+        CosmeticCategory.theme,
+        CosmeticRarity.legendary,
+      ),
+      'theme_cosmic_realms_red': (
+        'Cosmic Realms Red',
+        1800,
+        CosmeticCategory.theme,
+        CosmeticRarity.legendary,
+      ),
+      'theme_cosmic_realms_yellow': (
+        'Cosmic Realms Yellow',
+        1800,
+        CosmeticCategory.theme,
+        CosmeticRarity.legendary,
+      ),
+      'theme_cosmic_realms_blue': (
+        'Cosmic Realms Blue',
+        1800,
+        CosmeticCategory.theme,
+        CosmeticRarity.legendary,
+      ),
+      'theme_cosmic_realms_green': (
+        'Cosmic Realms Green',
+        1800,
         CosmeticCategory.theme,
         CosmeticRarity.legendary,
       ),
@@ -205,6 +229,10 @@ void main() {
       'theme_tropical_splash': 'Selva Viva',
       'theme_celestial_carnival': 'Arcade Retro',
       'theme_velvet_lounge': 'Aurora Ártica',
+      'theme_cosmic_realms_red': 'Cosmic Realms Red',
+      'theme_cosmic_realms_yellow': 'Cosmic Realms Yellow',
+      'theme_cosmic_realms_blue': 'Cosmic Realms Blue',
+      'theme_cosmic_realms_green': 'Cosmic Realms Green',
     };
     final themes = walletCatalog
         .where((product) => product.category == CosmeticCategory.theme)
@@ -220,6 +248,29 @@ void main() {
       themes.map((theme) => theme.description).toSet(),
       hasLength(themes.length),
     );
+  });
+
+  test('shop exposes only Classic Board and four Cosmic Realms themes', () {
+    final visibleThemes = shopCatalog
+        .where((product) => product.category == CosmeticCategory.theme)
+        .toList(growable: false);
+
+    expect(
+      visibleThemes.map((product) => product.id),
+      orderedEquals(const [
+        'theme_default',
+        'theme_cosmic_realms_red',
+        'theme_cosmic_realms_yellow',
+        'theme_cosmic_realms_blue',
+        'theme_cosmic_realms_green',
+      ]),
+    );
+    expect(visibleThemes.first.price, 0);
+    for (final theme in visibleThemes.skip(1)) {
+      expect(theme.price, 1800);
+      expect(theme.rarity, CosmeticRarity.legendary);
+    }
+    expect(shopCatalog, hasLength(32));
   });
 
   test('each category has one free basic item and it leads that category', () {
@@ -271,15 +322,16 @@ void main() {
   });
 
   test('featured collection is curated and never contains a basic item', () {
-    final featured = walletCatalog
+    final featured = shopCatalog
         .where((product) => product.featured)
         .toList(growable: false);
 
-    expect(featured, hasLength(8));
+    expect(featured, hasLength(9));
     expect(featured.map((product) => product.id).toSet(), {
-      'theme_neon_rush',
-      'theme_tropical_splash',
-      'theme_velvet_lounge',
+      'theme_cosmic_realms_red',
+      'theme_cosmic_realms_yellow',
+      'theme_cosmic_realms_blue',
+      'theme_cosmic_realms_green',
       'dice_galaxy',
       'dice_prism_party',
       'tokens_crystal',
@@ -303,6 +355,7 @@ void main() {
 
     expect(product.featured, isFalse);
     expect(product.rarity, CosmeticRarity.common);
+    expect(product.availableInShop, isTrue);
   });
 
   test('fresh wallets own and equip every basic cosmetic', () async {
@@ -455,18 +508,12 @@ void main() {
     expect(wallet.balance, 2000);
     expect(wallet.isOwned('theme_neon_rush'), isFalse);
     expect(wallet.isOwned('dice_galaxy'), isFalse);
-    expect(
-      wallet.equippedProductId(CosmeticCategory.theme),
-      'theme_default',
-    );
+    expect(wallet.equippedProductId(CosmeticCategory.theme), 'theme_default');
     expect(wallet.equippedProductId(CosmeticCategory.dice), 'dice_default');
 
     final reloaded = await WalletController.create(initialBalance: 2000);
     expect(reloaded.balance, 2000);
     expect(reloaded.isOwned('theme_neon_rush'), isFalse);
-    expect(
-      reloaded.equippedProductId(CosmeticCategory.theme),
-      'theme_default',
-    );
+    expect(reloaded.equippedProductId(CosmeticCategory.theme), 'theme_default');
   });
 }

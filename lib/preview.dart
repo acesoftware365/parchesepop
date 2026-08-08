@@ -23,7 +23,7 @@ const previewLanguage = String.fromEnvironment(
 // Lets visual regression captures exercise a specific board theme.
 const previewTheme = String.fromEnvironment(
   'PARCHESPOP_PREVIEW_THEME',
-  defaultValue: 'theme_neon_rush',
+  defaultValue: 'theme_cosmic_realms_red',
 );
 
 Future<void> main() async {

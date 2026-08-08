@@ -14,6 +14,7 @@ class WalletProduct {
     required this.category,
     this.featured = false,
     this.rarity = CosmeticRarity.common,
+    this.availableInShop = true,
   });
 
   final String id;
@@ -23,6 +24,7 @@ class WalletProduct {
   final CosmeticCategory category;
   final bool featured;
   final CosmeticRarity rarity;
+  final bool availableInShop;
 }
 
 const List<WalletProduct> walletCatalog = [
@@ -66,6 +68,7 @@ const List<WalletProduct> walletCatalog = [
     category: CosmeticCategory.theme,
     featured: true,
     rarity: CosmeticRarity.rare,
+    availableInShop: false,
   ),
   WalletProduct(
     id: 'theme_golden_night',
@@ -74,6 +77,7 @@ const List<WalletProduct> walletCatalog = [
     price: 1200,
     category: CosmeticCategory.theme,
     rarity: CosmeticRarity.epic,
+    availableInShop: false,
   ),
   WalletProduct(
     id: 'theme_tropical_splash',
@@ -83,6 +87,7 @@ const List<WalletProduct> walletCatalog = [
     category: CosmeticCategory.theme,
     featured: true,
     rarity: CosmeticRarity.rare,
+    availableInShop: false,
   ),
   WalletProduct(
     id: 'theme_celestial_carnival',
@@ -91,12 +96,51 @@ const List<WalletProduct> walletCatalog = [
     price: 1350,
     category: CosmeticCategory.theme,
     rarity: CosmeticRarity.epic,
+    availableInShop: false,
   ),
   WalletProduct(
     id: 'theme_velvet_lounge',
     name: 'Aurora Ártica',
     description: 'Luces polares sobre montañas de hielo',
     price: 1500,
+    category: CosmeticCategory.theme,
+    featured: true,
+    rarity: CosmeticRarity.legendary,
+    availableInShop: false,
+  ),
+  WalletProduct(
+    id: 'theme_cosmic_realms_red',
+    name: 'Cosmic Realms Red',
+    description: 'Pack con fichas, ruta, entradas y estrellas cósmicas',
+    price: 1800,
+    category: CosmeticCategory.theme,
+    featured: true,
+    rarity: CosmeticRarity.legendary,
+  ),
+  WalletProduct(
+    id: 'theme_cosmic_realms_yellow',
+    name: 'Cosmic Realms Yellow',
+    description:
+        'Pack con fichas, ruta, entradas y estrellas cósmicas amarillas',
+    price: 1800,
+    category: CosmeticCategory.theme,
+    featured: true,
+    rarity: CosmeticRarity.legendary,
+  ),
+  WalletProduct(
+    id: 'theme_cosmic_realms_blue',
+    name: 'Cosmic Realms Blue',
+    description: 'Pack con fichas, ruta, entradas y estrellas cósmicas azules',
+    price: 1800,
+    category: CosmeticCategory.theme,
+    featured: true,
+    rarity: CosmeticRarity.legendary,
+  ),
+  WalletProduct(
+    id: 'theme_cosmic_realms_green',
+    name: 'Cosmic Realms Green',
+    description: 'Pack con fichas, ruta, entradas y estrellas cósmicas verdes',
+    price: 1800,
     category: CosmeticCategory.theme,
     featured: true,
     rarity: CosmeticRarity.legendary,
@@ -299,6 +343,13 @@ const List<WalletProduct> walletCatalog = [
     rarity: CosmeticRarity.epic,
   ),
 ];
+
+/// Products currently presented for sale.
+///
+/// Archived products stay in [walletCatalog] so existing ownership and
+/// equipped selections remain valid after the visible shop assortment changes.
+Iterable<WalletProduct> get shopCatalog =>
+    walletCatalog.where((product) => product.availableInShop);
 
 enum AddCoinsResult { added, invalidAmount }
 

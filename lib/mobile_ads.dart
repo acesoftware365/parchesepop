@@ -34,6 +34,10 @@ abstract class AppAdsController extends ChangeNotifier {
   bool get privacyOptionsRequired;
 
   Future<void> initialize();
+
+  /// Starts or refreshes the rewarded-ad preload without blocking the caller.
+  /// Implementations must keep this operation idempotent.
+  void preloadRewarded() {}
   Future<bool> showRewarded();
   Future<void> showPrivacyOptions();
   Widget buildBanner(BuildContext context);
@@ -80,8 +84,11 @@ class GoogleMobileAdsController extends AppAdsController {
   final TargetPlatform platform;
   RewardedAd? _rewardedAd;
   Timer? _rewardRetryTimer;
+  DateTime? _rewardLoadedAt;
+  int _rewardLoadFailureCount = 0;
   bool _initializing = false;
   bool _initialized = false;
+  bool _adsStarting = false;
   bool _adsReady = false;
   bool _rewardLoading = false;
   bool _rewardShowing = false;
@@ -125,9 +132,15 @@ class GoogleMobileAdsController extends AppAdsController {
     final completed = Completer<void>();
 
     Future<void> finishConsentFlow() async {
-      await _refreshPrivacyOptionsRequirement();
-      await _startAdsIfAllowed();
-      if (!completed.isCompleted) completed.complete();
+      try {
+        await _refreshPrivacyOptionsRequirement();
+        await _startAdsIfAllowed();
+      } catch (error, stackTrace) {
+        debugPrint('AdMob initialization error: $error');
+        debugPrintStack(stackTrace: stackTrace);
+      } finally {
+        if (!completed.isCompleted) completed.complete();
+      }
     }
 
     ConsentInformation.instance.requestConsentInfoUpdate(
@@ -152,9 +165,12 @@ class GoogleMobileAdsController extends AppAdsController {
       },
     );
 
-    await completed.future;
-    _initializing = false;
-    _initialized = true;
+    try {
+      await completed.future;
+    } finally {
+      _initializing = false;
+      _initialized = true;
+    }
   }
 
   Future<void> _refreshPrivacyOptionsRequirement() async {
@@ -167,18 +183,23 @@ class GoogleMobileAdsController extends AppAdsController {
   }
 
   Future<void> _startAdsIfAllowed() async {
-    if (_disposed || _adsReady) return;
-    final canRequestAds = await ConsentInformation.instance.canRequestAds();
-    if (!canRequestAds) return;
-    await _requestTrackingAuthorizationIfNeeded();
-    await MobileAds.instance.updateRequestConfiguration(
-      familySafeAdRequestConfiguration(),
-    );
-    await MobileAds.instance.initialize();
-    if (_disposed) return;
-    _adsReady = true;
-    _notify();
-    _loadRewarded();
+    if (_disposed || _adsReady || _adsStarting) return;
+    _adsStarting = true;
+    try {
+      final canRequestAds = await ConsentInformation.instance.canRequestAds();
+      if (!canRequestAds) return;
+      await _requestTrackingAuthorizationIfNeeded();
+      await MobileAds.instance.updateRequestConfiguration(
+        familySafeAdRequestConfiguration(),
+      );
+      await MobileAds.instance.initialize();
+      if (_disposed) return;
+      _adsReady = true;
+      _notify();
+      _loadRewarded();
+    } finally {
+      _adsStarting = false;
+    }
   }
 
   Future<void> _requestTrackingAuthorizationIfNeeded() async {
@@ -210,18 +231,57 @@ class GoogleMobileAdsController extends AppAdsController {
             return;
           }
           _rewardLoading = false;
+          _rewardLoadFailureCount = 0;
+          _rewardLoadedAt = DateTime.now();
           _rewardedAd = ad;
           _notify();
         },
         onAdFailedToLoad: (error) {
           if (_disposed) return;
           _rewardLoading = false;
+          _rewardLoadFailureCount += 1;
           debugPrint('AdMob rewarded load error: $error');
           _notify();
-          _rewardRetryTimer = Timer(const Duration(seconds: 30), _loadRewarded);
+          final retrySeconds = switch (_rewardLoadFailureCount) {
+            1 => 3,
+            2 => 6,
+            3 => 12,
+            _ => 30,
+          };
+          _rewardRetryTimer = Timer(
+            Duration(seconds: retrySeconds),
+            preloadRewarded,
+          );
         },
       ),
     );
+  }
+
+  @override
+  void preloadRewarded() {
+    if (_disposed) return;
+    if (!_initialized) {
+      if (!_initializing) unawaited(initialize());
+      return;
+    }
+    if (!_adsReady) {
+      unawaited(_startAdsIfAllowed());
+      return;
+    }
+
+    // Google mobile ads should not be kept for longer than about one hour.
+    // Refresh a cached ad early whenever the app resumes after a long pause.
+    final loadedAt = _rewardLoadedAt;
+    if (_rewardedAd != null &&
+        loadedAt != null &&
+        DateTime.now().difference(loadedAt) >= const Duration(minutes: 50) &&
+        !_rewardShowing) {
+      _rewardedAd?.dispose();
+      _rewardedAd = null;
+      _rewardLoadedAt = null;
+      _notify();
+    }
+    _loadRewarded();
   }
 
   /// The reward is preloaded at launch. If the player reaches a reward action
@@ -243,11 +303,9 @@ class GoogleMobileAdsController extends AppAdsController {
   Future<bool> showRewarded() async {
     if (_rewardShowing) return false;
 
+    preloadRewarded();
     var ad = _rewardedAd;
-    if (ad == null) {
-      _loadRewarded();
-      ad = await _waitForRewardedAd();
-    }
+    ad ??= await _waitForRewardedAd();
     if (ad == null || _rewardShowing || _disposed) {
       return false;
     }
@@ -255,6 +313,7 @@ class GoogleMobileAdsController extends AppAdsController {
     final completed = Completer<bool>();
     var earnedReward = false;
     _rewardedAd = null;
+    _rewardLoadedAt = null;
     _rewardShowing = true;
     _notify();
 
@@ -263,7 +322,7 @@ class GoogleMobileAdsController extends AppAdsController {
       if (_disposed) return;
       _rewardShowing = false;
       _notify();
-      _loadRewarded();
+      preloadRewarded();
     }
 
     ad.fullScreenContentCallback = FullScreenContentCallback(
@@ -277,11 +336,17 @@ class GoogleMobileAdsController extends AppAdsController {
         finish(false);
       },
     );
-    ad.show(
-      onUserEarnedReward: (_, _) {
-        earnedReward = true;
-      },
-    );
+    try {
+      ad.show(
+        onUserEarnedReward: (_, _) {
+          earnedReward = true;
+        },
+      );
+    } catch (error) {
+      debugPrint('AdMob rewarded synchronous show error: $error');
+      ad.dispose();
+      finish(false);
+    }
     return completed.future;
   }
 

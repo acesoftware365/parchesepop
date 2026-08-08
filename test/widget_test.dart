@@ -11,7 +11,10 @@ import 'package:shared_preferences/shared_preferences.dart';
 Future<void> tapBoardCell(WidgetTester tester, Offset cell) async {
   final board = find.byKey(const ValueKey('game-board'));
   final rect = tester.getRect(board);
-  const frameGutterCells = .26;
+  final boardWidget = tester.widget<GameBoardMockup>(
+    find.byType(GameBoardMockup),
+  );
+  final frameGutterCells = boardWidget.compactPhone ? .08 : .26;
   final boardCell = rect.width / (20 + frameGutterCells * 2);
   final inset = boardCell * frameGutterCells;
   await tester.tapAt(
@@ -223,17 +226,20 @@ void main() {
     final subtitle = find.text(
       'Personaliza tu juego sin ventajas competitivas.',
     );
-    final featuredProducts = walletCatalog
+    final featuredProducts = shopCatalog
         .where((product) => product.featured)
         .toList(growable: false);
     final firstCard = find
         .ancestor(
-          of: find.text('Ciudad Futurista'),
+          of: find.text('Cosmic Realms Red'),
           matching: find.byType(Card),
         )
         .first;
     final secondCard = find
-        .ancestor(of: find.text('Selva Viva'), matching: find.byType(Card))
+        .ancestor(
+          of: find.text('Cosmic Realms Yellow'),
+          matching: find.byType(Card),
+        )
         .first;
 
     expect(title, findsOneWidget);
@@ -336,7 +342,11 @@ void main() {
     await tester.pump(const Duration(milliseconds: 100));
 
     expect(find.textContaining('Caos'), findsOneWidget);
-    expect(find.text('Lanzar'), findsOneWidget);
+    expect(find.text('Lanzar'), findsNothing);
+    expect(
+      find.byKey(const ValueKey('dice-roll-target')).hitTestable(),
+      findsOne,
+    );
     expect(find.text('Sin objeto'), findsOneWidget);
     expect(tester.takeException(), isNull);
 
@@ -1001,18 +1011,42 @@ void main() {
       of: find.byType(GameBoardMockup),
       matching: find.byType(CustomPaint),
     );
-    final customPaint = boardPaint.evaluate().single.widget as CustomPaint;
-    final dynamic painter = customPaint.painter;
-    final cells = Map<GameToken, Offset>.from(
+    var customPaint = boardPaint.evaluate().single.widget as CustomPaint;
+    dynamic painter = customPaint.painter;
+    var cells = Map<GameToken, Offset>.from(
       painter.animatedCells as Map<GameToken, Offset>,
     );
-    final firstCell = cells[first]!;
-    final secondCell = cells[second]!;
-    final midpoint = (firstCell + secondCell) / 2;
+    var firstCell = cells[first]!;
+    var secondCell = cells[second]!;
+    var midpoint = (firstCell + secondCell) / 2;
 
     expect((firstCell - secondCell).distance, closeTo(.94, .001));
     expect(firstCell.dx, closeTo(secondCell.dx, .001));
     expect(firstCell.dy, isNot(closeTo(secondCell.dy, .001)));
+    expect(midpoint.dx, closeTo(GameEngine.loop.first.dx, .001));
+    expect(midpoint.dy, closeTo(GameEngine.loop.first.dy, .001));
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Center(
+          child: SizedBox.square(
+            dimension: 400,
+            child: GameBoardMockup(engine: engine, compactPhone: true),
+          ),
+        ),
+      ),
+    );
+    await tester.pump(const Duration(milliseconds: 100));
+    customPaint = boardPaint.evaluate().single.widget as CustomPaint;
+    painter = customPaint.painter;
+    cells = Map<GameToken, Offset>.from(
+      painter.animatedCells as Map<GameToken, Offset>,
+    );
+    firstCell = cells[first]!;
+    secondCell = cells[second]!;
+    midpoint = (firstCell + secondCell) / 2;
+
+    expect((firstCell - secondCell).distance, closeTo(1.0, .001));
     expect(midpoint.dx, closeTo(GameEngine.loop.first.dx, .001));
     expect(midpoint.dy, closeTo(GameEngine.loop.first.dy, .001));
 
@@ -1163,7 +1197,8 @@ void main() {
     tester,
   ) async {
     final engine = GameEngine(mode: GameMode.traditional);
-    final token = engine.currentPlayer.tokens[0]..progress = 62;
+    final token = engine.currentPlayer.tokens[0]
+      ..progress = GameEngine.commonPathLength - 2;
     engine.hasRolled = true;
     engine.dice = [3, 6];
     engine.remainingDice.addAll([3, 6]);
@@ -1191,8 +1226,10 @@ void main() {
     var cells = Map<GameToken, Offset>.from(
       painter.animatedCells as Map<GameToken, Offset>,
     );
-    expect(cells[token]!.dx, closeTo(1, .18));
-    expect(cells[token]!.dy, closeTo(10, .18));
+    expect(
+      (cells[token]! - GameEngine.homeLanes[PlayerColor.red]!.first).distance,
+      lessThan(.50),
+    );
 
     await tester.pump(const Duration(milliseconds: 300));
     customPaint = boardPaint.evaluate().single.widget as CustomPaint;
@@ -1206,12 +1243,14 @@ void main() {
     engine.dispose();
   });
 
-  testWidgets('a second red piece never continues through squares 65 to 68', (
+  testWidgets('a second red piece enters the home lane instead of the loop', (
     tester,
   ) async {
     final engine = GameEngine(mode: GameMode.traditional);
-    final first = engine.currentPlayer.tokens[0]..progress = 65;
-    final second = engine.currentPlayer.tokens[1]..progress = 63;
+    final first = engine.currentPlayer.tokens[0]
+      ..progress = GameEngine.commonPathLength + 1;
+    final second = engine.currentPlayer.tokens[1]
+      ..progress = GameEngine.commonPathLength - 1;
     engine.currentPlayer.tokens[2].progress = 10;
     engine.currentPlayer.tokens[3].progress = 20;
     engine.hasRolled = true;
@@ -1241,11 +1280,9 @@ void main() {
     final cells = Map<GameToken, Offset>.from(
       painter.animatedCells as Map<GameToken, Offset>,
     );
-    final forbiddenRedContinuation = GameEngine.loop.sublist(64, 68);
-
     expect(cells[first], GameEngine.homeLanes[PlayerColor.red]![1]);
     expect(cells[second], GameEngine.homeLanes[PlayerColor.red]!.first);
-    expect(forbiddenRedContinuation, isNot(contains(cells[second])));
+    expect(GameEngine.loop, isNot(contains(cells[second])));
 
     await tester.pumpWidget(const SizedBox.shrink());
     engine.dispose();
@@ -1269,7 +1306,10 @@ void main() {
     );
     await tester.pump(const Duration(milliseconds: 100));
 
-    await tapBoardCell(tester, const Offset(2.5, 15.5));
+    await tapBoardCell(
+      tester,
+      displayTokenCellsForTesting(engine, compactPhone: true)[token]!,
+    );
 
     expect(find.byKey(const ValueKey('move-choice-5')), findsOneWidget);
     expect(find.text('FICHA 1 · SALIDA'), findsOneWidget);
@@ -1326,7 +1366,8 @@ void main() {
     'an occupied home entry shows CAPTURAR and both preview positions',
     (tester) async {
       final engine = GameEngine(mode: GameMode.traditional);
-      final mover = engine.currentPlayer.tokens.first..progress = 62;
+      final mover = engine.currentPlayer.tokens.first
+        ..progress = GameEngine.commonPathLength - 2;
       engine.currentPlayer.tokens[1].progress = 10;
       engine.currentPlayer.tokens[2].progress = 20;
       engine.currentPlayer.tokens[3].progress = 30;
@@ -1348,7 +1389,7 @@ void main() {
       );
       await tester.pump(const Duration(milliseconds: 100));
 
-      await tapBoardCell(tester, GameEngine.loop[62]);
+      await tapBoardCell(tester, engine.tokenCell(mover)!);
 
       expect(find.text('FICHA 1 · CAPTURA'), findsOneWidget);
       expect(find.text('CAPTURAR'), findsOneWidget);
@@ -1375,7 +1416,7 @@ void main() {
       await tester.tap(find.byKey(const ValueKey('move-choice-5')));
       await tester.pump();
 
-      expect(mover.progress, 67);
+      expect(mover.progress, GameEngine.commonPathLength + 3);
       expect(blocker.inNest, isTrue);
       expect(engine.remainingDice, [5, 20]);
       expect(engine.message, contains('entrada'));
@@ -1451,7 +1492,10 @@ void main() {
     );
     await tester.pump(const Duration(milliseconds: 100));
 
-    await tapBoardCell(tester, const Offset(2.5, 15.5));
+    await tapBoardCell(
+      tester,
+      displayTokenCellsForTesting(engine, compactPhone: true)[token]!,
+    );
     expect(find.text('SALIDA'), findsOneWidget);
 
     await tapBoardCell(tester, GameEngine.loop[0]);
@@ -1564,10 +1608,16 @@ void main() {
     );
     await tester.pump(const Duration(milliseconds: 100));
 
-    await tapBoardCell(tester, const Offset(2.5, 15.5));
+    await tapBoardCell(
+      tester,
+      displayTokenCellsForTesting(engine, compactPhone: true)[first]!,
+    );
     expect(find.text('FICHA 1 · SALIDA'), findsOneWidget);
 
-    await tapBoardCell(tester, const Offset(4.5, 15.5));
+    await tapBoardCell(
+      tester,
+      displayTokenCellsForTesting(engine, compactPhone: true)[second]!,
+    );
 
     expect(first.inNest, isTrue);
     expect(second.inNest, isTrue);
@@ -1797,7 +1847,7 @@ void main() {
     expect(blueState.controller.isAnimating, isTrue);
     expect(redState.controller.isAnimating, isTrue);
 
-    await tester.pump(const Duration(milliseconds: 700));
+    await tester.pump(const Duration(milliseconds: 850));
     expect(blueState.controller.isAnimating, isFalse);
     expect(redState.controller.isAnimating, isFalse);
 
@@ -2039,14 +2089,11 @@ void main() {
       ),
       findsNothing,
     );
-    final chaosBadge = find.descendant(
-      of: playerStatus,
-      matching: find.text('⚡ CAOS'),
-    );
-    expect(chaosBadge, findsOneWidget);
+    expect(find.text('⚡ CAOS'), findsNothing);
+    expect(find.byKey(const ValueKey('game-mode-indicator')), findsOneWidget);
     expect(
       tester.getRect(chatButton).right,
-      lessThanOrEqualTo(tester.getRect(chaosBadge).left),
+      lessThanOrEqualTo(tester.getRect(playerStatus).right),
     );
     expect(tester.getSize(chatButton), const Size.square(44));
 

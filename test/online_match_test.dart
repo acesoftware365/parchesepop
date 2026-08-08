@@ -184,6 +184,10 @@ void main() {
     );
 
     final catalogIds = walletCatalog.map((product) => product.id).toSet();
+    final validLoadoutIds = {
+      ...catalogIds,
+      ...bundledTokenStyleIdByThemeId.values,
+    };
     final ids = session.participants.map((player) => player.id).toSet();
     final names = session.participants
         .map((player) => player.displayName.toLowerCase())
@@ -219,7 +223,7 @@ void main() {
         );
       }
       for (final productId in player.loadout.productIds) {
-        expect(catalogIds, contains(productId));
+        expect(validLoadoutIds, contains(productId));
       }
     }
   });
