@@ -547,8 +547,6 @@ class MobileAdShell extends StatelessWidget {
             const _BuildVersionAboveBanner(),
             SafeArea(
               top: false,
-              left: false,
-              right: false,
               minimum: const EdgeInsets.only(top: 2),
               child: controller.buildBanner(context),
             ),
@@ -611,9 +609,22 @@ class _BuildVersionAboveBannerState extends State<_BuildVersionAboveBanner> {
 }
 
 class AdaptiveMobileBanner extends StatefulWidget {
-  const AdaptiveMobileBanner({super.key, required this.adUnitId});
+  const AdaptiveMobileBanner({
+    super.key,
+    required this.adUnitId,
+    this.sizeLoader,
+    this.contentBuilder,
+  });
 
   final String adUnitId;
+
+  /// Test/preview seam. Production uses AdMob's anchored-adaptive size API.
+  @visibleForTesting
+  final AdaptiveBannerSizeLoader? sizeLoader;
+
+  /// Test/preview seam that avoids mounting a native platform ad view.
+  @visibleForTesting
+  final AdaptiveBannerContentBuilder? contentBuilder;
 
   @override
   State<AdaptiveMobileBanner> createState() => _AdaptiveMobileBannerState();
@@ -624,33 +635,59 @@ class _AdaptiveMobileBannerState extends State<AdaptiveMobileBanner> {
   Timer? _retryTimer;
   AdSize? _size;
   int? _requestedWidth;
+  Orientation? _requestedOrientation;
   bool _loadScheduled = false;
 
   @override
   void didUpdateWidget(covariant AdaptiveMobileBanner oldWidget) {
     super.didUpdateWidget(oldWidget);
-    if (oldWidget.adUnitId == widget.adUnitId) return;
+    if (oldWidget.adUnitId == widget.adUnitId &&
+        identical(oldWidget.sizeLoader, widget.sizeLoader) &&
+        identical(oldWidget.contentBuilder, widget.contentBuilder)) {
+      return;
+    }
     _disposeBanner();
     _requestedWidth = null;
+    _requestedOrientation = null;
   }
 
-  void _scheduleLoad(int width) {
-    if (width <= 0 || _requestedWidth == width || _loadScheduled) return;
+  void _scheduleLoad(int width, Orientation orientation) {
+    if (width <= 0 ||
+        (_requestedWidth == width && _requestedOrientation == orientation) ||
+        _loadScheduled) {
+      return;
+    }
     _loadScheduled = true;
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _loadScheduled = false;
-      if (mounted) unawaited(_load(width));
+      if (mounted) unawaited(_load(width, orientation));
     });
   }
 
-  Future<void> _load(int width) async {
+  Future<void> _load(int width, Orientation orientation) async {
     _requestedWidth = width;
+    _requestedOrientation = orientation;
     _retryTimer?.cancel();
     _disposeBanner();
-    final size = width >= AdSize.fullBanner.width
-        ? AdSize.fullBanner
-        : AdSize.banner;
-    if (!mounted || _requestedWidth != width) return;
+    final size = await resolveAnchoredAdaptiveBannerSize(
+      width,
+      loadAdaptive: widget.sizeLoader,
+    );
+    if (!mounted ||
+        _requestedWidth != width ||
+        _requestedOrientation != orientation) {
+      return;
+    }
+    if (size == null) {
+      _scheduleRetry(width, orientation);
+      return;
+    }
+
+    final contentBuilder = widget.contentBuilder;
+    if (contentBuilder != null) {
+      setState(() => _size = size);
+      return;
+    }
 
     final banner = BannerAd(
       adUnitId: widget.adUnitId,
@@ -672,17 +709,29 @@ class _AdaptiveMobileBannerState extends State<AdaptiveMobileBanner> {
             _banner = null;
             _size = null;
             _requestedWidth = width;
+            _requestedOrientation = orientation;
           });
-          _retryTimer = Timer(const Duration(seconds: 30), () {
-            if (mounted) {
-              setState(() => _requestedWidth = null);
-            }
-          });
+          _scheduleRetry(width, orientation);
         },
       ),
     );
     _banner = banner;
     await banner.load();
+  }
+
+  void _scheduleRetry(int width, Orientation orientation) {
+    _retryTimer?.cancel();
+    _retryTimer = Timer(const Duration(seconds: 30), () {
+      if (!mounted ||
+          _requestedWidth != width ||
+          _requestedOrientation != orientation) {
+        return;
+      }
+      setState(() {
+        _requestedWidth = null;
+        _requestedOrientation = null;
+      });
+    });
   }
 
   void _disposeBanner() {
@@ -703,7 +752,8 @@ class _AdaptiveMobileBannerState extends State<AdaptiveMobileBanner> {
     return LayoutBuilder(
       builder: (context, constraints) {
         final width = constraints.maxWidth.floor();
-        _scheduleLoad(width);
+        final orientation = MediaQuery.orientationOf(context);
+        _scheduleLoad(width, orientation);
         final size = _size;
         final banner = _banner;
         final height = size?.height.toDouble() ?? 50;
@@ -714,7 +764,13 @@ class _AdaptiveMobileBannerState extends State<AdaptiveMobileBanner> {
           height: height,
           alignment: Alignment.center,
           color: const Color(0xFFF4F7FC),
-          child: size != null && banner != null
+          child: size != null && widget.contentBuilder != null
+              ? SizedBox(
+                  width: size.width.toDouble(),
+                  height: size.height.toDouble(),
+                  child: widget.contentBuilder!(context, size),
+                )
+              : size != null && banner != null
               ? SizedBox(
                   width: size.width.toDouble(),
                   height: size.height.toDouble(),
@@ -738,4 +794,44 @@ class _AdaptiveMobileBannerState extends State<AdaptiveMobileBanner> {
       },
     );
   }
+}
+
+typedef AdaptiveBannerSizeLoader = Future<AdSize?> Function(int width);
+
+typedef AdaptiveBannerContentBuilder =
+    Widget Function(BuildContext context, AdSize size);
+
+/// Resolves a full-width anchored banner while keeping every fallback inside
+/// the available logical width. The native SDK supplies the optimized height.
+@visibleForTesting
+Future<AdSize?> resolveAnchoredAdaptiveBannerSize(
+  int availableWidth, {
+  AdaptiveBannerSizeLoader? loadAdaptive,
+}) async {
+  if (availableWidth <= 0) return null;
+
+  try {
+    final adaptive = await (loadAdaptive == null
+        ? AdSize.getLargeAnchoredAdaptiveBannerAdSize(availableWidth)
+        : loadAdaptive(availableWidth));
+    if (adaptive != null &&
+        adaptive.width > 0 &&
+        adaptive.width <= availableWidth &&
+        adaptive.height > 0) {
+      return adaptive;
+    }
+  } catch (error) {
+    debugPrint('AdMob adaptive banner size error: $error');
+  }
+
+  return widthSafeBannerFallback(availableWidth);
+}
+
+@visibleForTesting
+AdSize? widthSafeBannerFallback(int availableWidth) {
+  if (availableWidth >= AdSize.fullBanner.width) {
+    return AdSize.fullBanner;
+  }
+  if (availableWidth >= AdSize.banner.width) return AdSize.banner;
+  return null;
 }

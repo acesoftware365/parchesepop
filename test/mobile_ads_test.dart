@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:google_mobile_ads/google_mobile_ads.dart';
 import 'package:parchesepop/game_analytics.dart';
 import 'package:parchesepop/game_guide.dart';
 import 'package:parchesepop/game_engine.dart';
@@ -38,6 +39,145 @@ void main() {
     expect(configuration.maxAdContentRating, 'G');
     expect(configuration.tagForChildDirectedTreatment, isNull);
     expect(configuration.tagForUnderAgeOfConsent, isNull);
+  });
+
+  group('anchored adaptive banner sizing', () {
+    test('uses the full safe width and native optimized height', () async {
+      int? requestedWidth;
+
+      final size = await resolveAnchoredAdaptiveBannerSize(
+        390,
+        loadAdaptive: (width) async {
+          requestedWidth = width;
+          return AdSize(width: width, height: 60);
+        },
+      );
+
+      expect(requestedWidth, 390);
+      expect(size?.width, 390);
+      expect(size?.height, 60);
+    });
+
+    test('fixed fallback never exceeds the available width', () async {
+      for (final expectation in <(int, int?, int?)>[
+        (280, null, null),
+        (320, 320, 50),
+        (390, 320, 50),
+        (468, 468, 60),
+        (600, 468, 60),
+        (728, 468, 60),
+      ]) {
+        final size = await resolveAnchoredAdaptiveBannerSize(
+          expectation.$1,
+          loadAdaptive: (_) async => null,
+        );
+        expect(size?.width, expectation.$2);
+        expect(size?.height, expectation.$3);
+        expect(size?.width ?? 0, lessThanOrEqualTo(expectation.$1));
+      }
+    });
+
+    testWidgets('reloads at the new full width after rotation', (tester) async {
+      final requestedWidths = <int>[];
+      addTearDown(() => tester.binding.setSurfaceSize(null));
+      await tester.binding.setSurfaceSize(const Size(390, 844));
+
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: Column(
+              children: [
+                const Expanded(child: SizedBox.shrink()),
+                AdaptiveMobileBanner(
+                  adUnitId: 'test-ad-unit',
+                  sizeLoader: (width) async {
+                    requestedWidths.add(width);
+                    return AdSize(width: width, height: width < 500 ? 60 : 90);
+                  },
+                  contentBuilder: (context, size) => const ColoredBox(
+                    key: ValueKey('adaptive-test-creative'),
+                    color: Colors.blue,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      );
+      await tester.pump();
+      await tester.pumpAndSettle();
+
+      var slot = tester.getRect(
+        find.byKey(const ValueKey('mobile-ad-banner-slot')),
+      );
+      var creative = tester.getRect(
+        find.byKey(const ValueKey('adaptive-test-creative')),
+      );
+      expect(requestedWidths, [390]);
+      expect(slot.size, const Size(390, 60));
+      expect(creative.size, const Size(390, 60));
+
+      await tester.binding.setSurfaceSize(const Size(844, 390));
+      await tester.pump();
+      await tester.pumpAndSettle();
+
+      slot = tester.getRect(
+        find.byKey(const ValueKey('mobile-ad-banner-slot')),
+      );
+      creative = tester.getRect(
+        find.byKey(const ValueKey('adaptive-test-creative')),
+      );
+      expect(requestedWidths, [390, 844]);
+      expect(slot.size, const Size(844, 90));
+      expect(creative.size, const Size(844, 90));
+      expect(tester.takeException(), isNull);
+    });
+
+    testWidgets('reloads when orientation changes at the same width', (
+      tester,
+    ) async {
+      var requestCount = 0;
+      tester.view.devicePixelRatio = 1;
+      tester.view.physicalSize = const Size(390, 844);
+      addTearDown(tester.view.reset);
+
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: Column(
+              children: [
+                const Expanded(child: SizedBox.shrink()),
+                AdaptiveMobileBanner(
+                  adUnitId: 'test-ad-unit',
+                  sizeLoader: (width) async {
+                    requestCount += 1;
+                    return AdSize(width: width, height: 50 + requestCount * 10);
+                  },
+                  contentBuilder: (context, size) => const ColoredBox(
+                    key: ValueKey('same-width-adaptive-creative'),
+                    color: Colors.blue,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      );
+      await tester.pump();
+      await tester.pumpAndSettle();
+      expect(requestCount, 1);
+
+      tester.view.physicalSize = const Size(390, 300);
+      await tester.pump();
+      await tester.pumpAndSettle();
+
+      expect(requestCount, 2);
+      expect(
+        tester.getSize(find.byKey(const ValueKey('mobile-ad-banner-slot'))),
+        const Size(390, 70),
+      );
+      expect(tester.takeException(), isNull);
+    });
   });
 
   group('MobileAdShell', () {
@@ -237,6 +377,48 @@ void main() {
 
         await tester.pumpWidget(const SizedBox.shrink());
         controller.dispose();
+      },
+    );
+
+    testWidgets(
+      'landscape banner respects both notch sides and its adaptive height',
+      (tester) async {
+        tester.view.devicePixelRatio = 1;
+        tester.view.physicalSize = const Size(844, 390);
+        tester.view.padding = const FakeViewPadding(
+          left: 47,
+          right: 47,
+          bottom: 21,
+        );
+        tester.view.viewPadding = const FakeViewPadding(
+          left: 47,
+          right: 47,
+          bottom: 21,
+        );
+        addTearDown(tester.view.reset);
+        final controller = _FakeAdsController(
+          supported: true,
+          adsReady: true,
+          bannerHeight: 60,
+        );
+        addTearDown(controller.dispose);
+
+        await tester.pumpWidget(_insetTestApp(controller));
+
+        final banner = tester.getRect(
+          find.byKey(const ValueKey('fake-mobile-banner')),
+        );
+        final version = tester.getRect(
+          find.byKey(const ValueKey('version-above-ad-banner')),
+        );
+        expect(banner.left, 47);
+        expect(banner.right, 797);
+        expect(banner.height, 60);
+        expect(banner.bottom, lessThanOrEqualTo(369));
+        expect(version.bottom, lessThanOrEqualTo(banner.top));
+        expect(tester.takeException(), isNull);
+
+        await tester.pumpWidget(const SizedBox.shrink());
       },
     );
 
@@ -954,6 +1136,7 @@ class _FakeAdsController extends AppAdsController {
     required bool adsReady,
     this.rewardedReady = false,
     this.rewardedResult = RewardedAdResult.dismissed,
+    this.bannerHeight = 50,
   }) : _adsReady = adsReady;
 
   @override
@@ -971,6 +1154,7 @@ class _FakeAdsController extends AppAdsController {
   bool get privacyOptionsRequired => false;
 
   final RewardedAdResult rewardedResult;
+  final double bannerHeight;
   int rewardedShowCount = 0;
   int rewardedPreloadCount = 0;
 
@@ -982,10 +1166,11 @@ class _FakeAdsController extends AppAdsController {
 
   @override
   Widget buildBanner(BuildContext context) {
-    return const SizedBox(
-      key: ValueKey('fake-mobile-banner'),
-      height: 50,
-      child: Text('TEST AD'),
+    return SizedBox(
+      key: const ValueKey('fake-mobile-banner'),
+      width: double.infinity,
+      height: bannerHeight,
+      child: const Text('TEST AD'),
     );
   }
 
