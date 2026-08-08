@@ -1121,6 +1121,53 @@ class GameEngine extends ChangeNotifier {
     return _isHomeEntryCapture(token, die);
   }
 
+  /// The single visible rival this legal die choice is expected to capture.
+  ///
+  /// This is a pure preview of the board position. In Chaos mode, a hidden
+  /// trap can still resolve before the capture; deliberately ignoring hidden
+  /// traps here avoids leaking secret trap information through the UI.
+  GameToken? captureTargetFor(GameToken token, int die) {
+    if (!hasRolled ||
+        gameOver ||
+        effectResolving ||
+        !remainingDice.contains(die)) {
+      return null;
+    }
+    if (!canMove(token, die)) return null;
+    if (_isHomeEntryCapture(token, die)) {
+      return _capturableOpponentAt(
+        token.owner,
+        homeEntryOffset[token.owner]!,
+        forcedSafeCapture: true,
+      );
+    }
+
+    final destinationProgress = token.inNest ? 0 : token.progress + die;
+    if (destinationProgress >= commonPathLength) return null;
+    final destinationIndex = loopIndex(token.owner, destinationProgress);
+    final capturesFromOwnStart =
+        token.inNest && destinationIndex == startOffset[token.owner];
+    return _capturableOpponentAt(
+      token.owner,
+      destinationIndex,
+      forcedSafeCapture: capturesFromOwnStart,
+    );
+  }
+
+  /// The single visible rival captured at the final combined-dice
+  /// destination, or `null` when the combined move is unavailable or safe.
+  GameToken? captureTargetUsingAllDice(GameToken token) {
+    if (gameOver || effectResolving) return null;
+    final total = allDiceTotalFor(token);
+    if (total == null) return null;
+    final destinationProgress = token.progress + total;
+    if (destinationProgress >= commonPathLength) return null;
+    return _capturableOpponentAt(
+      token.owner,
+      loopIndex(token.owner, destinationProgress),
+    );
+  }
+
   int? destinationProgressFor(GameToken token, int die) {
     if (!canMove(token, die)) return null;
     return token.inNest ? 0 : token.progress + die;
@@ -1359,15 +1406,12 @@ class GameEngine extends ChangeNotifier {
     bool forcedSafeCapture = false,
     bool homeEntryCapture = false,
   }) {
-    if (safeLoopIndices.contains(index) && !forcedSafeCapture) return false;
-    final targets = _opponentsAt(owner, index);
-
-    // Capturing is strictly a one-versus-one action. A square containing two
-    // rival tokens is a barrier and remains protected even if a special move
-    // or a future caller reaches this central capture routine.
-    if (targets.length != 1) return false;
-
-    final token = targets.single;
+    final token = _capturableOpponentAt(
+      owner,
+      index,
+      forcedSafeCapture: forcedSafeCapture,
+    );
+    if (token == null) return false;
     final player = players.firstWhere(
       (candidate) => candidate.color == token.owner,
     );
@@ -1396,11 +1440,26 @@ class GameEngine extends ChangeNotifier {
     return true;
   }
 
+  GameToken? _capturableOpponentAt(
+    PlayerColor owner,
+    int index, {
+    bool forcedSafeCapture = false,
+  }) {
+    if (safeLoopIndices.contains(index) && !forcedSafeCapture) return null;
+    final targets = _opponentsAt(owner, index);
+
+    // Capturing is strictly a one-versus-one action. A square containing two
+    // rival tokens is a barrier and remains protected even if a special move
+    // or a future caller reaches this central capture routine.
+    return targets.length == 1 ? targets.single : null;
+  }
+
   bool _isHomeEntryCapture(GameToken token, int die) {
     if (die != 5 || token.progress != commonPathLength - 2) return false;
     final entry = homeEntryOffset[token.owner]!;
     return !_isLoopBarrier(entry) &&
-        _opponentsAt(token.owner, entry).length == 1;
+        _capturableOpponentAt(token.owner, entry, forcedSafeCapture: true) !=
+            null;
   }
 
   List<GameToken> _opponentsAt(PlayerColor owner, int loopPosition) => players

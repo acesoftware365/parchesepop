@@ -1426,8 +1426,11 @@ void main() {
 
       expect(find.text('FICHA 1 · CAPTURA'), findsOneWidget);
       expect(find.text('CAPTURAR'), findsOneWidget);
+      expect(engine.captureTargetFor(mover, 5), same(blocker));
       expect(
-        find.bySemanticsLabel('Capturar la ficha que bloquea la entrada'),
+        find.bySemanticsLabel(
+          'Capturar la ficha verde que bloquea la entrada con 5',
+        ),
         findsOneWidget,
       );
 

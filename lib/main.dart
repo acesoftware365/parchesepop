@@ -321,6 +321,7 @@ class MoveDestinationPreview {
     this.usesAllDice = false,
     this.loopIndex,
     this.captureCell,
+    this.captureTarget,
   });
 
   final GameToken token;
@@ -336,6 +337,7 @@ class MoveDestinationPreview {
   final bool usesAllDice;
   final int? loopIndex;
   final Offset? captureCell;
+  final GameToken? captureTarget;
 }
 
 List<MoveDestinationPreview> _moveDestinationPreviews(
@@ -376,6 +378,7 @@ List<MoveDestinationPreview> _moveDestinationPreviews(
       final isGoal = destinationProgress >= GameEngine.finishProgress;
       final isHomeLane =
           destinationProgress >= GameEngine.commonPathLength && !isGoal;
+      final captureTarget = engine.captureTargetFor(candidate, value);
       previews.add(
         MoveDestinationPreview(
           token: candidate,
@@ -396,6 +399,7 @@ List<MoveDestinationPreview> _moveDestinationPreviews(
           captureCell: isHomeEntryCapture
               ? GameEngine.loop[GameEngine.homeEntryOffset[candidate.owner]!]
               : null,
+          captureTarget: captureTarget,
         ),
       );
     }
@@ -424,6 +428,7 @@ List<MoveDestinationPreview> _moveDestinationPreviews(
             loopIndex: destinationProgress < GameEngine.commonPathLength
                 ? engine.loopIndex(candidate.owner, destinationProgress)
                 : null,
+            captureTarget: engine.captureTargetUsingAllDice(candidate),
           ),
         );
       }
@@ -7057,6 +7062,11 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
         : null;
     if (choices.isEmpty && allDiceTotal == null) return null;
     final twentyStepColor = _twentyStepGuideColor(token.id);
+    final captureTargetsByDie = <int, GameToken>{};
+    for (final choice in choices) {
+      final target = engine.captureTargetFor(token, choice);
+      if (target != null) captureTargetsByDie[choice] = target;
+    }
     return _TokenMovePopup(
       tokenNumber: token.id + 1,
       tokenInNest: token.inNest,
@@ -7066,9 +7076,13 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
         for (final choice in choices)
           if (engine.isHomeEntryCaptureMove(token, choice)) choice,
       },
+      captureTargetsByDie: captureTargetsByDie,
       rolledDice: engine.dice,
       onChoice: _moveSelectedToken,
       allDiceTotal: allDiceTotal,
+      allDiceCaptureTarget: allDiceTotal == null
+          ? null
+          : engine.captureTargetUsingAllDice(token),
       onAllDice: _moveSelectedTokenUsingAllDice,
       onCancel: _cancelTokenSelection,
     );
@@ -11104,9 +11118,11 @@ class _TokenMovePopup extends StatelessWidget {
     required this.choices,
     required this.twentyStepColor,
     required this.homeEntryCaptureChoices,
+    required this.captureTargetsByDie,
     required this.rolledDice,
     required this.onChoice,
     required this.allDiceTotal,
+    required this.allDiceCaptureTarget,
     required this.onAllDice,
     required this.onCancel,
   });
@@ -11116,32 +11132,216 @@ class _TokenMovePopup extends StatelessWidget {
   final List<int> choices;
   final Color twentyStepColor;
   final Set<int> homeEntryCaptureChoices;
+  final Map<int, GameToken> captureTargetsByDie;
   final List<int> rolledDice;
   final ValueChanged<int> onChoice;
   final int? allDiceTotal;
+  final GameToken? allDiceCaptureTarget;
   final VoidCallback onAllDice;
   final VoidCallback onCancel;
 
-  Widget _choiceButton(int value) {
+  String _captureColorName(
+    BuildContext context,
+    PlayerColor color, {
+    bool semantic = false,
+  }) {
+    final english = appLanguageCodeOf(context) == 'en';
+    return switch ((english, semantic, color)) {
+      (true, _, PlayerColor.red) => semantic ? 'red' : 'RED',
+      (true, _, PlayerColor.green) => semantic ? 'green' : 'GREEN',
+      (true, _, PlayerColor.yellow) => semantic ? 'yellow' : 'YELLOW',
+      (true, _, PlayerColor.blue) => semantic ? 'blue' : 'BLUE',
+      (false, true, PlayerColor.red) => 'roja',
+      (false, true, PlayerColor.green) => 'verde',
+      (false, true, PlayerColor.yellow) => 'amarilla',
+      (false, true, PlayerColor.blue) => 'azul',
+      (false, false, PlayerColor.red) => 'ROJO',
+      (false, false, PlayerColor.green) => 'VERDE',
+      (false, false, PlayerColor.yellow) => 'AMARILLO',
+      (false, false, PlayerColor.blue) => 'AZUL',
+    };
+  }
+
+  Color _captureColor(PlayerColor color) => switch (color) {
+    PlayerColor.red => PopColors.red,
+    PlayerColor.green => PopColors.green,
+    PlayerColor.yellow => PopColors.yellow,
+    PlayerColor.blue => PopColors.blue,
+  };
+
+  Widget _withCaptureLabel(
+    BuildContext context,
+    Widget primary,
+    GameToken? target, {
+    required String keySuffix,
+  }) {
+    if (target == null) return primary;
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 2),
+      child: Column(
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: [
+          Flexible(flex: 3, child: primary),
+          const SizedBox(height: 1),
+          Flexible(
+            flex: 2,
+            child: FittedBox(
+              fit: BoxFit.scaleDown,
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  const Icon(
+                    Icons.gps_fixed_rounded,
+                    color: Colors.white,
+                    size: 10,
+                  ),
+                  const SizedBox(width: 2),
+                  Container(
+                    width: 8,
+                    height: 8,
+                    decoration: BoxDecoration(
+                      color: _captureColor(target.owner),
+                      shape: BoxShape.circle,
+                      border: Border.all(color: Colors.white, width: 1),
+                    ),
+                  ),
+                  const SizedBox(width: 2),
+                  PopText(
+                    'KILL ${_captureColorName(context, target.owner)}',
+                    key: ValueKey('popup-move-choice-kill-$keySuffix'),
+                    style: const TextStyle(
+                      color: Colors.white,
+                      fontSize: 7.5,
+                      height: 1,
+                      fontWeight: FontWeight.w900,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _choiceButton(BuildContext context, int value) {
     final color = value == 20
         ? twentyStepColor
         : _moveChoiceColor(rolledDice, value);
     final isExit = tokenInNest && value == 5;
     final isHomeEntryCapture = homeEntryCaptureChoices.contains(value);
+    final target = captureTargetsByDie[value];
+    final english = appLanguageCodeOf(context) == 'en';
+    final baseLabel = isExit
+        ? english
+              ? 'Move piece $tokenNumber out of jail with $value'
+              : 'Sacar ficha $tokenNumber de la cárcel con $value'
+        : isHomeEntryCapture
+        ? english
+              ? 'Capture the piece blocking the home entry with $value'
+              : 'Capturar la ficha que bloquea la entrada con $value'
+        : value == 20
+        ? english
+              ? 'Move piece $tokenNumber with the 20-step bonus'
+              : 'Mover ficha $tokenNumber con el bono de 20 pasos'
+        : english
+        ? 'Move piece $tokenNumber, $value '
+              '${value == 1 ? 'step' : 'steps'}'
+        : 'Mover ficha $tokenNumber, $value '
+              '${value == 1 ? 'paso' : 'pasos'}';
+    final semanticColor = target == null
+        ? null
+        : _captureColorName(context, target.owner, semantic: true);
+    final semanticLabel = target == null
+        ? baseLabel
+        : isHomeEntryCapture
+        ? english
+              ? 'Capture the $semanticColor piece blocking the home entry '
+                    'with $value'
+              : 'Capturar la ficha $semanticColor que bloquea la entrada '
+                    'con $value'
+        : english
+        ? '$baseLabel and capture the $semanticColor piece'
+        : '$baseLabel y capturar la ficha $semanticColor';
+    final primary = isExit
+        ? const FittedBox(
+            fit: BoxFit.scaleDown,
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Icon(
+                  Icons.directions_run_rounded,
+                  color: Colors.white,
+                  size: 16,
+                ),
+                SizedBox(width: 3),
+                PopText(
+                  'SALIDA',
+                  style: TextStyle(
+                    color: Colors.white,
+                    fontSize: 11,
+                    fontWeight: FontWeight.w900,
+                    letterSpacing: .2,
+                  ),
+                ),
+              ],
+            ),
+          )
+        : isHomeEntryCapture
+        ? const FittedBox(
+            fit: BoxFit.scaleDown,
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Icon(Icons.gps_fixed_rounded, color: Colors.white, size: 15),
+                SizedBox(width: 3),
+                PopText(
+                  'CAPTURAR',
+                  style: TextStyle(
+                    color: Colors.white,
+                    fontSize: 10,
+                    fontWeight: FontWeight.w900,
+                    letterSpacing: .1,
+                  ),
+                ),
+              ],
+            ),
+          )
+        : FittedBox(
+            fit: BoxFit.scaleDown,
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                PopText(
+                  '$value',
+                  style: const TextStyle(
+                    color: Colors.white,
+                    fontSize: 18,
+                    height: 1,
+                    fontWeight: FontWeight.w900,
+                  ),
+                ),
+                const SizedBox(width: 3),
+                PopText(
+                  value == 1 ? 'paso' : 'pasos',
+                  style: const TextStyle(
+                    color: Colors.white,
+                    fontSize: 8,
+                    fontWeight: FontWeight.w800,
+                  ),
+                ),
+              ],
+            ),
+          );
     return Semantics(
       button: true,
       excludeSemantics: true,
-      label: isExit
-          ? 'Sacar ficha $tokenNumber de la cárcel'
-          : isHomeEntryCapture
-          ? 'Capturar la ficha que bloquea la entrada'
-          : value == 20
-          ? 'Mover ficha $tokenNumber con el bono de 20 pasos'
-          : 'Mover ficha $tokenNumber, $value '
-                '${value == 1 ? 'paso' : 'pasos'}',
+      label: semanticLabel,
+      onTap: () => onChoice(value),
       child: SizedBox(
         key: ValueKey('move-choice-$value'),
-        height: 40,
+        height: 48,
         child: Material(
           color: Colors.transparent,
           child: InkWell(
@@ -11168,80 +11368,12 @@ class _TokenMovePopup extends StatelessWidget {
                   ),
                 ],
               ),
-              child: isExit
-                  ? const FittedBox(
-                      fit: BoxFit.scaleDown,
-                      child: Row(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          Icon(
-                            Icons.directions_run_rounded,
-                            color: Colors.white,
-                            size: 16,
-                          ),
-                          SizedBox(width: 3),
-                          PopText(
-                            'SALIDA',
-                            style: TextStyle(
-                              color: Colors.white,
-                              fontSize: 11,
-                              fontWeight: FontWeight.w900,
-                              letterSpacing: .2,
-                            ),
-                          ),
-                        ],
-                      ),
-                    )
-                  : isHomeEntryCapture
-                  ? const FittedBox(
-                      fit: BoxFit.scaleDown,
-                      child: Row(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          Icon(
-                            Icons.gps_fixed_rounded,
-                            color: Colors.white,
-                            size: 15,
-                          ),
-                          SizedBox(width: 3),
-                          PopText(
-                            'CAPTURAR',
-                            style: TextStyle(
-                              color: Colors.white,
-                              fontSize: 10,
-                              fontWeight: FontWeight.w900,
-                              letterSpacing: .1,
-                            ),
-                          ),
-                        ],
-                      ),
-                    )
-                  : FittedBox(
-                      fit: BoxFit.scaleDown,
-                      child: Row(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          PopText(
-                            '$value',
-                            style: const TextStyle(
-                              color: Colors.white,
-                              fontSize: 18,
-                              height: 1,
-                              fontWeight: FontWeight.w900,
-                            ),
-                          ),
-                          const SizedBox(width: 3),
-                          PopText(
-                            value == 1 ? 'paso' : 'pasos',
-                            style: const TextStyle(
-                              color: Colors.white,
-                              fontSize: 8,
-                              fontWeight: FontWeight.w800,
-                            ),
-                          ),
-                        ],
-                      ),
-                    ),
+              child: _withCaptureLabel(
+                context,
+                primary,
+                target,
+                keySuffix: '${target?.owner.name ?? 'none'}-$value',
+              ),
             ),
           ),
         ),
@@ -11249,16 +11381,28 @@ class _TokenMovePopup extends StatelessWidget {
     );
   }
 
-  Widget _allDiceButton(int total) {
+  Widget _allDiceButton(BuildContext context, int total) {
     const color = Color(0xFF7057FF);
+    final target = allDiceCaptureTarget;
+    final english = appLanguageCodeOf(context) == 'en';
+    final baseLabel = english
+        ? 'Move piece $tokenNumber using both dice, $total steps total'
+        : 'Mover ficha $tokenNumber usando ambos dados, $total pasos en total';
+    final semanticColor = target == null
+        ? null
+        : _captureColorName(context, target.owner, semantic: true);
     return Semantics(
       button: true,
       excludeSemantics: true,
-      label:
-          'Mover ficha $tokenNumber usando ambos dados, $total pasos en total',
+      label: target == null
+          ? baseLabel
+          : english
+          ? '$baseLabel and capture the $semanticColor piece'
+          : '$baseLabel y capturar la ficha $semanticColor',
+      onTap: onAllDice,
       child: SizedBox(
         key: const ValueKey('move-choice-all'),
-        height: 40,
+        height: 48,
         child: Material(
           color: Colors.transparent,
           child: InkWell(
@@ -11285,38 +11429,43 @@ class _TokenMovePopup extends StatelessWidget {
                   ),
                 ],
               ),
-              child: FittedBox(
-                fit: BoxFit.scaleDown,
-                child: Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    const Icon(
-                      Icons.fast_forward_rounded,
-                      color: Colors.white,
-                      size: 15,
-                    ),
-                    const SizedBox(width: 3),
-                    const PopText(
-                      'TODOS',
-                      style: TextStyle(
+              child: _withCaptureLabel(
+                context,
+                FittedBox(
+                  fit: BoxFit.scaleDown,
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      const Icon(
+                        Icons.fast_forward_rounded,
                         color: Colors.white,
-                        fontSize: 9,
-                        fontWeight: FontWeight.w900,
-                        letterSpacing: .2,
+                        size: 15,
                       ),
-                    ),
-                    const SizedBox(width: 4),
-                    PopText(
-                      '$total',
-                      style: const TextStyle(
-                        color: Colors.white,
-                        fontSize: 17,
-                        height: 1,
-                        fontWeight: FontWeight.w900,
+                      const SizedBox(width: 3),
+                      const PopText(
+                        'TODOS',
+                        style: TextStyle(
+                          color: Colors.white,
+                          fontSize: 9,
+                          fontWeight: FontWeight.w900,
+                          letterSpacing: .2,
+                        ),
                       ),
-                    ),
-                  ],
+                      const SizedBox(width: 4),
+                      PopText(
+                        '$total',
+                        style: const TextStyle(
+                          color: Colors.white,
+                          fontSize: 17,
+                          height: 1,
+                          fontWeight: FontWeight.w900,
+                        ),
+                      ),
+                    ],
+                  ),
                 ),
+                target,
+                keySuffix: '${target?.owner.name ?? 'none'}-all',
               ),
             ),
           ),
@@ -11334,8 +11483,8 @@ class _TokenMovePopup extends StatelessWidget {
     final popupEnd = Color.lerp(accentColor, Colors.white, .86)!;
 
     final buttons = <Widget>[
-      ...choices.map(_choiceButton),
-      if (allDiceTotal case final total?) _allDiceButton(total),
+      ...choices.map((value) => _choiceButton(context, value)),
+      if (allDiceTotal case final total?) _allDiceButton(context, total),
     ];
     return Material(
       key: const ValueKey('token-move-popup'),
@@ -11666,6 +11815,7 @@ class _BoardMoveCalloutLayout {
 Size _boardMoveCalloutSize(MoveDestinationPreview preview) {
   // Leave a small margin above the 48-point accessibility minimum because
   // the complete board can be fractionally scaled on short phones.
+  if (preview.captureTarget != null) return const Size(112, 50);
   if (preview.usesAllDice) return const Size(100, 50);
   if (preview.isHomeEntryCapture) return const Size(104, 50);
   if (preview.isExit || preview.isGoal || preview.value == 20) {
@@ -11927,32 +12077,82 @@ class _BoardMoveChoiceCallout extends StatefulWidget {
 class _BoardMoveChoiceCalloutState extends State<_BoardMoveChoiceCallout> {
   bool pressed = false;
 
+  String _colorName(BuildContext context, PlayerColor color) {
+    final english = appLanguageCodeOf(context) == 'en';
+    return switch ((english, color)) {
+      (true, PlayerColor.red) => 'RED',
+      (true, PlayerColor.green) => 'GREEN',
+      (true, PlayerColor.yellow) => 'YELLOW',
+      (true, PlayerColor.blue) => 'BLUE',
+      (false, PlayerColor.red) => 'ROJO',
+      (false, PlayerColor.green) => 'VERDE',
+      (false, PlayerColor.yellow) => 'AMARILLO',
+      (false, PlayerColor.blue) => 'AZUL',
+    };
+  }
+
+  String _semanticColorName(BuildContext context, PlayerColor color) {
+    final english = appLanguageCodeOf(context) == 'en';
+    return switch ((english, color)) {
+      (true, PlayerColor.red) => 'red',
+      (true, PlayerColor.green) => 'green',
+      (true, PlayerColor.yellow) => 'yellow',
+      (true, PlayerColor.blue) => 'blue',
+      (false, PlayerColor.red) => 'roja',
+      (false, PlayerColor.green) => 'verde',
+      (false, PlayerColor.yellow) => 'amarilla',
+      (false, PlayerColor.blue) => 'azul',
+    };
+  }
+
+  Color _teamColor(PlayerColor color) => switch (color) {
+    PlayerColor.red => PopColors.red,
+    PlayerColor.green => PopColors.green,
+    PlayerColor.yellow => PopColors.yellow,
+    PlayerColor.blue => PopColors.blue,
+  };
+
   String _semanticLabel(BuildContext context) {
     final preview = widget.layout.preview;
     final tokenNumber = preview.token.id + 1;
-    final english = Localizations.localeOf(context).languageCode == 'en';
-    if (preview.isExit) {
+    final english = appLanguageCodeOf(context) == 'en';
+    final target = preview.captureTarget;
+    final targetColor = target == null
+        ? null
+        : _semanticColorName(context, target.owner);
+    if (preview.isHomeEntryCapture && targetColor != null) {
       return english
+          ? 'Capture the $targetColor piece blocking the home entry with '
+                '${preview.value}'
+          : 'Capturar la ficha $targetColor que bloquea la entrada con '
+                '${preview.value}';
+    }
+    late final String baseLabel;
+    if (preview.isExit) {
+      baseLabel = english
           ? 'Move piece $tokenNumber out of jail with ${preview.value}'
           : 'Sacar ficha $tokenNumber de la cárcel con ${preview.value}';
-    }
-    if (preview.isHomeEntryCapture) {
-      return english
+    } else if (preview.isHomeEntryCapture) {
+      baseLabel = english
           ? 'Capture the piece blocking the home entry with ${preview.value}'
           : 'Capturar la ficha que bloquea la entrada con ${preview.value}';
-    }
-    if (preview.usesAllDice) {
-      return english
+    } else if (preview.usesAllDice) {
+      baseLabel = english
           ? 'Move piece $tokenNumber using both dice, '
                 '${preview.value} steps total'
           : 'Mover ficha $tokenNumber usando ambos dados, '
                 '${preview.value} pasos en total';
+    } else {
+      baseLabel = english
+          ? 'Move piece $tokenNumber, ${preview.value} '
+                '${preview.value == 1 ? 'step' : 'steps'}'
+          : 'Mover ficha $tokenNumber, ${preview.value} '
+                '${preview.value == 1 ? 'paso' : 'pasos'}';
     }
+    if (target == null) return baseLabel;
     return english
-        ? 'Move piece $tokenNumber, ${preview.value} '
-              '${preview.value == 1 ? 'step' : 'steps'}'
-        : 'Mover ficha $tokenNumber, ${preview.value} '
-              '${preview.value == 1 ? 'paso' : 'pasos'}';
+        ? '$baseLabel and capture the $targetColor piece'
+        : '$baseLabel y capturar la ficha $targetColor';
   }
 
   Widget _numberBadge(int value, Color color) => Container(
@@ -11982,7 +12182,7 @@ class _BoardMoveChoiceCalloutState extends State<_BoardMoveChoiceCallout> {
     ),
   );
 
-  Widget _content(MoveDestinationPreview preview) {
+  Widget _primaryContent(MoveDestinationPreview preview) {
     final color = preview.color;
     if (preview.usesAllDice) {
       return FittedBox(
@@ -12069,6 +12269,52 @@ class _BoardMoveChoiceCalloutState extends State<_BoardMoveChoiceCallout> {
     );
   }
 
+  Widget _content(BuildContext context, MoveDestinationPreview preview) {
+    final target = preview.captureTarget;
+    if (target == null) return _primaryContent(preview);
+    final targetColor = _teamColor(target.owner);
+    return Column(
+      mainAxisAlignment: MainAxisAlignment.center,
+      children: [
+        Flexible(flex: 3, child: _primaryContent(preview)),
+        const SizedBox(height: 1),
+        Flexible(
+          flex: 2,
+          child: FittedBox(
+            fit: BoxFit.scaleDown,
+            child: Row(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                Icon(Icons.gps_fixed_rounded, color: PopColors.red, size: 11),
+                const SizedBox(width: 3),
+                Container(
+                  width: 9,
+                  height: 9,
+                  decoration: BoxDecoration(
+                    color: targetColor,
+                    shape: BoxShape.circle,
+                    border: Border.all(color: PopColors.navy, width: 1),
+                  ),
+                ),
+                const SizedBox(width: 3),
+                PopText(
+                  'KILL ${_colorName(context, target.owner)}',
+                  key: ValueKey('move-choice-kill-${target.owner.name}'),
+                  style: const TextStyle(
+                    color: PopColors.navy,
+                    fontSize: 8.5,
+                    height: 1,
+                    fontWeight: FontWeight.w900,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final preview = widget.layout.preview;
@@ -12082,6 +12328,7 @@ class _BoardMoveChoiceCalloutState extends State<_BoardMoveChoiceCallout> {
       excludeSemantics: true,
       sortKey: OrdinalSortKey(widget.layout.originalIndex.toDouble()),
       label: _semanticLabel(context),
+      onTap: widget.onTap,
       child: Listener(
         behavior: HitTestBehavior.opaque,
         onPointerDown: (_) => setState(() => pressed = true),
@@ -12105,7 +12352,7 @@ class _BoardMoveChoiceCalloutState extends State<_BoardMoveChoiceCallout> {
                 height: double.infinity,
                 child: Padding(
                   padding: const EdgeInsets.symmetric(horizontal: 7),
-                  child: _content(preview),
+                  child: _content(context, preview),
                 ),
               ),
             ),
@@ -12358,6 +12605,7 @@ class _GameBoardMockupState extends State<GameBoardMockup>
   late final AnimationController effectController;
   int lastEffectSerial = 0;
   bool lastGameOver = false;
+  bool motionConfigured = false;
   final Map<GameToken, Offset> lastCells = {};
   final Map<GameToken, Offset> fromCells = {};
   final Map<GameToken, Offset> viaCells = {};
@@ -12386,15 +12634,40 @@ class _GameBoardMockupState extends State<GameBoardMockup>
     );
     lastEffectSerial = widget.engine.effectSerial;
     lastGameOver = widget.engine.gameOver;
-    if (!lastGameOver) {
-      pulseController.repeat(reverse: true);
-      cubeController.repeat();
-    }
     lastCells.addAll(_currentCells());
     for (final player in widget.engine.players) {
       for (final token in player.tokens) {
         lastProgress[token] = token.progress;
       }
+    }
+  }
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    _configureAmbientMotion();
+  }
+
+  void _configureAmbientMotion() {
+    final reduceMotion =
+        MediaQuery.maybeOf(context)?.disableAnimations ?? false;
+    final shouldAnimate = !lastGameOver && !reduceMotion;
+    if (motionConfigured &&
+        pulseController.isAnimating == shouldAnimate &&
+        cubeController.isAnimating == shouldAnimate) {
+      return;
+    }
+    motionConfigured = true;
+    if (shouldAnimate) {
+      pulseController.repeat(reverse: true);
+      cubeController.repeat();
+    } else {
+      pulseController
+        ..stop()
+        ..value = .5;
+      cubeController
+        ..stop()
+        ..value = .25;
     }
   }
 
@@ -12413,13 +12686,8 @@ class _GameBoardMockupState extends State<GameBoardMockup>
     }
     if (lastGameOver != widget.engine.gameOver) {
       lastGameOver = widget.engine.gameOver;
-      if (lastGameOver) {
-        pulseController.stop();
-        cubeController.stop();
-      } else {
-        pulseController.repeat(reverse: true);
-        cubeController.repeat();
-      }
+      motionConfigured = false;
+      _configureAmbientMotion();
     }
     final hasNewEffect = lastEffectSerial != widget.engine.effectSerial;
     final next = _currentCells();
@@ -15012,6 +15280,10 @@ class _ParcheseBoardPainter extends CustomPainter {
 
   void _tokens(Canvas canvas, double cell) {
     final displayCells = _displayTokenCells(engine, compactPhone: compactPhone);
+    final captureTargets = movePreviews
+        .map((preview) => preview.captureTarget)
+        .whereType<GameToken>()
+        .toSet();
     final tokenRadiusScale = compactPhone ? .47 : .43;
     final tokenShadowScale = compactPhone ? .47 : .44;
     final tokenGlowScale = compactPhone ? .51 : .48;
@@ -15033,11 +15305,13 @@ class _ParcheseBoardPainter extends CustomPainter {
       for (final token in player.tokens) {
         final logicalCenter = animatedCells[token] ?? displayCells[token]!;
         final center = logicalCenter * cell;
+        final tokenCell = cell;
         // During a turn, every piece belonging to the active player (including
         // pieces still in the nest) receives a subtle 10% focus scale. Keeping
         // the transform centered preserves its exact board position.
         final activeTurnToken =
             !engine.gameOver && player.color == engine.currentPlayer.color;
+        final isCaptureTarget = captureTargets.contains(token);
         if (activeTurnToken) {
           final turnScale = 1.095 + pulse * .01;
           canvas.save();
@@ -15045,7 +15319,31 @@ class _ParcheseBoardPainter extends CustomPainter {
           canvas.scale(turnScale);
           canvas.translate(-center.dx, -center.dy);
         }
-        final tokenCell = cell;
+        if (isCaptureTarget) {
+          canvas.drawCircle(
+            center,
+            tokenCell * (.72 + pulse * .07),
+            Paint()
+              ..color = PopColors.red.withValues(alpha: .30 - pulse * .10)
+              ..maskFilter = MaskFilter.blur(BlurStyle.normal, tokenCell * .14),
+          );
+          canvas.drawCircle(
+            center,
+            tokenCell * (.65 + pulse * .03),
+            Paint()
+              ..color = Colors.white
+              ..style = PaintingStyle.stroke
+              ..strokeWidth = tokenCell * .15,
+          );
+          canvas.drawCircle(
+            center,
+            tokenCell * (.62 + pulse * .03),
+            Paint()
+              ..color = PopColors.red
+              ..style = PaintingStyle.stroke
+              ..strokeWidth = tokenCell * .09,
+          );
+        }
         canvas.drawCircle(
           center + Offset(0, tokenCell * .10),
           tokenCell * tokenShadowScale,
@@ -15190,6 +15488,36 @@ class _ParcheseBoardPainter extends CustomPainter {
           );
         }
         _tokenMark(canvas, center, tokenCell, color, tokenStyle);
+        if (isCaptureTarget) {
+          final badgeCenter =
+              center + Offset(tokenCell * .38, -tokenCell * .38);
+          final badgeRadius = tokenCell * .22;
+          canvas.drawCircle(
+            badgeCenter,
+            badgeRadius * 1.22,
+            Paint()..color = Colors.white,
+          );
+          canvas.drawCircle(
+            badgeCenter,
+            badgeRadius,
+            Paint()..color = PopColors.red,
+          );
+          final crossPaint = Paint()
+            ..color = Colors.white
+            ..strokeWidth = tokenCell * .075
+            ..strokeCap = StrokeCap.round;
+          final crossArm = tokenCell * .075;
+          canvas.drawLine(
+            badgeCenter - Offset(crossArm, crossArm),
+            badgeCenter + Offset(crossArm, crossArm),
+            crossPaint,
+          );
+          canvas.drawLine(
+            badgeCenter + Offset(crossArm, -crossArm),
+            badgeCenter + Offset(-crossArm, crossArm),
+            crossPaint,
+          );
+        }
         if (canUseTwenty) {
           final badgeCenter =
               center + Offset(tokenCell * .34, -tokenCell * .34);
