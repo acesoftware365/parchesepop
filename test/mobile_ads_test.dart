@@ -134,13 +134,14 @@ void main() {
       },
     );
 
-    testWidgets('guide and matchmaking never reserve banner space', (
+    testWidgets('guide, lab and matchmaking keep one global bottom banner', (
       tester,
     ) async {
       final controller = _FakeAdsController(supported: true, adsReady: true);
 
       for (final screen in <Widget>[
         const GameGuideScreen(),
+        const TrapPowerLabScreen(),
         const MatchmakingScreen(
           profile: PlayerProfile.guest,
           mode: GameMode.traditional,
@@ -148,10 +149,13 @@ void main() {
       ]) {
         await tester.pumpWidget(_focusedScreenApp(controller, screen));
         await tester.pump();
-        expect(find.byKey(const ValueKey('fake-mobile-banner')), findsNothing);
+        expect(
+          find.byKey(const ValueKey('fake-mobile-banner')),
+          findsOneWidget,
+        );
         expect(
           find.byKey(const ValueKey('version-above-ad-banner')),
-          findsNothing,
+          findsOneWidget,
         );
       }
 
@@ -162,6 +166,49 @@ void main() {
       await tester.pumpWidget(const SizedBox.shrink());
       controller.dispose();
     });
+
+    testWidgets(
+      'iPhone game board and controls stay above the banner and usable',
+      (tester) async {
+        _configureIPhone14View(tester);
+        SharedPreferences.setMockInitialValues({});
+        final controller = _FakeAdsController(supported: true, adsReady: true);
+        final engine = GameEngine();
+        addTearDown(engine.dispose);
+        addTearDown(controller.dispose);
+
+        await tester.pumpWidget(
+          _gameScreenAdApp(controller: controller, engine: engine),
+        );
+        await tester.pump(const Duration(milliseconds: 200));
+
+        final bannerFinder = find.byKey(const ValueKey('fake-mobile-banner'));
+        final versionFinder = find.byKey(
+          const ValueKey('version-above-ad-banner'),
+        );
+        final boardFinder = find.byKey(const ValueKey('game-board'));
+        final backFinder = find.byKey(const ValueKey('game-back-button'));
+        final diceFinder = find.byKey(const ValueKey('dice-roll-target'));
+
+        expect(bannerFinder, findsOneWidget);
+        expect(versionFinder, findsOneWidget);
+        expect(boardFinder, findsOneWidget);
+        expect(backFinder.hitTestable(), findsOneWidget);
+        expect(diceFinder.hitTestable(), findsOneWidget);
+
+        final banner = tester.getRect(bannerFinder);
+        for (final content in <Finder>[boardFinder, backFinder, diceFinder]) {
+          expect(tester.getRect(content).bottom, lessThanOrEqualTo(banner.top));
+        }
+        expect(
+          tester.getRect(versionFinder).bottom,
+          lessThanOrEqualTo(banner.top),
+        );
+        expect(controller.rewardedShowCount, 0);
+
+        await tester.pumpWidget(const SizedBox.shrink());
+      },
+    );
 
     testWidgets(
       'removes the iPhone bottom inset from content when the banner owns it',
@@ -217,56 +264,57 @@ void main() {
       },
     );
 
-    testWidgets('iPhone home controls remain above the ready bottom banner', (
-      tester,
-    ) async {
-      _configureIPhone14View(tester);
-      SharedPreferences.setMockInitialValues({
-        'profile_name': 'JuanPop',
-        'profile_email': 'juan@example.com',
-        'profile_flag': '🇩🇴',
-      });
-      final controller = _FakeAdsController(supported: true, adsReady: true);
+    testWidgets(
+      'iPhone home controls remain reachable above the bottom banner',
+      (tester) async {
+        _configureIPhone14View(tester);
+        SharedPreferences.setMockInitialValues({
+          'profile_name': 'JuanPop',
+          'profile_email': 'juan@example.com',
+          'profile_flag': '🇩🇴',
+        });
+        final controller = _FakeAdsController(supported: true, adsReady: true);
 
-      await tester.pumpWidget(ParchesePopApp(adsController: controller));
-      for (var attempt = 0; attempt < 30; attempt++) {
-        await tester.pump(const Duration(milliseconds: 100));
-        if (find
-            .byKey(const ValueKey('home-menu-dock'))
-            .evaluate()
-            .isNotEmpty) {
-          break;
+        await tester.pumpWidget(ParchesePopApp(adsController: controller));
+        for (var attempt = 0; attempt < 30; attempt++) {
+          await tester.pump(const Duration(milliseconds: 100));
+          if (find
+              .byKey(const ValueKey('home-menu-dock'))
+              .evaluate()
+              .isNotEmpty) {
+            break;
+          }
         }
-      }
 
-      final banner = tester.getRect(
-        find.byKey(const ValueKey('fake-mobile-banner')),
-      );
-      final dock = tester.getRect(find.byKey(const ValueKey('home-menu-dock')));
-      expect(dock.bottom, lessThanOrEqualTo(banner.top));
+        for (final label in const [
+          'QUICK POP',
+          'MESA RÁPIDA',
+          'CONTRA CPU',
+          'Tienda',
+          'Mi perfil',
+          'Cómo jugar',
+          'Trampas',
+        ]) {
+          final text = find.text(label);
+          expect(text, findsOneWidget);
+          await tester.ensureVisible(text);
+          await tester.pumpAndSettle();
+          final tappable = find
+              .ancestor(of: text, matching: find.byType(InkWell))
+              .first;
+          expect(tappable, findsOneWidget);
+          final rect = tester.getRect(tappable);
+          final banner = tester.getRect(
+            find.byKey(const ValueKey('fake-mobile-banner')),
+          );
+          expect(rect.top, greaterThanOrEqualTo(47));
+          expect(rect.bottom, lessThanOrEqualTo(banner.top));
+          expect(tappable.hitTestable(), findsOneWidget);
+        }
 
-      for (final label in const [
-        'MESA RÁPIDA',
-        'CONTRA CPU',
-        'Tienda',
-        'Mi perfil',
-        'Cómo jugar',
-        'Trampas',
-      ]) {
-        final text = find.text(label);
-        expect(text, findsOneWidget);
-        final tappable = find
-            .ancestor(of: text, matching: find.byType(InkWell))
-            .first;
-        expect(tappable, findsOneWidget);
-        final rect = tester.getRect(tappable);
-        expect(rect.top, greaterThanOrEqualTo(47));
-        expect(rect.bottom, lessThanOrEqualTo(banner.top));
-        expect(tappable.hitTestable(), findsOneWidget);
-      }
-
-      await tester.pumpWidget(const SizedBox.shrink());
-    });
+        await tester.pumpWidget(const SizedBox.shrink());
+      },
+    );
   });
 
   group('rewarded result contract', () {
@@ -540,7 +588,7 @@ void main() {
   );
 
   testWidgets(
-    'double-tapping resume opens one saved match with no ad or banner',
+    'double-tapping resume opens one saved match with banner and no forced ad',
     (tester) async {
       SharedPreferences.setMockInitialValues({
         'active_match_board_layout_version': 4,
@@ -575,10 +623,10 @@ void main() {
 
       expect(find.byType(GameScreen), findsOneWidget);
       expect(ads.rewardedShowCount, 0);
-      expect(find.byKey(const ValueKey('fake-mobile-banner')), findsNothing);
+      expect(find.byKey(const ValueKey('fake-mobile-banner')), findsOneWidget);
       expect(
         find.byKey(const ValueKey('version-above-ad-banner')),
-        findsNothing,
+        findsOneWidget,
       );
 
       await tester.pumpWidget(const SizedBox.shrink());
@@ -656,6 +704,21 @@ Widget _focusedScreenApp(AppAdsController controller, Widget screen) {
     controller: controller,
     child: MaterialApp(
       home: MobileAdShell(controller: controller, child: screen),
+    ),
+  );
+}
+
+Widget _gameScreenAdApp({
+  required AppAdsController controller,
+  required GameEngine engine,
+}) {
+  return MobileAdsScope(
+    controller: controller,
+    child: MaterialApp(
+      home: MobileAdShell(
+        controller: controller,
+        child: GameScreen(opponent: 'CPU • Fácil', gameEngine: engine),
+      ),
     ),
   );
 }

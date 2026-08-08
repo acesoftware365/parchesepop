@@ -13,6 +13,15 @@ void main() {
     const staticCopy = <String, String>{
       'MESA RÁPIDA': 'QUICK TABLE',
       'Partida local con rivales CPU': 'Local match with CPU opponents',
+      'ONLINE · PRÓXIMAMENTE': 'ONLINE · COMING SOON',
+      '2 fichas · partida rápida': '2 pieces · quick match',
+      'Partida local': 'Local match',
+      'Juega contra el CPU': 'Play against CPU',
+      'QUICK POP ONLINE': 'QUICK POP ONLINE',
+      'El modo online necesita conexión con un servidor seguro. Mientras lo terminamos, puedes probar Quick Pop contra el CPU.':
+          'Online play requires a secure server connection. While we finish it, you can try Quick Pop against the CPU.',
+      'PROBAR QUICK POP': 'TRY QUICK POP',
+      'AHORA NO': 'NOT NOW',
       'Misiones': 'Missions',
       'TUTORIAL JUGABLE': 'PLAYABLE TUTORIAL',
       '¿CÓMO QUIERES APRENDER?': 'HOW DO YOU WANT TO LEARN?',
@@ -71,6 +80,20 @@ void main() {
         reason: entry.key,
       );
     }
+  });
+
+  test('Version 2 advertising copy describes the persistent safe banner', () {
+    const detailedSpanish =
+        'En Android y iOS puede permanecer visible una banda publicitaria adaptable en la parte inferior. Esta banda no interrumpe ni bloquea la jugada. Los anuncios recompensados solo se abren cuando eliges voluntariamente duplicar el premio al finalizar la mesa. Las acciones normales del juego, como tirar los dados, mover una ficha, Jugar otra vez, Volver al inicio y Reanudar, nunca abren anuncios. El premio se entrega únicamente al completar el anuncio. La aplicación solicita consentimiento cuando corresponde y ofrece opciones para administrar la privacidad publicitaria. macOS no muestra banners ni anuncios recompensados.';
+    const detailedEnglish =
+        'On Android and iOS, an adaptive ad banner may remain visible at the bottom. This banner does not interrupt or block gameplay. Rewarded ads open only when you voluntarily choose to double the reward after the table finishes. Normal game actions, such as rolling the dice, moving a piece, Play Again, Back to Home, and Resume, never open ads. A reward is granted only after the ad is completed. The app requests consent when required and provides options to manage ad privacy. macOS does not show banners or rewarded ads.';
+    const summarySpanish =
+        'Android y iOS pueden mantener una banda publicitaria inferior no interruptiva. Los anuncios recompensados son voluntarios al finalizar la mesa, y las acciones normales del juego nunca abren anuncios. Puedes administrar el consentimiento y las preferencias disponibles desde esta pantalla. La versión de macOS no muestra estos anuncios.';
+    const summaryEnglish =
+        'Android and iOS may keep a non-interruptive ad banner at the bottom. Rewarded ads are optional after the table finishes, and normal game actions never open ads. You can manage consent and available preferences from this screen. The macOS version does not show these ads.';
+
+    expect(translateForLanguage(detailedSpanish, 'en'), detailedEnglish);
+    expect(translateForLanguage(summarySpanish, 'en'), summaryEnglish);
   });
 
   testWidgets('Progress Hub follows the English AppLanguageScope', (

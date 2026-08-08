@@ -2092,26 +2092,41 @@ class PlayHome extends StatelessWidget {
             child: LayoutBuilder(
               builder: (context, contentBox) {
                 final horizontalModes = contentBox.maxWidth >= 620;
-                final modeCards = [
-                  _ModeCard(
-                    color: PopColors.blue,
-                    icon: Icons.bolt_rounded,
-                    title: 'MESA RÁPIDA',
-                    subtitle: 'Partida local con rivales CPU',
-                    dense: densePortrait,
-                    expanded: horizontalModes && !compactLandscape,
-                    onTap: () => _startOnline(context),
-                  ),
-                  _ModeCard(
-                    color: PopColors.red,
-                    icon: Icons.smart_toy_rounded,
-                    title: 'CONTRA CPU',
-                    subtitle: 'Practica y domina el tablero',
-                    dense: densePortrait,
-                    expanded: horizontalModes && !compactLandscape,
-                    onTap: () => _showCpuDialog(context),
-                  ),
-                ];
+                final quickPopCard = _ModeCard(
+                  key: const ValueKey('home-mode-quick-pop'),
+                  color: const Color(0xFF7257E9),
+                  icon: Icons.speed_rounded,
+                  title: 'QUICK POP',
+                  subtitle: '2 fichas · partida rápida',
+                  badge: 'ONLINE · PRÓXIMAMENTE',
+                  featured: true,
+                  dense: densePortrait,
+                  expanded: horizontalModes && !compactLandscape,
+                  onTap: () => _showQuickPopEntry(context),
+                );
+                final quickTableCard = _ModeCard(
+                  key: const ValueKey('home-mode-quick-table'),
+                  color: PopColors.blue,
+                  icon: Icons.bolt_rounded,
+                  title: 'MESA RÁPIDA',
+                  subtitle: 'Partida local',
+                  tile: narrow && !compactLandscape,
+                  dense: densePortrait,
+                  expanded: horizontalModes && !compactLandscape,
+                  onTap: () => _startOnline(context),
+                );
+                final cpuCard = _ModeCard(
+                  key: const ValueKey('home-mode-cpu'),
+                  color: PopColors.red,
+                  icon: Icons.smart_toy_rounded,
+                  title: 'CONTRA CPU',
+                  subtitle: 'Juega contra el CPU',
+                  tile: narrow && !compactLandscape,
+                  dense: densePortrait,
+                  expanded: horizontalModes && !compactLandscape,
+                  onTap: () => _showCpuDialog(context),
+                );
+                final modeCards = [quickPopCard, quickTableCard, cpuCard];
                 return ConstrainedBox(
                   constraints: BoxConstraints(minHeight: availableHeight),
                   child: Column(
@@ -2181,6 +2196,22 @@ class PlayHome extends StatelessWidget {
                                   ],
                                 ],
                               )
+                            else if (narrow && !compactLandscape)
+                              Column(
+                                children: [
+                                  quickPopCard,
+                                  SizedBox(height: densePortrait ? 9 : 13),
+                                  Row(
+                                    crossAxisAlignment:
+                                        CrossAxisAlignment.start,
+                                    children: [
+                                      Expanded(child: quickTableCard),
+                                      SizedBox(width: densePortrait ? 9 : 12),
+                                      Expanded(child: cpuCard),
+                                    ],
+                                  ),
+                                ],
+                              )
                             else
                               Column(
                                 children: [
@@ -2227,14 +2258,6 @@ class PlayHome extends StatelessWidget {
                                     : 'Mi perfil',
                                 onTap: () => _openProfile(context),
                               ),
-                              if (appFeatureRollout.quickPopLocal)
-                                _RoundMenuButton(
-                                  key: const ValueKey('home-quick-pop'),
-                                  color: PopColors.green,
-                                  icon: Icons.speed_rounded,
-                                  label: 'Quick Pop',
-                                  onTap: () => _startQuickPop(context),
-                                ),
                               if (appFeatureRollout.retentionRewards)
                                 if (progression case final controller?)
                                   _RoundMenuButton(
@@ -2390,6 +2413,15 @@ class PlayHome extends StatelessWidget {
     );
   }
 
+  Future<void> _showQuickPopEntry(BuildContext context) async {
+    final playLocal = await showDialog<bool>(
+      context: context,
+      builder: (_) => const _QuickPopEntryDialog(),
+    );
+    if (!context.mounted || playLocal != true) return;
+    _startQuickPop(context);
+  }
+
   void _startQuickPop(BuildContext context) {
     if (!appFeatureRollout.quickPopLocal) return;
     Navigator.push(
@@ -2499,6 +2531,102 @@ class PlayHome extends StatelessWidget {
       ),
     );
   }
+}
+
+class _QuickPopEntryDialog extends StatelessWidget {
+  const _QuickPopEntryDialog();
+
+  @override
+  Widget build(BuildContext context) => Dialog(
+    key: const ValueKey('quick-pop-entry-dialog'),
+    insetPadding: const EdgeInsets.all(18),
+    clipBehavior: Clip.antiAlias,
+    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(30)),
+    child: ConstrainedBox(
+      constraints: const BoxConstraints(maxWidth: 520),
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(22, 22, 22, 18),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Container(
+                  width: 52,
+                  height: 52,
+                  decoration: BoxDecoration(
+                    color: const Color(0xFF7257E9),
+                    borderRadius: BorderRadius.circular(17),
+                  ),
+                  child: const Icon(
+                    Icons.public_rounded,
+                    color: Colors.white,
+                    size: 30,
+                  ),
+                ),
+                const SizedBox(width: 12),
+                const Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      PopText(
+                        'QUICK POP ONLINE',
+                        style: TextStyle(
+                          color: PopColors.navy,
+                          fontSize: 21,
+                          fontWeight: FontWeight.w900,
+                        ),
+                      ),
+                      SizedBox(height: 5),
+                      _ModeStatusBadge(label: 'ONLINE · PRÓXIMAMENTE'),
+                    ],
+                  ),
+                ),
+                IconButton(
+                  tooltip: 'Cerrar',
+                  onPressed: () => Navigator.pop(context, false),
+                  icon: const Icon(Icons.close_rounded),
+                ),
+              ],
+            ),
+            const SizedBox(height: 17),
+            const PopText(
+              'El modo online necesita conexión con un servidor seguro. '
+              'Mientras lo terminamos, puedes probar Quick Pop contra el CPU.',
+              style: TextStyle(
+                color: Color(0xFF475467),
+                fontSize: 14,
+                height: 1.4,
+                fontWeight: FontWeight.w700,
+              ),
+            ),
+            const SizedBox(height: 18),
+            FilledButton.icon(
+              key: const ValueKey('quick-pop-local-preview'),
+              onPressed: () => Navigator.pop(context, true),
+              icon: const Icon(Icons.play_arrow_rounded),
+              label: const PopText('PROBAR QUICK POP'),
+              style: FilledButton.styleFrom(
+                backgroundColor: const Color(0xFF7257E9),
+                foregroundColor: Colors.white,
+                minimumSize: const Size.fromHeight(52),
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(17),
+                ),
+              ),
+            ),
+            TextButton(
+              key: const ValueKey('quick-pop-entry-close'),
+              onPressed: () => Navigator.pop(context, false),
+              child: const PopText('AHORA NO'),
+            ),
+          ],
+        ),
+      ),
+    ),
+  );
 }
 
 class _OnlineModeDialog extends StatelessWidget {
@@ -3729,11 +3857,15 @@ class _RoundMenuButtonState extends State<_RoundMenuButton> {
 
 class _ModeCard extends StatefulWidget {
   const _ModeCard({
+    super.key,
     required this.color,
     required this.icon,
     required this.title,
     required this.subtitle,
     required this.onTap,
+    this.badge,
+    this.featured = false,
+    this.tile = false,
     this.expanded = false,
     this.dense = false,
   });
@@ -3742,6 +3874,9 @@ class _ModeCard extends StatefulWidget {
   final String title;
   final String subtitle;
   final VoidCallback onTap;
+  final String? badge;
+  final bool featured;
+  final bool tile;
   final bool expanded;
   final bool dense;
 
@@ -3759,6 +3894,10 @@ class _ModeCardState extends State<_ModeCard> {
     final narrow = MediaQuery.sizeOf(context).width < 500 && !compact;
     final minHeight = compact
         ? 90.0
+        : widget.tile
+        ? (widget.dense ? 128.0 : 146.0)
+        : widget.featured && widget.dense
+        ? 116.0
         : widget.dense
         ? 110.0
         : narrow
@@ -3771,7 +3910,8 @@ class _ModeCardState extends State<_ModeCard> {
       button: true,
       label:
           '${appTranslate(context, widget.title)}. '
-          '${appTranslate(context, widget.subtitle)}',
+          '${appTranslate(context, widget.subtitle)}'
+          '${widget.badge == null ? '' : '. ${appTranslate(context, widget.badge!)}'}',
       child: MouseRegion(
         onEnter: (_) => setState(() => hovered = true),
         onExit: (_) => setState(() => hovered = false),
@@ -3847,49 +3987,29 @@ class _ModeCardState extends State<_ModeCard> {
                                   ? 15
                                   : 18,
                             ),
-                            child: Row(
-                              children: [
-                                _ModeArtwork(
-                                  color: widget.color,
-                                  icon: widget.icon,
-                                  size: compact
-                                      ? 52
-                                      : widget.dense
-                                      ? 58
-                                      : narrow
-                                      ? 70
-                                      : 78,
-                                ),
-                                SizedBox(
-                                  width: compact || narrow || widget.dense
-                                      ? 12
-                                      : 17,
-                                ),
-                                Expanded(
-                                  child: Column(
+                            child: widget.tile
+                                ? Column(
                                     crossAxisAlignment:
                                         CrossAxisAlignment.start,
-                                    mainAxisSize: MainAxisSize.min,
                                     children: [
-                                      _AutoFitSingleLineText(
-                                        widget.title,
-                                        style: TextStyle(
-                                          fontSize:
-                                              compact || narrow || widget.dense
-                                              ? (compact ? 18 : 20)
-                                              : 24,
-                                          height: .98,
-                                          letterSpacing: -.45,
-                                          fontWeight: FontWeight.w900,
-                                          color: Colors.white,
-                                          shadows: const [
-                                            Shadow(
-                                              color: Color(0x55000000),
-                                              offset: Offset(0, 2),
-                                              blurRadius: 4,
-                                            ),
-                                          ],
-                                        ),
+                                      Row(
+                                        children: [
+                                          _ModeArtwork(
+                                            color: widget.color,
+                                            icon: widget.icon,
+                                            size: widget.dense ? 43 : 49,
+                                          ),
+                                          const Spacer(),
+                                          _ModePlayPill(
+                                            color: dark,
+                                            iconOnly: true,
+                                          ),
+                                        ],
+                                      ),
+                                      const Spacer(),
+                                      _ModeCardTitle(
+                                        title: widget.title,
+                                        fontSize: widget.dense ? 16 : 18,
                                       ),
                                       const SizedBox(height: 5),
                                       PopText(
@@ -3897,54 +4017,78 @@ class _ModeCardState extends State<_ModeCard> {
                                         maxLines: 2,
                                         overflow: TextOverflow.ellipsis,
                                         style: TextStyle(
-                                          color: Color(0xFFF4F7FF),
-                                          fontSize: compact ? 10 : 11,
-                                          height: 1.18,
+                                          color: const Color(0xFFF4F7FF),
+                                          fontSize: widget.dense ? 9.5 : 10.5,
+                                          height: 1.15,
                                           fontWeight: FontWeight.w700,
                                         ),
                                       ),
                                     ],
-                                  ),
-                                ),
-                                const SizedBox(width: 7),
-                                Container(
-                                  padding: EdgeInsets.symmetric(
-                                    horizontal: compact ? 7 : 11,
-                                    vertical: compact ? 6 : 9,
-                                  ),
-                                  decoration: BoxDecoration(
-                                    color: Colors.white.withValues(alpha: .95),
-                                    borderRadius: BorderRadius.circular(18),
-                                    boxShadow: const [
-                                      BoxShadow(
-                                        color: Color(0x33000000),
-                                        blurRadius: 7,
-                                        offset: Offset(0, 4),
-                                      ),
-                                    ],
-                                  ),
-                                  child: Row(
-                                    mainAxisSize: MainAxisSize.min,
+                                  )
+                                : Row(
                                     children: [
-                                      PopText(
-                                        'JUGAR',
-                                        style: TextStyle(
-                                          color: dark,
-                                          fontSize: compact ? 9 : 10,
-                                          fontWeight: FontWeight.w900,
+                                      _ModeArtwork(
+                                        color: widget.color,
+                                        icon: widget.icon,
+                                        size: compact
+                                            ? 52
+                                            : widget.dense
+                                            ? 58
+                                            : narrow
+                                            ? 70
+                                            : 78,
+                                      ),
+                                      SizedBox(
+                                        width: compact || narrow || widget.dense
+                                            ? 12
+                                            : 17,
+                                      ),
+                                      Expanded(
+                                        child: Column(
+                                          crossAxisAlignment:
+                                              CrossAxisAlignment.start,
+                                          mainAxisSize: MainAxisSize.min,
+                                          children: [
+                                            if (widget.badge case final badge?)
+                                              Padding(
+                                                padding: const EdgeInsets.only(
+                                                  bottom: 3,
+                                                ),
+                                                child: _ModeStatusBadge(
+                                                  label: badge,
+                                                ),
+                                              ),
+                                            _ModeCardTitle(
+                                              title: widget.title,
+                                              fontSize:
+                                                  compact ||
+                                                      narrow ||
+                                                      widget.dense
+                                                  ? (compact ? 18 : 20)
+                                                  : 24,
+                                            ),
+                                            const SizedBox(height: 5),
+                                            PopText(
+                                              widget.subtitle,
+                                              maxLines: 2,
+                                              overflow: TextOverflow.ellipsis,
+                                              style: TextStyle(
+                                                color: const Color(0xFFF4F7FF),
+                                                fontSize: compact ? 10 : 11,
+                                                height: 1.18,
+                                                fontWeight: FontWeight.w700,
+                                              ),
+                                            ),
+                                          ],
                                         ),
                                       ),
-                                      const SizedBox(width: 2),
-                                      Icon(
-                                        Icons.arrow_forward_rounded,
+                                      const SizedBox(width: 7),
+                                      _ModePlayPill(
                                         color: dark,
-                                        size: compact ? 15 : 17,
+                                        compact: compact,
                                       ),
                                     ],
                                   ),
-                                ),
-                              ],
-                            ),
                           ),
                         ],
                       ),
@@ -3958,6 +4102,108 @@ class _ModeCardState extends State<_ModeCard> {
       ),
     );
   }
+}
+
+class _ModeCardTitle extends StatelessWidget {
+  const _ModeCardTitle({required this.title, required this.fontSize});
+
+  final String title;
+  final double fontSize;
+
+  @override
+  Widget build(BuildContext context) => _AutoFitSingleLineText(
+    title,
+    style: TextStyle(
+      fontSize: fontSize,
+      height: .98,
+      letterSpacing: -.45,
+      fontWeight: FontWeight.w900,
+      color: Colors.white,
+      shadows: const [
+        Shadow(color: Color(0x55000000), offset: Offset(0, 2), blurRadius: 4),
+      ],
+    ),
+  );
+}
+
+class _ModeStatusBadge extends StatelessWidget {
+  const _ModeStatusBadge({required this.label});
+
+  final String label;
+
+  @override
+  Widget build(BuildContext context) => Container(
+    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+    decoration: BoxDecoration(
+      color: PopColors.yellow,
+      borderRadius: BorderRadius.circular(999),
+      border: Border.all(color: Colors.white, width: 1.5),
+    ),
+    child: PopText(
+      label,
+      maxLines: 1,
+      overflow: TextOverflow.ellipsis,
+      style: const TextStyle(
+        color: PopColors.navy,
+        fontSize: 8.5,
+        height: 1,
+        letterSpacing: .25,
+        fontWeight: FontWeight.w900,
+      ),
+    ),
+  );
+}
+
+class _ModePlayPill extends StatelessWidget {
+  const _ModePlayPill({
+    required this.color,
+    this.compact = false,
+    this.iconOnly = false,
+  });
+
+  final Color color;
+  final bool compact;
+  final bool iconOnly;
+
+  @override
+  Widget build(BuildContext context) => Container(
+    padding: EdgeInsets.symmetric(
+      horizontal: iconOnly ? 8 : (compact ? 7 : 11),
+      vertical: compact ? 6 : 9,
+    ),
+    decoration: BoxDecoration(
+      color: Colors.white.withValues(alpha: .95),
+      borderRadius: BorderRadius.circular(18),
+      boxShadow: const [
+        BoxShadow(
+          color: Color(0x33000000),
+          blurRadius: 7,
+          offset: Offset(0, 4),
+        ),
+      ],
+    ),
+    child: Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        if (!iconOnly) ...[
+          PopText(
+            'JUGAR',
+            style: TextStyle(
+              color: color,
+              fontSize: compact ? 9 : 10,
+              fontWeight: FontWeight.w900,
+            ),
+          ),
+          const SizedBox(width: 2),
+        ],
+        Icon(
+          Icons.arrow_forward_rounded,
+          color: color,
+          size: compact ? 15 : 17,
+        ),
+      ],
+    ),
+  );
 }
 
 class _ModeArtwork extends StatelessWidget {
@@ -4659,137 +4905,132 @@ class _MatchmakingScreenState extends State<MatchmakingScreen> {
 
   @override
   Widget build(BuildContext context) {
-    return SuppressMobileAdBanner(
-      child: Scaffold(
-        body: PopBackground(
-          child: Center(
-            child: SingleChildScrollView(
-              padding: const EdgeInsets.all(24),
-              child: ConstrainedBox(
-                constraints: const BoxConstraints(maxWidth: 620),
-                child: Column(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    const SizedBox(
-                      width: 74,
-                      height: 74,
-                      child: CircularProgressIndicator(
-                        strokeWidth: 8,
-                        color: PopColors.blue,
-                      ),
+    return Scaffold(
+      body: PopBackground(
+        child: Center(
+          child: SingleChildScrollView(
+            padding: const EdgeInsets.all(24),
+            child: ConstrainedBox(
+              constraints: const BoxConstraints(maxWidth: 620),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  const SizedBox(
+                    width: 74,
+                    height: 74,
+                    child: CircularProgressIndicator(
+                      strokeWidth: 8,
+                      color: PopColors.blue,
                     ),
-                    const SizedBox(height: 22),
-                    const PopText(
-                      'Armando tu mesa…',
-                      textAlign: TextAlign.center,
-                      style: TextStyle(
-                        fontSize: 28,
-                        fontWeight: FontWeight.w900,
-                      ),
+                  ),
+                  const SizedBox(height: 22),
+                  const PopText(
+                    'Armando tu mesa…',
+                    textAlign: TextAlign.center,
+                    style: TextStyle(fontSize: 28, fontWeight: FontWeight.w900),
+                  ),
+                  const SizedBox(height: 6),
+                  Container(
+                    key: ValueKey('matchmaking-mode-${widget.mode.name}'),
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 13,
+                      vertical: 7,
                     ),
-                    const SizedBox(height: 6),
-                    Container(
-                      key: ValueKey('matchmaking-mode-${widget.mode.name}'),
-                      padding: const EdgeInsets.symmetric(
-                        horizontal: 13,
-                        vertical: 7,
-                      ),
-                      decoration: BoxDecoration(
-                        color:
-                            (widget.mode == GameMode.chaos
-                                    ? const Color(0xFF7B61FF)
-                                    : PopColors.blue)
-                                .withValues(alpha: .12),
-                        borderRadius: BorderRadius.circular(14),
-                      ),
-                      child: PopText(
-                        widget.mode == GameMode.chaos
-                            ? '⚡ CAOS'
-                            : '🏆 TRADICIONAL',
-                        style: const TextStyle(
-                          color: PopColors.navy,
-                          fontWeight: FontWeight.w900,
-                          letterSpacing: .4,
-                        ),
-                      ),
+                    decoration: BoxDecoration(
+                      color:
+                          (widget.mode == GameMode.chaos
+                                  ? const Color(0xFF7B61FF)
+                                  : PopColors.blue)
+                              .withValues(alpha: .12),
+                      borderRadius: BorderRadius.circular(14),
                     ),
-                    const SizedBox(height: 6),
-                    PopText(
-                      searchStatus,
-                      key: const ValueKey('matchmaking-status'),
-                      textAlign: TextAlign.center,
+                    child: PopText(
+                      widget.mode == GameMode.chaos
+                          ? '⚡ CAOS'
+                          : '🏆 TRADICIONAL',
                       style: const TextStyle(
-                        fontSize: 16,
-                        color: Color(0xFF667085),
-                        fontWeight: FontWeight.w700,
+                        color: PopColors.navy,
+                        fontWeight: FontWeight.w900,
+                        letterSpacing: .4,
                       ),
                     ),
-                    const SizedBox(height: 18),
-                    Wrap(
-                      key: const ValueKey('matchmaking-seats'),
-                      alignment: WrapAlignment.center,
-                      spacing: 10,
-                      runSpacing: 10,
-                      children: [
+                  ),
+                  const SizedBox(height: 6),
+                  PopText(
+                    searchStatus,
+                    key: const ValueKey('matchmaking-status'),
+                    textAlign: TextAlign.center,
+                    style: const TextStyle(
+                      fontSize: 16,
+                      color: Color(0xFF667085),
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
+                  const SizedBox(height: 18),
+                  Wrap(
+                    key: const ValueKey('matchmaking-seats'),
+                    alignment: WrapAlignment.center,
+                    spacing: 10,
+                    runSpacing: 10,
+                    children: [
+                      _MatchmakingSeat(
+                        participant: localPlayer,
+                        color: PlayerColor.red,
+                        revealed: true,
+                      ),
+                      for (
+                        var index = 0;
+                        index < virtualSeatColors.length;
+                        index++
+                      )
                         _MatchmakingSeat(
-                          participant: localPlayer,
-                          color: PlayerColor.red,
-                          revealed: true,
+                          participant: index < opponents.length
+                              ? opponents[index]
+                              : null,
+                          color: virtualSeatColors[index],
+                          revealed: index < revealedOpponents,
                         ),
-                        for (
-                          var index = 0;
-                          index < virtualSeatColors.length;
-                          index++
-                        )
-                          _MatchmakingSeat(
-                            participant: index < opponents.length
-                                ? opponents[index]
-                                : null,
-                            color: virtualSeatColors[index],
-                            revealed: index < revealedOpponents,
-                          ),
-                      ],
+                    ],
+                  ),
+                  const SizedBox(height: 16),
+                  Container(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 13,
+                      vertical: 10,
                     ),
-                    const SizedBox(height: 16),
-                    Container(
-                      padding: const EdgeInsets.symmetric(
-                        horizontal: 13,
-                        vertical: 10,
-                      ),
-                      decoration: BoxDecoration(
-                        color: Colors.white.withValues(alpha: .86),
-                        borderRadius: BorderRadius.circular(16),
-                        border: Border.all(color: Colors.white, width: 2),
-                      ),
-                      child: const Row(
-                        children: [
-                          Icon(
-                            Icons.groups_rounded,
-                            color: PopColors.blue,
-                            size: 20,
-                          ),
-                          SizedBox(width: 8),
-                          Expanded(
-                            child: PopText(
-                              'Esta versión prepara la partida en tu dispositivo '
-                              'y completa los demás asientos con CPU.',
-                              style: TextStyle(
-                                fontSize: 11,
-                                color: Color(0xFF667085),
-                                fontWeight: FontWeight.w700,
-                              ),
+                    decoration: BoxDecoration(
+                      color: Colors.white.withValues(alpha: .86),
+                      borderRadius: BorderRadius.circular(16),
+                      border: Border.all(color: Colors.white, width: 2),
+                    ),
+                    child: const Row(
+                      children: [
+                        Icon(
+                          Icons.groups_rounded,
+                          color: PopColors.blue,
+                          size: 20,
+                        ),
+                        SizedBox(width: 8),
+                        Expanded(
+                          child: PopText(
+                            'Esta versión prepara la partida en tu dispositivo '
+                            'y completa los demás asientos con CPU.',
+                            style: TextStyle(
+                              fontSize: 11,
+                              color: Color(0xFF667085),
+                              fontWeight: FontWeight.w700,
                             ),
                           ),
-                        ],
-                      ),
+                        ),
+                      ],
                     ),
-                    const SizedBox(height: 14),
-                    TextButton(
-                      onPressed: () => Navigator.pop(context),
-                      child: const PopText('Cancelar'),
-                    ),
-                  ],
-                ),
+                  ),
+                  const SizedBox(height: 14),
+                  TextButton(
+                    onPressed: () => Navigator.pop(context),
+                    child: const PopText('Cancelar'),
+                  ),
+                ],
               ),
             ),
           ),
@@ -7193,660 +7434,652 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
     final gameBackground = defaultThemeVisualSpec.gameBackgroundColor;
     final mobileAdsSupported =
         MobileAdsScope.maybeOf(context)?.supported ?? false;
-    return SuppressMobileAdBanner(
-      child: PopScope(
-        // Leaving a live match must always happen through its explicit
-        // home/exit action, never through an accidental system back swipe.
-        canPop: false,
-        onPopInvokedWithResult: (didPop, _) {
-          if (!didPop) unawaited(_handleBackRequest());
-        },
-        child: Scaffold(
-          backgroundColor: gameBackground,
-          body: ColoredBox(
-            color: Colors.white,
-            child: SafeArea(
-              child: Stack(
-                fit: StackFit.expand,
-                children: [
-                  Positioned.fill(
-                    child: _AnimatedThemeBackdrop(themeId: 'theme_default'),
-                  ),
-                  LayoutBuilder(
-                    builder: (context, box) {
-                      compactPhoneBoard = _usesCompactPhoneBoard(context);
-                      final sideBySide =
-                          box.maxWidth >= 560 &&
-                          box.maxWidth >= box.maxHeight * 1.15;
-                      final mobileBoardTools = compactPhoneBoard && !sideBySide;
-                      final interactionState = GameInteractionState.derive(
-                        engine: engine,
-                        isLocallyControlledTurn: _isLocallyControlledTurn,
-                        selectedToken: selectedToken,
-                      );
-                      const railGap = 4.0;
-                      final minimumRailWidth = (box.maxWidth * .25)
-                          .clamp(205.0, 290.0)
-                          .toDouble();
-                      final boardSize = sideBySide
-                          ? math
-                                .min(
-                                  box.maxHeight,
-                                  math.max(
-                                    0,
-                                    box.maxWidth - minimumRailWidth - railGap,
-                                  ),
-                                )
-                                .toDouble()
-                          : box.maxWidth;
-                      final availableRailWidth = sideBySide
-                          ? math.max(0.0, box.maxWidth - boardSize - railGap)
-                          : 0.0;
-                      final phoneLandscape =
-                          sideBySide &&
-                          box.maxHeight <= 430 &&
-                          availableRailWidth >= 330;
-                      final selectedMovePreviews =
-                          _visibleMoveDestinationPreviews(
-                            selectedToken,
-                          ).where((preview) => !preview.overview).toList();
-                      final mobileMoveChoicesVisible =
-                          mobileBoardTools && selectedMovePreviews.isNotEmpty;
-                      final mobileTurnDecisionVisible =
-                          mobileBoardTools &&
-                          _isLocallyControlledTurn &&
-                          !engine.gameOver &&
-                          (engine.hasRolled || engine.effectResolving);
-                      final rawMovePopup = mobileMoveChoicesVisible
-                          ? null
-                          : _buildMovePopup();
-                      final movePopup = rawMovePopup == null
-                          ? null
-                          : TapRegion(
-                              groupId: moveSelectionTapGroup,
-                              onTapOutside: (_) => _cancelTokenSelection(),
-                              child: rawMovePopup,
-                            );
-                      final trapAlert = _buildTrapAlert();
-                      final trapDiagnostics = _buildTrapDiagnostics();
-                      final chatBanner = _buildChatBanner();
-                      final spectatorBar = _buildSpectatorBar(
-                        compact: sideBySide,
-                      );
-                      final mobileFocus = _mobileBoardFocus;
-                      final mobileFullBoard =
-                          mobileBoardCameraMode ==
-                          _MobileBoardCameraMode.fullBoard;
-                      final cameraScale = mobileBoardTools && !mobileFullBoard
-                          ? _mobileBoardZoomScale
-                          : 1.0;
-                      final cameraTranslation = Offset(
-                        boardSize * (.5 - cameraScale * mobileFocus.dx),
-                        boardSize * (.5 - cameraScale * mobileFocus.dy),
-                      );
-                      final cameraTransform = Matrix4.identity()
-                        ..setEntry(0, 0, cameraScale)
-                        ..setEntry(1, 1, cameraScale)
-                        ..setTranslationRaw(
-                          cameraTranslation.dx,
-                          cameraTranslation.dy,
-                          0,
-                        );
-                      final tokenChoiceGuideTarget = _tokenChoiceGuideTarget;
-                      final tokenChoicePromptTarget = mobileBoardTools
-                          ? _tokenChoicePromptTarget
-                          : null;
-                      final tokenChoiceGuideCell =
-                          tokenChoiceGuideTarget == null
-                          ? null
-                          : _displayTokenCells(
-                              engine,
-                              compactPhone: compactPhoneBoard,
-                            )[tokenChoiceGuideTarget];
-                      final tokenChoicePromptCell =
-                          tokenChoicePromptTarget == null
-                          ? null
-                          : _displayTokenCells(
-                              engine,
-                              compactPhone: compactPhoneBoard,
-                            )[tokenChoicePromptTarget];
-                      final boardGeometry = _BoardGeometry(
-                        boardSize,
-                        compactPhone: compactPhoneBoard,
-                      );
-                      final boardHitPlane = SizedBox.square(
-                        key: const ValueKey('game-board-hit-plane'),
-                        dimension: boardSize,
-                        child: GestureDetector(
-                          behavior: HitTestBehavior.opaque,
-                          excludeFromSemantics: true,
-                          onTapUp: interactionState.boardInputEnabled
-                              ? (details) =>
-                                    _tapBoard(details.localPosition, boardSize)
-                              : null,
-                          child: Stack(
-                            fit: StackFit.expand,
-                            children: [
-                              GameBoardMockup(
-                                engine: engine,
-                                compactPhone: compactPhoneBoard,
-                                selectedToken: selectedToken,
-                                movePreviews: _visibleMoveDestinationPreviews(
-                                  selectedToken,
+    return PopScope(
+      // Leaving a live match must always happen through its explicit
+      // home/exit action, never through an accidental system back swipe.
+      canPop: false,
+      onPopInvokedWithResult: (didPop, _) {
+        if (!didPop) unawaited(_handleBackRequest());
+      },
+      child: Scaffold(
+        backgroundColor: gameBackground,
+        body: ColoredBox(
+          color: Colors.white,
+          child: SafeArea(
+            child: Stack(
+              fit: StackFit.expand,
+              children: [
+                Positioned.fill(
+                  child: _AnimatedThemeBackdrop(themeId: 'theme_default'),
+                ),
+                LayoutBuilder(
+                  builder: (context, box) {
+                    compactPhoneBoard = _usesCompactPhoneBoard(context);
+                    final sideBySide =
+                        box.maxWidth >= 560 &&
+                        box.maxWidth >= box.maxHeight * 1.15;
+                    final mobileBoardTools = compactPhoneBoard && !sideBySide;
+                    final interactionState = GameInteractionState.derive(
+                      engine: engine,
+                      isLocallyControlledTurn: _isLocallyControlledTurn,
+                      selectedToken: selectedToken,
+                    );
+                    const railGap = 4.0;
+                    final minimumRailWidth = (box.maxWidth * .25)
+                        .clamp(205.0, 290.0)
+                        .toDouble();
+                    final boardSize = sideBySide
+                        ? math
+                              .min(
+                                box.maxHeight,
+                                math.max(
+                                  0,
+                                  box.maxWidth - minimumRailWidth - railGap,
                                 ),
-                                revealAllTraps: trapDiagnosticsEnabled,
-                                playerThemeIds: playerThemeIds,
-                                robotTokens: robotTokens,
-                                robotTokenColors: robotTokenColors,
-                                tokenStyleIds: tokenStyleIds,
-                                playerLabels: playerLabels,
-                              ),
-                              if (mobileMoveChoicesVisible)
-                                _BoardMoveChoiceCallouts(
-                                  previews: selectedMovePreviews,
-                                  geometry: boardGeometry,
-                                  selectedTokenCenter: selectedToken == null
-                                      ? null
-                                      : _displayTokenCells(
-                                          engine,
-                                          compactPhone: compactPhoneBoard,
-                                        )[selectedToken!],
-                                  onChoice: (preview) {
-                                    if (preview.usesAllDice) {
-                                      _moveSelectedTokenUsingAllDice();
-                                    } else {
-                                      _moveSelectedToken(preview.value);
-                                    }
-                                  },
-                                ),
-                              if (mobileBoardTools && trapAlert != null)
-                                _MobileBoardNotice(
-                                  anchor: engine.effectBoardCell,
-                                  child: trapAlert,
-                                ),
-                              if (mobileBoardTools &&
-                                  mobileTurnDecisionVisible &&
-                                  trapAlert == null &&
-                                  chatBanner != null)
-                                _MobileBoardNotice(
-                                  anchor: null,
-                                  preferTop: true,
-                                  height: 58,
-                                  child: chatBanner,
-                                ),
-                              if (mobileBoardTools &&
-                                  !mobileMoveChoicesVisible &&
-                                  rawMovePopup != null)
-                                _MobileBoardNotice(
-                                  anchor: selectedToken == null
-                                      ? null
-                                      : _displayTokenCells(
-                                          engine,
-                                          compactPhone: compactPhoneBoard,
-                                        )[selectedToken!],
-                                  interactive: true,
-                                  height: 108,
-                                  child: movePopup!,
-                                ),
-                              if (tokenChoicePromptTarget != null &&
-                                  tokenChoicePromptCell != null)
-                                _BoardTokenChoiceCallout(
-                                  geometry: boardGeometry,
-                                  target: tokenChoicePromptCell,
-                                  rolledDice: engine.dice,
-                                  remainingDice: _guidedTutorialActive
-                                      ? <int>[
-                                          tutorialScenario!.expectedDie(
-                                            _guidedTutorialStep,
-                                          )!,
-                                        ]
-                                      : engine.remainingDice,
-                                  onTap: () {
-                                    setState(() {
-                                      selectedToken = tokenChoicePromptTarget;
-                                      mobileBoardCameraMode =
-                                          _MobileBoardCameraMode.fullBoard;
-                                    });
-                                  },
-                                ),
-                              if (tokenChoiceGuideTarget != null &&
-                                  tokenChoiceGuideCell != null)
-                                _TokenChoiceGuide(
-                                  key: ValueKey(
-                                    'token-choice-guide-target-'
-                                    '${tokenChoiceGuideTarget.id}',
-                                  ),
-                                  center: boardGeometry.toPixel(
-                                    tokenChoiceGuideCell,
-                                  ),
-                                  cell: boardGeometry.cell,
-                                  hand: diceHandPreference,
-                                ),
-                            ],
-                          ),
-                        ),
-                      );
-                      final board = TapRegion(
-                        groupId: moveSelectionTapGroup,
-                        onTapOutside: (_) => _cancelTokenSelection(),
-                        child: SizedBox.square(
-                          key: const ValueKey('game-board'),
-                          dimension: boardSize,
-                          child: mobileBoardTools
-                              ? ClipRRect(
-                                  borderRadius: BorderRadius.circular(18),
-                                  child: Transform(
-                                    key: const ValueKey(
-                                      'mobile-board-camera-transform',
-                                    ),
-                                    alignment: Alignment.topLeft,
-                                    transform: cameraTransform,
-                                    transformHitTests: true,
-                                    child: boardHitPlane,
-                                  ),
-                                )
-                              : boardHitPlane,
-                        ),
-                      );
-                      final mobileBoardNavigator = mobileBoardTools
-                          ? _MobileBoardNavigator(
-                              boardPainter: _ParcheseBoardPainter(
-                                engine,
-                                compactPhone: true,
-                                selectedToken: selectedToken,
-                                animatedCells: _displayTokenCells(
-                                  engine,
-                                  compactPhone: true,
-                                ),
-                                pulse: .32,
-                                cubeSpin: .28,
-                                effectProgress: 0,
-                                playerThemeIds: playerThemeIds,
-                                revealAllTraps: trapDiagnosticsEnabled,
-                                robotTokens: robotTokens,
-                                robotTokenColors: robotTokenColors,
-                                tokenStyleIds: tokenStyleIds,
-                                playerLabels: playerLabels,
-                                localPlayerLabel: appTranslate(context, 'TÚ'),
-                                languageCode: appLanguageCodeOf(context),
-                                movePreviews: _visibleMoveDestinationPreviews(
-                                  selectedToken,
-                                ),
-                              ),
-                              focus: mobileFocus,
-                              fullBoard: mobileFullBoard,
-                              onFocusChanged: _setMobileBoardManualFocus,
-                              onInteractionEnd: _showFullMobileBoard,
-                            )
-                          : null;
-                      final rawPanel = GameControlPanel(
-                        engine: engine,
-                        selectedToken: selectedToken,
-                        onDieSelected: _moveSelectedToken,
-                        onCancelSelection: _cancelTokenSelection,
-                        onRollRequested: _rollDiceFromHud,
-                        rollEnabled:
-                            interactionState.canRollDice && _tutorialAllowsRoll,
-                        rollGuideEnabled: rollGuideEnabled,
-                        rollGuideVisible: rollGuideVisible,
-                        rollGuidePulseSerial: rollGuidePulseSerial,
-                        diceHandPreference: diceHandPreference,
-                        onShowChat: widget.onlineSession == null
-                            ? null
-                            : _showSafeChatPicker,
-                        onCustomize: widget.wallet == null
-                            ? null
-                            : _showOwnedCosmetics,
-                        diceStyleId: diceStyleId,
-                        avatarIds: avatarIds,
-                        mobileBoardNavigator: mobileBoardNavigator,
-                        mobileBoardFullView: mobileFullBoard,
-                        visibleRemainingDice: _guidedVisibleRemainingDice,
-                      );
-                      final Widget panel = mobileBoardTools
-                          ? TapRegion(
-                              groupId: moveSelectionTapGroup,
-                              child: rawPanel,
-                            )
-                          : rawPanel;
-                      final quickBar = _GameQuickBar(
-                        chaos: engine.isChaos,
-                        matchFormat: engine.matchFormat,
-                        compact: sideBySide,
-                        phoneLandscape: phoneLandscape,
-                        attached: !sideBySide,
-                        elapsed: matchElapsed,
-                        onBack: _handleBackRequest,
-                        onShowPowers: _showPowerStatus,
-                        onShowHistory: _showEventHistory,
-                        onShowGuide: () {
-                          _cancelRollGuide();
-                          Navigator.push(
-                            context,
-                            MaterialPageRoute(
-                              builder: (_) => GameGuideScreen(
-                                initialMode:
-                                    engine.matchFormat == MatchFormat.quickPop
-                                    ? GameGuideMode.quickPop
-                                    : engine.isChaos
-                                    ? GameGuideMode.chaos
-                                    : GameGuideMode.traditional,
-                              ),
-                            ),
+                              )
+                              .toDouble()
+                        : box.maxWidth;
+                    final availableRailWidth = sideBySide
+                        ? math.max(0.0, box.maxWidth - boardSize - railGap)
+                        : 0.0;
+                    final phoneLandscape =
+                        sideBySide &&
+                        box.maxHeight <= 430 &&
+                        availableRailWidth >= 330;
+                    final selectedMovePreviews =
+                        _visibleMoveDestinationPreviews(
+                          selectedToken,
+                        ).where((preview) => !preview.overview).toList();
+                    final mobileMoveChoicesVisible =
+                        mobileBoardTools && selectedMovePreviews.isNotEmpty;
+                    final mobileTurnDecisionVisible =
+                        mobileBoardTools &&
+                        _isLocallyControlledTurn &&
+                        !engine.gameOver &&
+                        (engine.hasRolled || engine.effectResolving);
+                    final rawMovePopup = mobileMoveChoicesVisible
+                        ? null
+                        : _buildMovePopup();
+                    final movePopup = rawMovePopup == null
+                        ? null
+                        : TapRegion(
+                            groupId: moveSelectionTapGroup,
+                            onTapOutside: (_) => _cancelTokenSelection(),
+                            child: rawMovePopup,
                           );
-                        },
-                        onShowSettings: _openGameSettings,
+                    final trapAlert = _buildTrapAlert();
+                    final trapDiagnostics = _buildTrapDiagnostics();
+                    final chatBanner = _buildChatBanner();
+                    final spectatorBar = _buildSpectatorBar(
+                      compact: sideBySide,
+                    );
+                    final mobileFocus = _mobileBoardFocus;
+                    final mobileFullBoard =
+                        mobileBoardCameraMode ==
+                        _MobileBoardCameraMode.fullBoard;
+                    final cameraScale = mobileBoardTools && !mobileFullBoard
+                        ? _mobileBoardZoomScale
+                        : 1.0;
+                    final cameraTranslation = Offset(
+                      boardSize * (.5 - cameraScale * mobileFocus.dx),
+                      boardSize * (.5 - cameraScale * mobileFocus.dy),
+                    );
+                    final cameraTransform = Matrix4.identity()
+                      ..setEntry(0, 0, cameraScale)
+                      ..setEntry(1, 1, cameraScale)
+                      ..setTranslationRaw(
+                        cameraTranslation.dx,
+                        cameraTranslation.dy,
+                        0,
                       );
-                      return KeyedSubtree(
-                        key: const ValueKey('game-content-area'),
-                        child: sideBySide
-                            ? KeyedSubtree(
-                                key: phoneLandscape
-                                    ? const ValueKey('phone-landscape-layout')
-                                    : null,
-                                child: Row(
-                                  key: const ValueKey('game-side-layout'),
-                                  crossAxisAlignment: CrossAxisAlignment.start,
-                                  children: [
-                                    board,
-                                    const SizedBox(width: railGap),
-                                    Expanded(
-                                      key: const ValueKey('game-rail-slot'),
-                                      child: phoneLandscape
-                                          ? Stack(
-                                              fit: StackFit.expand,
-                                              children: [
-                                                Column(
-                                                  children: [
-                                                    quickBar,
-                                                    ?spectatorBar,
-                                                    const SizedBox(height: 3),
-                                                    Expanded(
-                                                      child: _GameSideRail(
-                                                        engine: engine,
-                                                        elapsed: matchElapsed,
-                                                        selectedToken:
-                                                            selectedToken,
-                                                        onDieSelected:
-                                                            _moveSelectedToken,
-                                                        onCancelSelection:
-                                                            _cancelTokenSelection,
-                                                        onRollRequested:
-                                                            _rollDiceFromHud,
-                                                        rollEnabled:
-                                                            interactionState
-                                                                .canRollDice &&
-                                                            _tutorialAllowsRoll,
-                                                        rollGuideEnabled:
-                                                            rollGuideEnabled,
-                                                        rollGuideVisible:
-                                                            rollGuideVisible,
-                                                        rollGuidePulseSerial:
-                                                            rollGuidePulseSerial,
-                                                        diceHandPreference:
-                                                            diceHandPreference,
-                                                        onShowPowers:
-                                                            _showPowerStatus,
-                                                        onShowChat:
-                                                            widget.onlineSession ==
-                                                                null
-                                                            ? null
-                                                            : _showSafeChatPicker,
-                                                        onCustomize:
-                                                            widget.wallet ==
-                                                                null
-                                                            ? null
-                                                            : _showOwnedCosmetics,
-                                                        diceStyleId:
-                                                            diceStyleId,
-                                                        onlineSession: widget
-                                                            .onlineSession,
-                                                        avatarIds: avatarIds,
-                                                        revealTrapDetails:
-                                                            trapDiagnosticsEnabled,
-                                                        wideShortLandscape:
-                                                            true,
-                                                        visibleRemainingDice:
-                                                            _guidedVisibleRemainingDice,
-                                                      ),
-                                                    ),
-                                                  ],
-                                                ),
-                                                if (trapDiagnostics != null)
-                                                  Positioned(
-                                                    top:
-                                                        49 +
-                                                        (spectatorBar == null
-                                                            ? 0
-                                                            : 40),
-                                                    left: 5,
-                                                    right: 66,
-                                                    child: trapDiagnostics,
-                                                  ),
-                                                if (movePopup ??
-                                                        trapAlert ??
-                                                        chatBanner
-                                                    case final overlay?)
-                                                  Positioned(
-                                                    left: 5,
-                                                    right: 66,
-                                                    bottom: 5,
-                                                    child: ConstrainedBox(
-                                                      constraints:
-                                                          const BoxConstraints(
-                                                            maxHeight: 170,
-                                                          ),
-                                                      child:
-                                                          SingleChildScrollView(
-                                                            child: overlay,
-                                                          ),
-                                                    ),
-                                                  ),
-                                              ],
-                                            )
-                                          : Column(
-                                              children: [
-                                                quickBar,
-                                                ?spectatorBar,
-                                                ?trapDiagnostics,
-                                                ?chatBanner,
-                                                ?trapAlert,
-                                                ?movePopup,
-                                                const SizedBox(height: 3),
-                                                Expanded(
-                                                  child: _GameSideRail(
-                                                    engine: engine,
-                                                    elapsed: matchElapsed,
-                                                    selectedToken:
-                                                        selectedToken,
-                                                    onDieSelected:
-                                                        _moveSelectedToken,
-                                                    onCancelSelection:
-                                                        _cancelTokenSelection,
-                                                    onRollRequested:
-                                                        _rollDiceFromHud,
-                                                    rollEnabled:
-                                                        interactionState
-                                                            .canRollDice &&
-                                                        _tutorialAllowsRoll,
-                                                    rollGuideEnabled:
-                                                        rollGuideEnabled,
-                                                    rollGuideVisible:
-                                                        rollGuideVisible,
-                                                    rollGuidePulseSerial:
-                                                        rollGuidePulseSerial,
-                                                    diceHandPreference:
-                                                        diceHandPreference,
-                                                    onShowPowers:
-                                                        _showPowerStatus,
-                                                    onShowChat:
-                                                        widget.onlineSession ==
-                                                            null
-                                                        ? null
-                                                        : _showSafeChatPicker,
-                                                    onCustomize:
-                                                        widget.wallet == null
-                                                        ? null
-                                                        : _showOwnedCosmetics,
-                                                    diceStyleId: diceStyleId,
-                                                    onlineSession:
-                                                        widget.onlineSession,
-                                                    avatarIds: avatarIds,
-                                                    revealTrapDetails:
-                                                        trapDiagnosticsEnabled,
-                                                    visibleRemainingDice:
-                                                        _guidedVisibleRemainingDice,
-                                                  ),
-                                                ),
-                                              ],
-                                            ),
-                                    ),
-                                  ],
-                                ),
-                              )
-                            : mobileBoardTools
-                            ? Column(
-                                key: const ValueKey(
-                                  'mobile-portrait-game-layout',
-                                ),
-                                children: [
-                                  quickBar,
-                                  const SizedBox(height: 3),
-                                  Expanded(
-                                    key: const ValueKey('mobile-board-stage'),
-                                    child: Align(
-                                      alignment: Alignment.topCenter,
-                                      child: FittedBox(
-                                        fit: BoxFit.contain,
-                                        alignment: Alignment.topCenter,
-                                        child: board,
-                                      ),
-                                    ),
-                                  ),
-                                  Padding(
-                                    padding: const EdgeInsets.all(4),
-                                    child: Stack(
-                                      clipBehavior: Clip.none,
-                                      children: [
-                                        panel,
-                                        if (spectatorBar ?? chatBanner
-                                            case final overlay?)
-                                          Positioned(
-                                            left: 0,
-                                            top: 0,
-                                            right: 0,
-                                            child: overlay,
-                                          ),
-                                      ],
-                                    ),
-                                  ),
-                                ],
-                              )
-                            : SingleChildScrollView(
-                                child: Column(
-                                  children: [
-                                    quickBar,
-                                    ?spectatorBar,
-                                    const SizedBox(height: 3),
-                                    board,
-                                    ?trapDiagnostics,
-                                    ?chatBanner,
-                                    ?trapAlert,
-                                    ?movePopup,
-                                    Padding(
-                                      padding: const EdgeInsets.fromLTRB(
-                                        4,
-                                        4,
-                                        4,
-                                        4,
-                                      ),
-                                      child: panel,
-                                    ),
-                                  ],
-                                ),
+                    final tokenChoiceGuideTarget = _tokenChoiceGuideTarget;
+                    final tokenChoicePromptTarget = mobileBoardTools
+                        ? _tokenChoicePromptTarget
+                        : null;
+                    final tokenChoiceGuideCell = tokenChoiceGuideTarget == null
+                        ? null
+                        : _displayTokenCells(
+                            engine,
+                            compactPhone: compactPhoneBoard,
+                          )[tokenChoiceGuideTarget];
+                    final tokenChoicePromptCell =
+                        tokenChoicePromptTarget == null
+                        ? null
+                        : _displayTokenCells(
+                            engine,
+                            compactPhone: compactPhoneBoard,
+                          )[tokenChoicePromptTarget];
+                    final boardGeometry = _BoardGeometry(
+                      boardSize,
+                      compactPhone: compactPhoneBoard,
+                    );
+                    final boardHitPlane = SizedBox.square(
+                      key: const ValueKey('game-board-hit-plane'),
+                      dimension: boardSize,
+                      child: GestureDetector(
+                        behavior: HitTestBehavior.opaque,
+                        excludeFromSemantics: true,
+                        onTapUp: interactionState.boardInputEnabled
+                            ? (details) =>
+                                  _tapBoard(details.localPosition, boardSize)
+                            : null,
+                        child: Stack(
+                          fit: StackFit.expand,
+                          children: [
+                            GameBoardMockup(
+                              engine: engine,
+                              compactPhone: compactPhoneBoard,
+                              selectedToken: selectedToken,
+                              movePreviews: _visibleMoveDestinationPreviews(
+                                selectedToken,
                               ),
-                      );
-                    },
-                  ),
-                  if (_usesGuidedTutorial &&
-                      widget.tutorial?.lifecycle ==
-                          TutorialLifecycle.inProgress)
-                    Positioned(
-                      left: 10,
-                      right: 10,
-                      top: 62,
-                      child: Align(
-                        alignment: Alignment.topCenter,
-                        child: ConstrainedBox(
-                          constraints: const BoxConstraints(maxWidth: 520),
-                          child: _TutorialCoachBanner(
-                            controller: widget.tutorial!,
-                            onSkip: () async {
-                              final navigator = Navigator.of(context);
-                              await widget.tutorial!.skip();
-                              if (!mounted) return;
-                              if (widget.guidedTutorial && navigator.canPop()) {
-                                navigator.pop();
-                              } else {
-                                setState(() {});
-                              }
-                            },
-                          ),
+                              revealAllTraps: trapDiagnosticsEnabled,
+                              playerThemeIds: playerThemeIds,
+                              robotTokens: robotTokens,
+                              robotTokenColors: robotTokenColors,
+                              tokenStyleIds: tokenStyleIds,
+                              playerLabels: playerLabels,
+                            ),
+                            if (mobileMoveChoicesVisible)
+                              _BoardMoveChoiceCallouts(
+                                previews: selectedMovePreviews,
+                                geometry: boardGeometry,
+                                selectedTokenCenter: selectedToken == null
+                                    ? null
+                                    : _displayTokenCells(
+                                        engine,
+                                        compactPhone: compactPhoneBoard,
+                                      )[selectedToken!],
+                                onChoice: (preview) {
+                                  if (preview.usesAllDice) {
+                                    _moveSelectedTokenUsingAllDice();
+                                  } else {
+                                    _moveSelectedToken(preview.value);
+                                  }
+                                },
+                              ),
+                            if (mobileBoardTools && trapAlert != null)
+                              _MobileBoardNotice(
+                                anchor: engine.effectBoardCell,
+                                child: trapAlert,
+                              ),
+                            if (mobileBoardTools &&
+                                mobileTurnDecisionVisible &&
+                                trapAlert == null &&
+                                chatBanner != null)
+                              _MobileBoardNotice(
+                                anchor: null,
+                                preferTop: true,
+                                height: 58,
+                                child: chatBanner,
+                              ),
+                            if (mobileBoardTools &&
+                                !mobileMoveChoicesVisible &&
+                                rawMovePopup != null)
+                              _MobileBoardNotice(
+                                anchor: selectedToken == null
+                                    ? null
+                                    : _displayTokenCells(
+                                        engine,
+                                        compactPhone: compactPhoneBoard,
+                                      )[selectedToken!],
+                                interactive: true,
+                                height: 108,
+                                child: movePopup!,
+                              ),
+                            if (tokenChoicePromptTarget != null &&
+                                tokenChoicePromptCell != null)
+                              _BoardTokenChoiceCallout(
+                                geometry: boardGeometry,
+                                target: tokenChoicePromptCell,
+                                rolledDice: engine.dice,
+                                remainingDice: _guidedTutorialActive
+                                    ? <int>[
+                                        tutorialScenario!.expectedDie(
+                                          _guidedTutorialStep,
+                                        )!,
+                                      ]
+                                    : engine.remainingDice,
+                                onTap: () {
+                                  setState(() {
+                                    selectedToken = tokenChoicePromptTarget;
+                                    mobileBoardCameraMode =
+                                        _MobileBoardCameraMode.fullBoard;
+                                  });
+                                },
+                              ),
+                            if (tokenChoiceGuideTarget != null &&
+                                tokenChoiceGuideCell != null)
+                              _TokenChoiceGuide(
+                                key: ValueKey(
+                                  'token-choice-guide-target-'
+                                  '${tokenChoiceGuideTarget.id}',
+                                ),
+                                center: boardGeometry.toPixel(
+                                  tokenChoiceGuideCell,
+                                ),
+                                cell: boardGeometry.cell,
+                                hand: diceHandPreference,
+                              ),
+                          ],
                         ),
                       ),
-                    ),
-                  if (tutorialCompletionVisible)
-                    Positioned.fill(
-                      child: BlockSemantics(
-                        child: _TutorialCompletionCard(
-                          onDone: () {
+                    );
+                    final board = TapRegion(
+                      groupId: moveSelectionTapGroup,
+                      onTapOutside: (_) => _cancelTokenSelection(),
+                      child: SizedBox.square(
+                        key: const ValueKey('game-board'),
+                        dimension: boardSize,
+                        child: mobileBoardTools
+                            ? ClipRRect(
+                                borderRadius: BorderRadius.circular(18),
+                                child: Transform(
+                                  key: const ValueKey(
+                                    'mobile-board-camera-transform',
+                                  ),
+                                  alignment: Alignment.topLeft,
+                                  transform: cameraTransform,
+                                  transformHitTests: true,
+                                  child: boardHitPlane,
+                                ),
+                              )
+                            : boardHitPlane,
+                      ),
+                    );
+                    final mobileBoardNavigator = mobileBoardTools
+                        ? _MobileBoardNavigator(
+                            boardPainter: _ParcheseBoardPainter(
+                              engine,
+                              compactPhone: true,
+                              selectedToken: selectedToken,
+                              animatedCells: _displayTokenCells(
+                                engine,
+                                compactPhone: true,
+                              ),
+                              pulse: .32,
+                              cubeSpin: .28,
+                              effectProgress: 0,
+                              playerThemeIds: playerThemeIds,
+                              revealAllTraps: trapDiagnosticsEnabled,
+                              robotTokens: robotTokens,
+                              robotTokenColors: robotTokenColors,
+                              tokenStyleIds: tokenStyleIds,
+                              playerLabels: playerLabels,
+                              localPlayerLabel: appTranslate(context, 'TÚ'),
+                              languageCode: appLanguageCodeOf(context),
+                              movePreviews: _visibleMoveDestinationPreviews(
+                                selectedToken,
+                              ),
+                            ),
+                            focus: mobileFocus,
+                            fullBoard: mobileFullBoard,
+                            onFocusChanged: _setMobileBoardManualFocus,
+                            onInteractionEnd: _showFullMobileBoard,
+                          )
+                        : null;
+                    final rawPanel = GameControlPanel(
+                      engine: engine,
+                      selectedToken: selectedToken,
+                      onDieSelected: _moveSelectedToken,
+                      onCancelSelection: _cancelTokenSelection,
+                      onRollRequested: _rollDiceFromHud,
+                      rollEnabled:
+                          interactionState.canRollDice && _tutorialAllowsRoll,
+                      rollGuideEnabled: rollGuideEnabled,
+                      rollGuideVisible: rollGuideVisible,
+                      rollGuidePulseSerial: rollGuidePulseSerial,
+                      diceHandPreference: diceHandPreference,
+                      onShowChat: widget.onlineSession == null
+                          ? null
+                          : _showSafeChatPicker,
+                      onCustomize: widget.wallet == null
+                          ? null
+                          : _showOwnedCosmetics,
+                      diceStyleId: diceStyleId,
+                      avatarIds: avatarIds,
+                      mobileBoardNavigator: mobileBoardNavigator,
+                      mobileBoardFullView: mobileFullBoard,
+                      visibleRemainingDice: _guidedVisibleRemainingDice,
+                    );
+                    final Widget panel = mobileBoardTools
+                        ? TapRegion(
+                            groupId: moveSelectionTapGroup,
+                            child: rawPanel,
+                          )
+                        : rawPanel;
+                    final quickBar = _GameQuickBar(
+                      chaos: engine.isChaos,
+                      matchFormat: engine.matchFormat,
+                      compact: sideBySide,
+                      phoneLandscape: phoneLandscape,
+                      attached: !sideBySide,
+                      elapsed: matchElapsed,
+                      onBack: _handleBackRequest,
+                      onShowPowers: _showPowerStatus,
+                      onShowHistory: _showEventHistory,
+                      onShowGuide: () {
+                        _cancelRollGuide();
+                        Navigator.push(
+                          context,
+                          MaterialPageRoute(
+                            builder: (_) => GameGuideScreen(
+                              initialMode:
+                                  engine.matchFormat == MatchFormat.quickPop
+                                  ? GameGuideMode.quickPop
+                                  : engine.isChaos
+                                  ? GameGuideMode.chaos
+                                  : GameGuideMode.traditional,
+                            ),
+                          ),
+                        );
+                      },
+                      onShowSettings: _openGameSettings,
+                    );
+                    return KeyedSubtree(
+                      key: const ValueKey('game-content-area'),
+                      child: sideBySide
+                          ? KeyedSubtree(
+                              key: phoneLandscape
+                                  ? const ValueKey('phone-landscape-layout')
+                                  : null,
+                              child: Row(
+                                key: const ValueKey('game-side-layout'),
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  board,
+                                  const SizedBox(width: railGap),
+                                  Expanded(
+                                    key: const ValueKey('game-rail-slot'),
+                                    child: phoneLandscape
+                                        ? Stack(
+                                            fit: StackFit.expand,
+                                            children: [
+                                              Column(
+                                                children: [
+                                                  quickBar,
+                                                  ?spectatorBar,
+                                                  const SizedBox(height: 3),
+                                                  Expanded(
+                                                    child: _GameSideRail(
+                                                      engine: engine,
+                                                      elapsed: matchElapsed,
+                                                      selectedToken:
+                                                          selectedToken,
+                                                      onDieSelected:
+                                                          _moveSelectedToken,
+                                                      onCancelSelection:
+                                                          _cancelTokenSelection,
+                                                      onRollRequested:
+                                                          _rollDiceFromHud,
+                                                      rollEnabled:
+                                                          interactionState
+                                                              .canRollDice &&
+                                                          _tutorialAllowsRoll,
+                                                      rollGuideEnabled:
+                                                          rollGuideEnabled,
+                                                      rollGuideVisible:
+                                                          rollGuideVisible,
+                                                      rollGuidePulseSerial:
+                                                          rollGuidePulseSerial,
+                                                      diceHandPreference:
+                                                          diceHandPreference,
+                                                      onShowPowers:
+                                                          _showPowerStatus,
+                                                      onShowChat:
+                                                          widget.onlineSession ==
+                                                              null
+                                                          ? null
+                                                          : _showSafeChatPicker,
+                                                      onCustomize:
+                                                          widget.wallet == null
+                                                          ? null
+                                                          : _showOwnedCosmetics,
+                                                      diceStyleId: diceStyleId,
+                                                      onlineSession:
+                                                          widget.onlineSession,
+                                                      avatarIds: avatarIds,
+                                                      revealTrapDetails:
+                                                          trapDiagnosticsEnabled,
+                                                      wideShortLandscape: true,
+                                                      visibleRemainingDice:
+                                                          _guidedVisibleRemainingDice,
+                                                    ),
+                                                  ),
+                                                ],
+                                              ),
+                                              if (trapDiagnostics != null)
+                                                Positioned(
+                                                  top:
+                                                      49 +
+                                                      (spectatorBar == null
+                                                          ? 0
+                                                          : 40),
+                                                  left: 5,
+                                                  right: 66,
+                                                  child: trapDiagnostics,
+                                                ),
+                                              if (movePopup ??
+                                                      trapAlert ??
+                                                      chatBanner
+                                                  case final overlay?)
+                                                Positioned(
+                                                  left: 5,
+                                                  right: 66,
+                                                  bottom: 5,
+                                                  child: ConstrainedBox(
+                                                    constraints:
+                                                        const BoxConstraints(
+                                                          maxHeight: 170,
+                                                        ),
+                                                    child:
+                                                        SingleChildScrollView(
+                                                          child: overlay,
+                                                        ),
+                                                  ),
+                                                ),
+                                            ],
+                                          )
+                                        : Column(
+                                            children: [
+                                              quickBar,
+                                              ?spectatorBar,
+                                              ?trapDiagnostics,
+                                              ?chatBanner,
+                                              ?trapAlert,
+                                              ?movePopup,
+                                              const SizedBox(height: 3),
+                                              Expanded(
+                                                child: _GameSideRail(
+                                                  engine: engine,
+                                                  elapsed: matchElapsed,
+                                                  selectedToken: selectedToken,
+                                                  onDieSelected:
+                                                      _moveSelectedToken,
+                                                  onCancelSelection:
+                                                      _cancelTokenSelection,
+                                                  onRollRequested:
+                                                      _rollDiceFromHud,
+                                                  rollEnabled:
+                                                      interactionState
+                                                          .canRollDice &&
+                                                      _tutorialAllowsRoll,
+                                                  rollGuideEnabled:
+                                                      rollGuideEnabled,
+                                                  rollGuideVisible:
+                                                      rollGuideVisible,
+                                                  rollGuidePulseSerial:
+                                                      rollGuidePulseSerial,
+                                                  diceHandPreference:
+                                                      diceHandPreference,
+                                                  onShowPowers:
+                                                      _showPowerStatus,
+                                                  onShowChat:
+                                                      widget.onlineSession ==
+                                                          null
+                                                      ? null
+                                                      : _showSafeChatPicker,
+                                                  onCustomize:
+                                                      widget.wallet == null
+                                                      ? null
+                                                      : _showOwnedCosmetics,
+                                                  diceStyleId: diceStyleId,
+                                                  onlineSession:
+                                                      widget.onlineSession,
+                                                  avatarIds: avatarIds,
+                                                  revealTrapDetails:
+                                                      trapDiagnosticsEnabled,
+                                                  visibleRemainingDice:
+                                                      _guidedVisibleRemainingDice,
+                                                ),
+                                              ),
+                                            ],
+                                          ),
+                                  ),
+                                ],
+                              ),
+                            )
+                          : mobileBoardTools
+                          ? Column(
+                              key: const ValueKey(
+                                'mobile-portrait-game-layout',
+                              ),
+                              children: [
+                                quickBar,
+                                const SizedBox(height: 3),
+                                Expanded(
+                                  key: const ValueKey('mobile-board-stage'),
+                                  child: Align(
+                                    alignment: Alignment.topCenter,
+                                    child: FittedBox(
+                                      fit: BoxFit.contain,
+                                      alignment: Alignment.topCenter,
+                                      child: board,
+                                    ),
+                                  ),
+                                ),
+                                Padding(
+                                  padding: const EdgeInsets.all(4),
+                                  child: Stack(
+                                    clipBehavior: Clip.none,
+                                    children: [
+                                      panel,
+                                      if (spectatorBar ?? chatBanner
+                                          case final overlay?)
+                                        Positioned(
+                                          left: 0,
+                                          top: 0,
+                                          right: 0,
+                                          child: overlay,
+                                        ),
+                                    ],
+                                  ),
+                                ),
+                              ],
+                            )
+                          : SingleChildScrollView(
+                              child: Column(
+                                children: [
+                                  quickBar,
+                                  ?spectatorBar,
+                                  const SizedBox(height: 3),
+                                  board,
+                                  ?trapDiagnostics,
+                                  ?chatBanner,
+                                  ?trapAlert,
+                                  ?movePopup,
+                                  Padding(
+                                    padding: const EdgeInsets.fromLTRB(
+                                      4,
+                                      4,
+                                      4,
+                                      4,
+                                    ),
+                                    child: panel,
+                                  ),
+                                ],
+                              ),
+                            ),
+                    );
+                  },
+                ),
+                if (_usesGuidedTutorial &&
+                    widget.tutorial?.lifecycle == TutorialLifecycle.inProgress)
+                  Positioned(
+                    left: 10,
+                    right: 10,
+                    top: 62,
+                    child: Align(
+                      alignment: Alignment.topCenter,
+                      child: ConstrainedBox(
+                        constraints: const BoxConstraints(maxWidth: 520),
+                        child: _TutorialCoachBanner(
+                          controller: widget.tutorial!,
+                          onSkip: () async {
                             final navigator = Navigator.of(context);
-                            if (navigator.canPop()) {
+                            await widget.tutorial!.skip();
+                            if (!mounted) return;
+                            if (widget.guidedTutorial && navigator.canPop()) {
                               navigator.pop();
                             } else {
-                              setState(() => tutorialCompletionVisible = false);
+                              setState(() {});
                             }
                           },
                         ),
                       ),
                     ),
-                  if (showVictory && engine.winner != null)
-                    Positioned.fill(
-                      child: BlockSemantics(
-                        child: _VictoryCelebration(
-                          winner: engine.winner!,
-                          mode: engine.mode,
-                          matchFormat: engine.matchFormat,
-                          elapsed: matchElapsed,
-                          standings: standingEntries,
-                          standingsComplete: engine.standingsComplete,
-                          rewardCoins: matchRewardCoinsAwarded,
-                          doubleRewardCoins: widget.progression == null
-                              ? 100
-                              : matchBasePayout,
-                          onContinueWatching: engine.canContinueAfterWinner
-                              ? _continueWatching
-                              : null,
-                          onWatchRewarded:
-                              (widget.progression == null
-                                      ? engine.standingsComplete
-                                      : matchPlacementRewardSettled &&
-                                            matchBasePayout > 0) &&
-                                  mobileAdsSupported &&
-                                  !endMatchRewardClaimed &&
-                                  !postVictoryNavigationInProgress
-                              ? _watchEndMatchRewarded
-                              : null,
-                          rewardInProgress: endMatchRewardInProgress,
-                          rewardClaimed: endMatchRewardClaimed,
-                          navigationInProgress: postVictoryNavigationInProgress,
-                          onPlayAgain: _playAgainFromVictory,
-                          onHome: _homeFromVictory,
-                        ),
+                  ),
+                if (tutorialCompletionVisible)
+                  Positioned.fill(
+                    child: BlockSemantics(
+                      child: _TutorialCompletionCard(
+                        onDone: () {
+                          final navigator = Navigator.of(context);
+                          if (navigator.canPop()) {
+                            navigator.pop();
+                          } else {
+                            setState(() => tutorialCompletionVisible = false);
+                          }
+                        },
                       ),
                     ),
-                ],
-              ),
+                  ),
+                if (showVictory && engine.winner != null)
+                  Positioned.fill(
+                    child: BlockSemantics(
+                      child: _VictoryCelebration(
+                        winner: engine.winner!,
+                        mode: engine.mode,
+                        matchFormat: engine.matchFormat,
+                        elapsed: matchElapsed,
+                        standings: standingEntries,
+                        standingsComplete: engine.standingsComplete,
+                        rewardCoins: matchRewardCoinsAwarded,
+                        doubleRewardCoins: widget.progression == null
+                            ? 100
+                            : matchBasePayout,
+                        onContinueWatching: engine.canContinueAfterWinner
+                            ? _continueWatching
+                            : null,
+                        onWatchRewarded:
+                            (widget.progression == null
+                                    ? engine.standingsComplete
+                                    : matchPlacementRewardSettled &&
+                                          matchBasePayout > 0) &&
+                                mobileAdsSupported &&
+                                !endMatchRewardClaimed &&
+                                !postVictoryNavigationInProgress
+                            ? _watchEndMatchRewarded
+                            : null,
+                        rewardInProgress: endMatchRewardInProgress,
+                        rewardClaimed: endMatchRewardClaimed,
+                        navigationInProgress: postVictoryNavigationInProgress,
+                        onPlayAgain: _playAgainFromVictory,
+                        onHome: _homeFromVictory,
+                      ),
+                    ),
+                  ),
+              ],
             ),
           ),
         ),

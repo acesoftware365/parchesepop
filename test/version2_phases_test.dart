@@ -116,7 +116,7 @@ void main() {
     await _unmount(tester);
   });
 
-  testWidgets('home exposes Quick Pop without adding another tall mode card', (
+  testWidgets('home promotes Quick Pop honestly and opens its local preview', (
     tester,
   ) async {
     _useMobileViewport(tester);
@@ -140,22 +140,76 @@ void main() {
     );
     await _pumpUntil(
       tester,
-      () => find.byKey(const ValueKey('home-quick-pop')).evaluate().length == 1,
-      reason: 'Quick Pop home action did not render within one second.',
+      () => find
+          .byKey(const ValueKey('home-mode-quick-pop'))
+          .evaluate()
+          .isNotEmpty,
+      reason: 'The featured Quick Pop card did not render within one second.',
     );
 
-    expect(find.byKey(const ValueKey('home-quick-pop')), findsOneWidget);
-    await tester.ensureVisible(find.byKey(const ValueKey('home-quick-pop')));
-    await tester.tap(find.byKey(const ValueKey('home-quick-pop')));
+    final quickPop = find.byKey(const ValueKey('home-mode-quick-pop'));
+    final quickTable = find.byKey(const ValueKey('home-mode-quick-table'));
+    final cpu = find.byKey(const ValueKey('home-mode-cpu'));
+    expect(quickPop, findsOneWidget);
+    expect(quickTable, findsOneWidget);
+    expect(cpu, findsOneWidget);
+    expect(
+      find.byKey(const ValueKey('home-quick-pop')),
+      findsNothing,
+      reason: 'Quick Pop must not be duplicated in the secondary menu dock.',
+    );
+    expect(find.text('QUICK POP'), findsOneWidget);
+    expect(find.text('ONLINE · PRÓXIMAMENTE'), findsOneWidget);
+    expect(find.text('2 fichas · partida rápida'), findsOneWidget);
+    expect(find.text('MESA RÁPIDA'), findsOneWidget);
+    expect(find.text('Partida local'), findsOneWidget);
+    expect(find.text('CONTRA CPU'), findsOneWidget);
+    expect(find.text('Juega contra el CPU'), findsOneWidget);
+
+    for (final card in [quickPop, quickTable, cpu]) {
+      await tester.ensureVisible(card);
+      await tester.pump(const Duration(milliseconds: 50));
+      expect(card.hitTestable(), findsOneWidget);
+      final rect = tester.getRect(card);
+      expect(rect.left, greaterThanOrEqualTo(0));
+      expect(rect.right, lessThanOrEqualTo(_mobileViewport.width));
+      expect(rect.width, greaterThanOrEqualTo(48));
+      expect(rect.height, greaterThanOrEqualTo(48));
+    }
+    final featuredTop = tester.getTopLeft(quickPop).dy;
+    expect(featuredTop, lessThan(tester.getTopLeft(quickTable).dy));
+    expect(featuredTop, lessThan(tester.getTopLeft(cpu).dy));
+
+    await tester.ensureVisible(quickPop);
+    await tester.tap(quickPop);
+    await tester.pump();
+    await _pumpUntil(
+      tester,
+      () => find
+          .byKey(const ValueKey('quick-pop-entry-dialog'))
+          .evaluate()
+          .isNotEmpty,
+      reason: 'Quick Pop did not explain its online/local entry choices.',
+    );
+    expect(find.byType(MatchmakingScreen), findsNothing);
+    expect(find.byType(GameScreen), findsNothing);
+
+    final localPreview = find.byKey(const ValueKey('quick-pop-local-preview'));
+    expect(localPreview, findsOneWidget);
+    expect(localPreview.hitTestable(), findsOneWidget);
+    expect(tester.getSize(localPreview).width, greaterThanOrEqualTo(48));
+    expect(tester.getSize(localPreview).height, greaterThanOrEqualTo(48));
+    await tester.tap(localPreview);
     await tester.pump();
     await _pumpUntil(
       tester,
       () => find.byType(GameScreen).evaluate().length == 1,
-      reason: 'Quick Pop route did not open within one second.',
+      reason: 'The explicitly local Quick Pop preview did not open.',
     );
 
     final screen = tester.widget<GameScreen>(find.byType(GameScreen));
     expect(screen.matchFormat, MatchFormat.quickPop);
+    expect(screen.onlineSession, isNull);
     expect(tester.takeException(), isNull);
     await _unmount(tester);
   });

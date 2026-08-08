@@ -670,6 +670,15 @@ const _english = <String, String>{
   // Version 2: Quick Pop, contextual tutorial, and progression.
   'MESA RÁPIDA': 'QUICK TABLE',
   'Partida local con rivales CPU': 'Local match with CPU opponents',
+  'ONLINE · PRÓXIMAMENTE': 'ONLINE · COMING SOON',
+  '2 fichas · partida rápida': '2 pieces · quick match',
+  'Partida local': 'Local match',
+  'Juega contra el CPU': 'Play against CPU',
+  'QUICK POP ONLINE': 'QUICK POP ONLINE',
+  'El modo online necesita conexión con un servidor seguro. Mientras lo terminamos, puedes probar Quick Pop contra el CPU.':
+      'Online play requires a secure server connection. While we finish it, you can try Quick Pop against the CPU.',
+  'PROBAR QUICK POP': 'TRY QUICK POP',
+  'AHORA NO': 'NOT NOW',
   'Quick Pop': 'Quick Pop',
   'Misiones': 'Missions',
   'Elige las reglas de la mesa local': 'Choose the rules for your local match',
@@ -1175,10 +1184,10 @@ const _english = <String, String>{
       'Parchís Pop is an entertainment game. Coins in this version are for testing, have no monetary value, and do not provide competitive advantages.',
   'No se permiten nombres ofensivos, amenazas, acoso ni contenido sexual. Los mensajes durante la partida se limitarán a frases preaprobadas.':
       'Offensive names, threats, harassment, and sexual content are not allowed. In-game messages are limited to preapproved phrases.',
-  'En Android y iOS pueden aparecer banners adaptables únicamente fuera de la partida, la guía y la búsqueda de jugadores. Los anuncios recompensados solo se abren cuando eliges voluntariamente duplicar el premio al finalizar la mesa. Jugar otra vez, Volver al inicio y Reanudar nunca muestran anuncios. El premio se entrega únicamente al completar el anuncio. La aplicación solicita consentimiento cuando corresponde y ofrece opciones para administrar la privacidad publicitaria. macOS no muestra banners ni anuncios recompensados.':
-      'On Android and iOS, adaptive banners may appear only outside matches, the guide, and matchmaking. Rewarded ads open only when you voluntarily choose to double the reward after the table finishes. Play Again, Back to Home, and Resume never show ads. A reward is granted only after the ad is completed. The app requests consent when required and provides options to manage ad privacy. macOS does not show banners or rewarded ads.',
-  'Android y iOS pueden mostrar banners únicamente fuera de la partida, la guía y la búsqueda de jugadores. Los anuncios recompensados son voluntarios al finalizar la mesa. Jugar otra vez, Volver al inicio y Reanudar nunca abren anuncios. Puedes administrar el consentimiento y las preferencias disponibles desde esta pantalla. La versión de macOS no muestra estos anuncios.':
-      'Android and iOS may show banners only outside matches, the guide, and matchmaking. Rewarded ads are optional after the table finishes. Play Again, Back to Home, and Resume never open ads. You can manage consent and available preferences from this screen. The macOS version does not show these ads.',
+  'En Android y iOS puede permanecer visible una banda publicitaria adaptable en la parte inferior. Esta banda no interrumpe ni bloquea la jugada. Los anuncios recompensados solo se abren cuando eliges voluntariamente duplicar el premio al finalizar la mesa. Las acciones normales del juego, como tirar los dados, mover una ficha, Jugar otra vez, Volver al inicio y Reanudar, nunca abren anuncios. El premio se entrega únicamente al completar el anuncio. La aplicación solicita consentimiento cuando corresponde y ofrece opciones para administrar la privacidad publicitaria. macOS no muestra banners ni anuncios recompensados.':
+      'On Android and iOS, an adaptive ad banner may remain visible at the bottom. This banner does not interrupt or block gameplay. Rewarded ads open only when you voluntarily choose to double the reward after the table finishes. Normal game actions, such as rolling the dice, moving a piece, Play Again, Back to Home, and Resume, never open ads. A reward is granted only after the ad is completed. The app requests consent when required and provides options to manage ad privacy. macOS does not show banners or rewarded ads.',
+  'Android y iOS pueden mantener una banda publicitaria inferior no interruptiva. Los anuncios recompensados son voluntarios al finalizar la mesa, y las acciones normales del juego nunca abren anuncios. Puedes administrar el consentimiento y las preferencias disponibles desde esta pantalla. La versión de macOS no muestra estos anuncios.':
+      'Android and iOS may keep a non-interruptive ad banner at the bottom. Rewarded ads are optional after the table finishes, and normal game actions never open ads. You can manage consent and available preferences from this screen. The macOS version does not show these ads.',
   'El perfil actual vive en el dispositivo. El flujo definitivo permitirá borrar tanto los datos locales como la cuenta online cuando el servicio de autenticación esté conectado.':
       'The current profile lives on this device. The final flow will let you delete both local data and the online account once the authentication service is connected.',
   'El perfil y sus credenciales se guardan localmente. Desde Mi perfil puedes usar Eliminar cuenta y datos para borrar del dispositivo el perfil, la contraseña protegida, las monedas, los cosméticos y las preferencias asociadas.':

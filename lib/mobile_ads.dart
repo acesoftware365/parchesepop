@@ -62,9 +62,9 @@ abstract class AppAdsController extends ChangeNotifier {
 
   /// Whether the persistent banner may currently use screen space.
   ///
-  /// Gameplay, tutorials, and matchmaking register a temporary suppressor so
-  /// the banner cannot shrink their mobile layout. Rewarded ads remain
-  /// available because they are opened only from an explicit player action.
+  /// The normal Android/iOS experience keeps the banner in its reserved bottom
+  /// strip across navigation. A temporary suppressor remains available only
+  /// for exceptional overlays that explicitly cannot share that space.
   bool get bannerAllowed => _bannerSuppressors.isEmpty;
 
   Object suppressBanner() {
@@ -472,8 +472,8 @@ class MobileAdsScope extends InheritedNotifier<AppAdsController> {
       context.dependOnInheritedWidgetOfExactType<MobileAdsScope>()?.notifier;
 }
 
-/// Prevents the persistent banner from taking layout space while [child] is
-/// mounted. Use this around focused experiences such as a match or tutorial.
+/// Temporarily prevents the persistent banner from taking layout space while
+/// [child] is mounted. Normal screens should keep the global bottom banner.
 class SuppressMobileAdBanner extends StatefulWidget {
   const SuppressMobileAdBanner({super.key, required this.child});
 

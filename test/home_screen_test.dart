@@ -145,6 +145,7 @@ void main() {
         await _pumpLoadedHome(tester);
 
         for (final label in const [
+          'QUICK POP',
           'MESA RÁPIDA',
           'CONTRA CPU',
           'Tienda',
@@ -201,6 +202,7 @@ void main() {
 
       await _pumpLoadedHome(tester);
       for (final label in const [
+        'QUICK POP',
         'MESA RÁPIDA',
         'CONTRA CPU',
         'Tienda',
@@ -249,6 +251,10 @@ void main() {
         });
         expect(isExcludedFromSemantics, isTrue);
         expect(
+          find.bySemanticsLabel(RegExp('QUICK POP')),
+          findsAtLeastNWidgets(1),
+        );
+        expect(
           find.bySemanticsLabel(RegExp('MESA RÁPIDA')),
           findsAtLeastNWidgets(1),
         );
@@ -263,6 +269,29 @@ void main() {
       }
     },
   );
+
+  testWidgets('home gives each primary mode clear copy and a stable identity', (
+    tester,
+  ) async {
+    _useSpanish();
+    _useViewport(tester, const Size(390, 844));
+    SharedPreferences.setMockInitialValues({});
+
+    await _pumpLoadedHome(tester);
+
+    expect(find.byKey(const ValueKey('home-mode-quick-pop')), findsOneWidget);
+    expect(find.byKey(const ValueKey('home-mode-quick-table')), findsOneWidget);
+    expect(find.byKey(const ValueKey('home-mode-cpu')), findsOneWidget);
+    expect(find.byKey(const ValueKey('home-quick-pop')), findsNothing);
+    expect(find.text('QUICK POP'), findsOneWidget);
+    expect(find.text('ONLINE · PRÓXIMAMENTE'), findsOneWidget);
+    expect(find.text('2 fichas · partida rápida'), findsOneWidget);
+    expect(find.text('MESA RÁPIDA'), findsOneWidget);
+    expect(find.text('Partida local'), findsOneWidget);
+    expect(find.text('CONTRA CPU'), findsOneWidget);
+    expect(find.text('Juega contra el CPU'), findsOneWidget);
+    expect(tester.takeException(), isNull);
+  });
 
   testWidgets('player card uses the avatar equipped in the shop', (
     tester,

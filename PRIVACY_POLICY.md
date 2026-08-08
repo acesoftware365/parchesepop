@@ -35,13 +35,17 @@ system, and interaction data according to Google's policies.
 
 The Android and iOS versions use Google AdMob:
 
-- adaptive banner advertisements may appear only outside gameplay, the game
-  guide, and matchmaking; and
-- an optional rewarded advertisement may be offered after the whole table
-  finishes to double an eligible match reward. A reward is granted only after
-  the advertisement is completed.
+- adaptive banner advertisements may appear in a reserved strip at the bottom
+  of the screen, including during gameplay, the game guide, and matchmaking.
+  The banner does not cover game controls, pause the game, open a full-screen
+  advertisement, or interrupt a move; and
+- a rewarded advertisement may be offered after the whole table finishes to
+  double an eligible match reward. It opens only after the player voluntarily
+  chooses it, and a reward is granted only after the advertisement is
+  completed.
 
-Resume, Play Again, and Back to Home never open an advertisement.
+Resume, Play Again, and Back to Home never trigger a full-screen or rewarded
+advertisement. The reserved bottom banner may remain visible.
 
 The macOS version does not request or display AdMob banner or rewarded
 advertisements.
@@ -160,13 +164,17 @@ políticas.
 
 Las versiones de Android e iOS utilizan Google AdMob:
 
-- pueden mostrar anuncios adaptables únicamente fuera de la partida, la guía
-  del juego y la búsqueda de jugadores; y
-- pueden ofrecer un anuncio recompensado voluntario después de que termine la
-  mesa completa para duplicar una recompensa de partida elegible. La recompensa
-  se entrega únicamente después de completar el anuncio.
+- pueden mostrar banners adaptables en una banda reservada en la parte inferior,
+  incluso durante la partida, la guía del juego y la búsqueda de jugadores. El
+  banner no cubre los controles, no pausa el juego, no abre un anuncio a
+  pantalla completa ni interrumpe una jugada; y
+- pueden ofrecer un anuncio recompensado después de que termine la mesa completa
+  para duplicar una recompensa elegible. Se abre únicamente cuando el jugador
+  lo elige de forma voluntaria y la recompensa se entrega solo después de
+  completar el anuncio.
 
-Reanudar, Jugar otra vez y Volver al inicio nunca abren un anuncio.
+Reanudar, Jugar otra vez y Volver al inicio nunca activan un anuncio a pantalla
+completa ni recompensado. El banner inferior reservado puede permanecer visible.
 
 La versión de macOS no solicita ni muestra banners o anuncios recompensados de
 AdMob.

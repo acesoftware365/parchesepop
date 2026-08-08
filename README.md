@@ -20,8 +20,10 @@ macOS y Windows.
 - Analítica anónima opcional —apagada por defecto y activable en Ajustes— de
   inicio, primera tirada, finalización, abandono, reanudación, revancha,
   tutorial, misiones, anuncios voluntarios y tienda.
-- Banners AdMob solo fuera de partida/guía/búsqueda y rewarded ads voluntarios
-  en iOS y Android; macOS no muestra anuncios.
+- Banners AdMob adaptables pueden aparecer como una banda inferior reservada en
+  iOS y Android, incluso durante una partida, la guía o la búsqueda, sin cubrir
+  controles, pausar ni interrumpir una jugada. Los rewarded ads se abren solo
+  cuando el jugador los elige voluntariamente; macOS no muestra anuncios.
 - Diseño adaptable para teléfono, tableta, escritorio y ambas orientaciones.
 
 El juego online competitivo todavía no se anuncia como disponible. El proyecto
