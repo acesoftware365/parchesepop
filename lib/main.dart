@@ -6512,78 +6512,16 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
     final languageCode = appLanguageCodeOf(context);
     final phraseId = await showModalBottomSheet<SafeChatPhraseId>(
       context: context,
-      showDragHandle: true,
       isScrollControlled: true,
-      builder: (sheetContext) {
-        final sheetHeight = math.min(
-          560.0,
-          MediaQuery.sizeOf(sheetContext).height * .72,
-        );
-        return SafeArea(
-          child: SizedBox(
-            height: sheetHeight,
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [
-                const Padding(
-                  padding: EdgeInsets.symmetric(horizontal: 16),
-                  child: Column(
-                    children: [
-                      PopText(
-                        'MENSAJES RÁPIDOS',
-                        textAlign: TextAlign.center,
-                        style: TextStyle(
-                          color: PopColors.navy,
-                          fontSize: 18,
-                          fontWeight: FontWeight.w900,
-                        ),
-                      ),
-                      SizedBox(height: 4),
-                      PopText(
-                        'Solo frases preseleccionadas y seguras.',
-                        textAlign: TextAlign.center,
-                        style: TextStyle(
-                          color: Color(0xFF667085),
-                          fontSize: 12,
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-                const SizedBox(height: 10),
-                Expanded(
-                  child: SingleChildScrollView(
-                    padding: const EdgeInsets.fromLTRB(16, 2, 16, 20),
-                    child: Wrap(
-                      spacing: 8,
-                      runSpacing: 8,
-                      children: [
-                        for (final phrase in SafeChatCatalog.phrases)
-                          ActionChip(
-                            key: ValueKey('safe-chat-${phrase.id.name}'),
-                            avatar: const Icon(
-                              Icons.chat_bubble_rounded,
-                              size: 16,
-                              color: PopColors.blue,
-                            ),
-                            label: PopText(
-                              phrase.textForLanguage(languageCode),
-                              style: const TextStyle(
-                                fontWeight: FontWeight.w800,
-                              ),
-                            ),
-                            onPressed: () =>
-                                Navigator.pop(sheetContext, phrase.id),
-                          ),
-                      ],
-                    ),
-                  ),
-                ),
-              ],
-            ),
-          ),
-        );
-      },
+      useSafeArea: true,
+      backgroundColor: Colors.transparent,
+      barrierColor: const Color(0xB8071B40),
+      builder: (sheetContext) => _SafeChatPickerSheet(
+        languageCode: languageCode,
+        onSelected: (selectedPhrase) =>
+            Navigator.pop(sheetContext, selectedPhrase),
+        onClose: () => Navigator.pop(sheetContext),
+      ),
     );
     if (phraseId != null) _sendSafeChat(phraseId);
   }
@@ -8869,6 +8807,330 @@ class _TrapAlertBanner extends StatelessWidget {
       ],
     ),
   );
+}
+
+class _SafeChatPickerSheet extends StatelessWidget {
+  const _SafeChatPickerSheet({
+    required this.languageCode,
+    required this.onSelected,
+    required this.onClose,
+  });
+
+  final String languageCode;
+  final ValueChanged<SafeChatPhraseId> onSelected;
+  final VoidCallback onClose;
+
+  static const _accents = <Color>[
+    PopColors.blue,
+    PopColors.yellow,
+    PopColors.green,
+    PopColors.red,
+    Color(0xFF6B55E7),
+    Color(0xFFFF8A24),
+  ];
+
+  IconData _iconFor(SafeChatPhraseId phraseId) => switch (phraseId) {
+    SafeChatPhraseId.hello => Icons.waving_hand_rounded,
+    SafeChatPhraseId.goodLuck => Icons.auto_awesome_rounded,
+    SafeChatPhraseId.goodGame => Icons.sports_esports_rounded,
+    SafeChatPhraseId.greatMove => Icons.bolt_rounded,
+    SafeChatPhraseId.wellPlayed => Icons.workspace_premium_rounded,
+    SafeChatPhraseId.wow => Icons.celebration_rounded,
+    SafeChatPhraseId.yourTurn => Icons.touch_app_rounded,
+    SafeChatPhraseId.thanks => Icons.favorite_rounded,
+    SafeChatPhraseId.almost => Icons.flag_rounded,
+    SafeChatPhraseId.oops => Icons.sentiment_dissatisfied_rounded,
+    SafeChatPhraseId.rematch => Icons.replay_rounded,
+    SafeChatPhraseId.funGame => Icons.sentiment_very_satisfied_rounded,
+  };
+
+  @override
+  Widget build(BuildContext context) {
+    final media = MediaQuery.of(context);
+    final availableHeight =
+        media.size.height - media.padding.top - media.padding.bottom - 12;
+    final maxHeight = math.min(620.0, availableHeight);
+
+    return SafeArea(
+      top: false,
+      minimum: const EdgeInsets.fromLTRB(8, 8, 8, 8),
+      child: Align(
+        alignment: Alignment.bottomCenter,
+        child: ConstrainedBox(
+          constraints: BoxConstraints(maxWidth: 680, maxHeight: maxHeight),
+          child: DecoratedBox(
+            key: const ValueKey('safe-chat-sheet'),
+            decoration: BoxDecoration(
+              gradient: const LinearGradient(
+                begin: Alignment.topLeft,
+                end: Alignment.bottomRight,
+                colors: [Color(0xFF203B73), Color(0xFF101A31)],
+              ),
+              borderRadius: BorderRadius.circular(30),
+              border: Border.all(color: PopColors.yellow, width: 2),
+              boxShadow: const [
+                BoxShadow(
+                  color: Color(0x73020B27),
+                  blurRadius: 24,
+                  offset: Offset(0, 12),
+                ),
+              ],
+            ),
+            child: ClipRRect(
+              borderRadius: BorderRadius.circular(28),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  _buildHeader(context),
+                  Flexible(child: _buildPhraseGrid(context)),
+                ],
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildHeader(BuildContext context) => Padding(
+    key: const ValueKey('safe-chat-header'),
+    padding: const EdgeInsets.fromLTRB(14, 8, 10, 13),
+    child: Column(
+      children: [
+        Container(
+          width: 46,
+          height: 5,
+          decoration: BoxDecoration(
+            color: PopColors.yellow,
+            borderRadius: BorderRadius.circular(6),
+          ),
+        ),
+        const SizedBox(height: 11),
+        Row(
+          children: [
+            Transform.rotate(
+              angle: -.07,
+              child: Container(
+                width: 48,
+                height: 48,
+                decoration: BoxDecoration(
+                  gradient: const LinearGradient(
+                    begin: Alignment.topLeft,
+                    end: Alignment.bottomRight,
+                    colors: [Color(0xFFFFDD55), Color(0xFFFFA918)],
+                  ),
+                  borderRadius: BorderRadius.circular(15),
+                  border: Border.all(color: Colors.white, width: 2.5),
+                  boxShadow: const [
+                    BoxShadow(
+                      color: Color(0x50020B27),
+                      blurRadius: 8,
+                      offset: Offset(0, 5),
+                    ),
+                  ],
+                ),
+                child: const Icon(
+                  Icons.casino_rounded,
+                  color: PopColors.navy,
+                  size: 29,
+                ),
+              ),
+            ),
+            const SizedBox(width: 12),
+            const Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  PopText(
+                    'PARCHÍS POP!',
+                    style: TextStyle(
+                      color: PopColors.yellow,
+                      fontSize: 11,
+                      height: 1,
+                      letterSpacing: .7,
+                      fontWeight: FontWeight.w900,
+                    ),
+                  ),
+                  SizedBox(height: 3),
+                  PopText(
+                    'MENSAJES RÁPIDOS',
+                    style: TextStyle(
+                      color: Colors.white,
+                      fontSize: 20,
+                      height: 1.05,
+                      fontWeight: FontWeight.w900,
+                    ),
+                  ),
+                  SizedBox(height: 4),
+                  PopText(
+                    'Solo frases preseleccionadas y seguras.',
+                    style: TextStyle(
+                      color: Color(0xFFC8D6F2),
+                      fontSize: 11.5,
+                      height: 1.1,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(width: 5),
+            SizedBox.square(
+              dimension: 44,
+              child: IconButton(
+                key: const ValueKey('safe-chat-close'),
+                tooltip: appTranslate(context, 'Cerrar'),
+                onPressed: onClose,
+                style: IconButton.styleFrom(
+                  foregroundColor: Colors.white,
+                  backgroundColor: Colors.white.withValues(alpha: .10),
+                  side: BorderSide(color: Colors.white.withValues(alpha: .24)),
+                ),
+                icon: const Icon(Icons.close_rounded),
+              ),
+            ),
+          ],
+        ),
+      ],
+    ),
+  );
+
+  Widget _buildPhraseGrid(BuildContext context) => DecoratedBox(
+    decoration: const BoxDecoration(
+      gradient: LinearGradient(
+        begin: Alignment.topCenter,
+        end: Alignment.bottomCenter,
+        colors: [Color(0xFFF8FAFF), Color(0xFFEAF2FF)],
+      ),
+      border: Border(top: BorderSide(color: PopColors.yellow, width: 2)),
+    ),
+    child: SingleChildScrollView(
+      key: const ValueKey('safe-chat-scroll'),
+      padding: const EdgeInsets.fromLTRB(14, 14, 14, 18),
+      child: LayoutBuilder(
+        builder: (context, constraints) {
+          final textScale = MediaQuery.textScalerOf(context).scale(1);
+          final columns = textScale > 1.35
+              ? 1
+              : constraints.maxWidth >= 600
+              ? 3
+              : 2;
+          const spacing = 10.0;
+          final buttonWidth =
+              (constraints.maxWidth - (spacing * (columns - 1))) / columns;
+          return Wrap(
+            key: const ValueKey('safe-chat-grid'),
+            spacing: spacing,
+            runSpacing: spacing,
+            children: [
+              for (
+                var index = 0;
+                index < SafeChatCatalog.phrases.length;
+                index++
+              )
+                SizedBox(
+                  width: buttonWidth,
+                  child: _SafeChatPhraseButton(
+                    key: ValueKey(
+                      'safe-chat-${SafeChatCatalog.phrases[index].id.name}',
+                    ),
+                    label: SafeChatCatalog.phrases[index].textForLanguage(
+                      languageCode,
+                    ),
+                    icon: _iconFor(SafeChatCatalog.phrases[index].id),
+                    accent: _accents[index % _accents.length],
+                    onPressed: () =>
+                        onSelected(SafeChatCatalog.phrases[index].id),
+                  ),
+                ),
+            ],
+          );
+        },
+      ),
+    ),
+  );
+}
+
+class _SafeChatPhraseButton extends StatelessWidget {
+  const _SafeChatPhraseButton({
+    super.key,
+    required this.label,
+    required this.icon,
+    required this.accent,
+    required this.onPressed,
+  });
+
+  final String label;
+  final IconData icon;
+  final Color accent;
+  final VoidCallback onPressed;
+
+  @override
+  Widget build(BuildContext context) {
+    final accentForeground = accent == PopColors.yellow
+        ? PopColors.navy
+        : Colors.white;
+    return Semantics(
+      button: true,
+      label: '${appTranslate(context, 'Mensajes rápidos')}: $label',
+      child: Material(
+        color: Colors.white,
+        elevation: 2,
+        shadowColor: PopColors.navy.withValues(alpha: .18),
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(16),
+          side: BorderSide(color: accent.withValues(alpha: .55), width: 1.4),
+        ),
+        clipBehavior: Clip.antiAlias,
+        child: InkWell(
+          onTap: onPressed,
+          borderRadius: BorderRadius.circular(16),
+          overlayColor: WidgetStatePropertyAll(accent.withValues(alpha: .13)),
+          child: ConstrainedBox(
+            constraints: const BoxConstraints(minHeight: 54),
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 7),
+              child: Row(
+                children: [
+                  Container(
+                    width: 34,
+                    height: 34,
+                    decoration: BoxDecoration(
+                      color: accent,
+                      borderRadius: BorderRadius.circular(11),
+                      boxShadow: [
+                        BoxShadow(
+                          color: accent.withValues(alpha: .28),
+                          blurRadius: 6,
+                          offset: const Offset(0, 3),
+                        ),
+                      ],
+                    ),
+                    child: Icon(icon, color: accentForeground, size: 19),
+                  ),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: PopText(
+                      label,
+                      maxLines: 3,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(
+                        color: PopColors.navy,
+                        fontSize: 13,
+                        height: 1.08,
+                        fontWeight: FontWeight.w900,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
 }
 
 class _SafeChatBanner extends StatelessWidget {

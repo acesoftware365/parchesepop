@@ -5,6 +5,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:parchesepop/game_engine.dart';
 import 'package:parchesepop/main.dart';
 import 'package:parchesepop/online_match.dart';
+import 'package:parchesepop/safe_chat.dart';
 import 'package:parchesepop/wallet.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
@@ -2134,13 +2135,43 @@ void main() {
     expect(tester.getSize(chatButton), const Size.square(44));
 
     await tester.tap(chatButton);
+    await tester.pump();
     await tester.pump(const Duration(milliseconds: 400));
+    final sheet = find.byKey(const ValueKey('safe-chat-sheet'));
+    final sheetRect = tester.getRect(sheet);
+    final closeButton = find.byKey(const ValueKey('safe-chat-close'));
+    expect(sheet, findsOneWidget);
+    expect(find.text('PARCHÍS POP!'), findsOneWidget);
     expect(find.text('MENSAJES RÁPIDOS'), findsOneWidget);
     expect(find.byType(TextField), findsNothing);
-    expect(find.byKey(const ValueKey('safe-chat-hello')), findsOneWidget);
+    expect(tester.getSize(closeButton), const Size.square(44));
+    expect(closeButton.hitTestable(), findsOneWidget);
+    for (final phrase in SafeChatCatalog.phrases) {
+      final action = find.byKey(ValueKey('safe-chat-${phrase.id.name}'));
+      expect(action, findsOneWidget);
+      expect(action.hitTestable(), findsOneWidget);
+      final size = tester.getSize(action);
+      expect(size.width, greaterThanOrEqualTo(44));
+      expect(size.height, greaterThanOrEqualTo(44));
+      final rect = tester.getRect(action);
+      expect(rect.left, greaterThanOrEqualTo(sheetRect.left));
+      expect(rect.top, greaterThanOrEqualTo(sheetRect.top));
+      expect(rect.right, lessThanOrEqualTo(sheetRect.right));
+      expect(rect.bottom, lessThanOrEqualTo(sheetRect.bottom));
+    }
+    final sheetScrollables = find.descendant(
+      of: sheet,
+      matching: find.byType(Scrollable),
+    );
+    for (var index = 0; index < sheetScrollables.evaluate().length; index++) {
+      final scrollable = tester.state<ScrollableState>(
+        sheetScrollables.at(index),
+      );
+      expect(scrollable.position.pixels, 0);
+      expect(scrollable.position.maxScrollExtent, 0);
+    }
+    expect(tester.takeException(), isNull);
 
-    await tester.ensureVisible(find.byKey(const ValueKey('safe-chat-hello')));
-    await tester.pump(const Duration(milliseconds: 100));
     await tester.tap(find.byKey(const ValueKey('safe-chat-hello')));
     await tester.pump(const Duration(milliseconds: 400));
     final banner = find.byKey(const ValueKey('safe-chat-banner'));
