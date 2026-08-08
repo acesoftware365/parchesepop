@@ -6973,6 +6973,44 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
     return nearest;
   }
 
+  bool _trySelectOwnTokenAt(Offset tapped, {GameToken? excluding}) {
+    final tappedToken = _ownTokenAt(tapped, excluding: excluding);
+    if (tappedToken == null) return false;
+    if (!_tutorialAllowsToken(tappedToken)) return true;
+    if (!identical(tappedToken, selectedToken)) {
+      final canSelect =
+          engine.legalDiceFor(tappedToken).isNotEmpty ||
+          engine.canMoveUsingAllDice(tappedToken);
+      setState(() {
+        selectedToken = canSelect ? tappedToken : null;
+        if (canSelect) {
+          mobileBoardCameraMode = _MobileBoardCameraMode.fullBoard;
+        }
+      });
+    }
+    return true;
+  }
+
+  bool _trySelectOwnTokenAtBoardPosition(
+    Offset localPosition,
+    double boardSize, {
+    bool excludeSelected = false,
+  }) {
+    if (!_isLocallyControlledTurn ||
+        engine.effectResolving ||
+        !engine.hasRolled) {
+      return false;
+    }
+    final tapped = _BoardGeometry(
+      boardSize,
+      compactPhone: compactPhoneBoard,
+    ).toLogical(localPosition);
+    return _trySelectOwnTokenAt(
+      tapped,
+      excluding: excludeSelected ? selectedToken : null,
+    );
+  }
+
   void _tapBoard(Offset localPosition, double boardSize) {
     if (!_isLocallyControlledTurn || engine.effectResolving) return;
     final tapped = _BoardGeometry(
@@ -6983,22 +7021,7 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
       _cancelRollGuide();
       return;
     }
-    final tappedToken = _ownTokenAt(tapped);
-    if (tappedToken != null) {
-      if (!_tutorialAllowsToken(tappedToken)) return;
-      if (!identical(tappedToken, selectedToken)) {
-        final canSelect =
-            engine.legalDiceFor(tappedToken).isNotEmpty ||
-            engine.canMoveUsingAllDice(tappedToken);
-        setState(() {
-          selectedToken = canSelect ? tappedToken : null;
-          if (canSelect) {
-            mobileBoardCameraMode = _MobileBoardCameraMode.fullBoard;
-          }
-        });
-      }
-      return;
-    }
+    if (_trySelectOwnTokenAt(tapped)) return;
     final selectedDestination = _visibleMoveDestinationPreviews(
       selectedToken,
     ).where((preview) => _moveDestinationPath(preview, 1).contains(tapped));
@@ -7550,19 +7573,23 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
                     final tokenChoicePromptTarget = mobileBoardTools
                         ? _tokenChoicePromptTarget
                         : null;
+                    final boardTokenCells = _displayTokenCells(
+                      engine,
+                      compactPhone: compactPhoneBoard,
+                    );
+                    final ownTokenCenters = <Offset>[];
+                    for (final token in engine.currentPlayer.tokens) {
+                      if (token.finished) continue;
+                      final center = boardTokenCells[token];
+                      if (center != null) ownTokenCenters.add(center);
+                    }
                     final tokenChoiceGuideCell = tokenChoiceGuideTarget == null
                         ? null
-                        : _displayTokenCells(
-                            engine,
-                            compactPhone: compactPhoneBoard,
-                          )[tokenChoiceGuideTarget];
+                        : boardTokenCells[tokenChoiceGuideTarget];
                     final tokenChoicePromptCell =
                         tokenChoicePromptTarget == null
                         ? null
-                        : _displayTokenCells(
-                            engine,
-                            compactPhone: compactPhoneBoard,
-                          )[tokenChoicePromptTarget];
+                        : boardTokenCells[tokenChoicePromptTarget];
                     final boardGeometry = _BoardGeometry(
                       boardSize,
                       compactPhone: compactPhoneBoard,
@@ -7600,10 +7627,8 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
                                 geometry: boardGeometry,
                                 selectedTokenCenter: selectedToken == null
                                     ? null
-                                    : _displayTokenCells(
-                                        engine,
-                                        compactPhone: compactPhoneBoard,
-                                      )[selectedToken!],
+                                    : boardTokenCells[selectedToken!],
+                                avoidTokenCenters: ownTokenCenters,
                                 onChoice: (preview) {
                                   if (preview.usesAllDice) {
                                     _moveSelectedTokenUsingAllDice();
@@ -7611,6 +7636,12 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
                                     _moveSelectedToken(preview.value);
                                   }
                                 },
+                                onTapAt: (boardPosition) =>
+                                    _trySelectOwnTokenAtBoardPosition(
+                                      boardPosition,
+                                      boardSize,
+                                      excludeSelected: true,
+                                    ),
                               ),
                             if (mobileBoardTools && trapAlert != null)
                               _MobileBoardNotice(
@@ -7646,6 +7677,7 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
                               _BoardTokenChoiceCallout(
                                 geometry: boardGeometry,
                                 target: tokenChoicePromptCell,
+                                avoidTokenCenters: ownTokenCenters,
                                 rolledDice: engine.dice,
                                 remainingDice: _guidedTutorialActive
                                     ? <int>[
@@ -7661,6 +7693,12 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
                                         _MobileBoardCameraMode.fullBoard;
                                   });
                                 },
+                                onTapAt: (boardPosition) =>
+                                    _trySelectOwnTokenAtBoardPosition(
+                                      boardPosition,
+                                      boardSize,
+                                      excludeSelected: true,
+                                    ),
                               ),
                             if (tokenChoiceGuideTarget != null &&
                                 tokenChoiceGuideCell != null)
@@ -11627,16 +11665,20 @@ class _BoardTokenChoiceCallout extends StatelessWidget {
   const _BoardTokenChoiceCallout({
     required this.geometry,
     required this.target,
+    required this.avoidTokenCenters,
     required this.rolledDice,
     required this.remainingDice,
     required this.onTap,
+    required this.onTapAt,
   });
 
   final _BoardGeometry geometry;
   final Offset target;
+  final List<Offset> avoidTokenCenters;
   final List<int> rolledDice;
   final List<int> remainingDice;
   final VoidCallback onTap;
+  final bool Function(Offset boardPosition) onTapAt;
 
   @override
   Widget build(BuildContext context) {
@@ -11670,8 +11712,19 @@ class _BoardTokenChoiceCallout extends StatelessWidget {
       else
         Offset(0, -verticalReach),
     ];
+    final protectedCenters = avoidTokenCenters
+        .where((center) => (center - target).distance > .01)
+        .map(geometry.toPixel)
+        .toList(growable: false);
+    final protectedRadius = math.max(24.0, geometry.cell * .82);
     Rect? calloutRect;
-    for (final offset in candidates) {
+    var bestScore = double.infinity;
+    for (
+      var candidateIndex = 0;
+      candidateIndex < candidates.length;
+      candidateIndex++
+    ) {
+      final offset = candidates[candidateIndex];
       final candidate = Rect.fromCenter(
         center: targetPixel + offset,
         width: size.width,
@@ -11679,8 +11732,16 @@ class _BoardTokenChoiceCallout extends StatelessWidget {
       );
       if (bounds.contains(candidate.topLeft) &&
           bounds.contains(candidate.bottomRight)) {
-        calloutRect = candidate;
-        break;
+        var score = candidateIndex * 10.0;
+        for (final center in protectedCenters) {
+          if (candidate.inflate(protectedRadius).contains(center)) {
+            score += 1000000;
+          }
+        }
+        if (score < bestScore) {
+          bestScore = score;
+          calloutRect = candidate;
+        }
       }
     }
     calloutRect ??= Rect.fromLTWH(
@@ -11715,7 +11776,10 @@ class _BoardTokenChoiceCallout extends StatelessWidget {
         onTap: onTap,
         child: GestureDetector(
           behavior: HitTestBehavior.opaque,
-          onTap: onTap,
+          onTapUp: (details) {
+            final boardPosition = calloutRect!.topLeft + details.localPosition;
+            if (!onTapAt(boardPosition)) onTap();
+          },
           child: CustomPaint(
             painter: _MoveCalloutBubblePainter(
               color: PopColors.yellow,
@@ -11877,6 +11941,7 @@ List<_BoardMoveCalloutLayout> _layoutBoardMoveCallouts({
   required List<MoveDestinationPreview> previews,
   required _BoardGeometry geometry,
   required Offset? selectedTokenCenter,
+  required List<Offset> avoidTokenCenters,
 }) {
   if (previews.isEmpty) return const <_BoardMoveCalloutLayout>[];
 
@@ -11895,6 +11960,10 @@ List<_BoardMoveCalloutLayout> _layoutBoardMoveCallouts({
     ...targets,
     if (selectedTokenCenter != null) geometry.toPixel(selectedTokenCenter),
   ];
+  final protectedTokenCenters = avoidTokenCenters
+      .map(geometry.toPixel)
+      .toList(growable: false);
+  final protectedTokenRadius = math.max(24.0, geometry.cell * .82);
   final ordered = previews.indexed.toList()
     ..sort((a, b) {
       if (a.$2.usesAllDice != b.$2.usesAllDice) {
@@ -11957,6 +12026,11 @@ List<_BoardMoveCalloutLayout> _layoutBoardMoveCallouts({
       for (final point in avoidPoints) {
         if (rect.inflate(5).contains(point)) score += 1000000;
       }
+      for (final center in protectedTokenCenters) {
+        if (rect.inflate(protectedTokenRadius).contains(center)) {
+          score += 10000000;
+        }
+      }
       final nearest = Offset(
         target.dx.clamp(rect.left, rect.right).toDouble(),
         target.dy.clamp(rect.top, rect.bottom).toDouble(),
@@ -12010,13 +12084,17 @@ class _BoardMoveChoiceCallouts extends StatelessWidget {
     required this.previews,
     required this.geometry,
     required this.selectedTokenCenter,
+    required this.avoidTokenCenters,
     required this.onChoice,
+    required this.onTapAt,
   });
 
   final List<MoveDestinationPreview> previews;
   final _BoardGeometry geometry;
   final Offset? selectedTokenCenter;
+  final List<Offset> avoidTokenCenters;
   final ValueChanged<MoveDestinationPreview> onChoice;
+  final bool Function(Offset boardPosition) onTapAt;
 
   @override
   Widget build(BuildContext context) {
@@ -12024,6 +12102,7 @@ class _BoardMoveChoiceCallouts extends StatelessWidget {
       previews: previews,
       geometry: geometry,
       selectedTokenCenter: selectedTokenCenter,
+      avoidTokenCenters: avoidTokenCenters,
     );
     return KeyedSubtree(
       key: const ValueKey('board-move-callout-layer'),
@@ -12051,6 +12130,7 @@ class _BoardMoveChoiceCallouts extends StatelessWidget {
                 ),
                 layout: layout,
                 onTap: () => onChoice(layout.preview),
+                onTapAt: onTapAt,
               ),
             ),
         ],
@@ -12064,10 +12144,12 @@ class _BoardMoveChoiceCallout extends StatefulWidget {
     super.key,
     required this.layout,
     required this.onTap,
+    required this.onTapAt,
   });
 
   final _BoardMoveCalloutLayout layout;
   final VoidCallback onTap;
+  final bool Function(Offset boardPosition) onTapAt;
 
   @override
   State<_BoardMoveChoiceCallout> createState() =>
@@ -12336,7 +12418,11 @@ class _BoardMoveChoiceCalloutState extends State<_BoardMoveChoiceCallout> {
         onPointerCancel: (_) => setState(() => pressed = false),
         child: GestureDetector(
           behavior: HitTestBehavior.opaque,
-          onTap: widget.onTap,
+          onTapUp: (details) {
+            final boardPosition =
+                widget.layout.rect.topLeft + details.localPosition;
+            if (!widget.onTapAt(boardPosition)) widget.onTap();
+          },
           child: AnimatedScale(
             scale: reduceMotion || !pressed ? 1 : .96,
             duration: const Duration(milliseconds: 80),

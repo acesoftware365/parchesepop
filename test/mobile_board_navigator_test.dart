@@ -301,7 +301,11 @@ void main() {
       );
     }
 
-    await tester.tapAt(_boardCellGlobalPosition(tester, const Offset(10, 10)));
+    final emptyBoardPoint = _boardCellGlobalPosition(
+      tester,
+      const Offset(1, 1),
+    );
+    await tester.tapAt(emptyBoardPoint);
     await tester.pump();
 
     expect(callouts, findsNothing);
