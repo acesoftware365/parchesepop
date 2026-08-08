@@ -3,6 +3,7 @@ import 'dart:math' as math;
 import 'package:flutter/material.dart';
 
 import 'app_language.dart';
+import 'mobile_ads.dart';
 
 /// The two rule sets presented by [GameGuideScreen].
 enum GameGuideMode { traditional, chaos }
@@ -44,70 +45,72 @@ class _GameGuideScreenState extends State<GameGuideScreen> {
   @override
   Widget build(BuildContext context) {
     final isChaos = _mode == GameGuideMode.chaos;
-    return Scaffold(
-      backgroundColor: GuidePalette.navy,
-      body: DecoratedBox(
-        decoration: const BoxDecoration(
-          gradient: LinearGradient(
-            begin: Alignment.topLeft,
-            end: Alignment.bottomRight,
-            colors: [
-              GuidePalette.deepBlue,
-              GuidePalette.navy,
-              Color(0xFF111A39),
-            ],
+    return SuppressMobileAdBanner(
+      child: Scaffold(
+        backgroundColor: GuidePalette.navy,
+        body: DecoratedBox(
+          decoration: const BoxDecoration(
+            gradient: LinearGradient(
+              begin: Alignment.topLeft,
+              end: Alignment.bottomRight,
+              colors: [
+                GuidePalette.deepBlue,
+                GuidePalette.navy,
+                Color(0xFF111A39),
+              ],
+            ),
           ),
-        ),
-        child: SafeArea(
-          child: CustomScrollView(
-            key: const ValueKey('game-guide-scroll'),
-            physics: const BouncingScrollPhysics(),
-            slivers: [
-              SliverToBoxAdapter(
-                child: _GuideTopBar(onPowerLab: _showPowerLab),
-              ),
-              const SliverToBoxAdapter(child: _GuideHero()),
-              SliverToBoxAdapter(
-                child: Padding(
-                  padding: const EdgeInsets.fromLTRB(16, 8, 16, 6),
-                  child: _ModeSelector(
-                    value: _mode,
-                    onChanged: (mode) => setState(() => _mode = mode),
+          child: SafeArea(
+            child: CustomScrollView(
+              key: const ValueKey('game-guide-scroll'),
+              physics: const BouncingScrollPhysics(),
+              slivers: [
+                SliverToBoxAdapter(
+                  child: _GuideTopBar(onPowerLab: _showPowerLab),
+                ),
+                const SliverToBoxAdapter(child: _GuideHero()),
+                SliverToBoxAdapter(
+                  child: Padding(
+                    padding: const EdgeInsets.fromLTRB(16, 8, 16, 6),
+                    child: _ModeSelector(
+                      value: _mode,
+                      onChanged: (mode) => setState(() => _mode = mode),
+                    ),
                   ),
                 ),
-              ),
-              SliverToBoxAdapter(
-                child: Padding(
-                  padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
-                  child: AnimatedSwitcher(
-                    duration: const Duration(milliseconds: 350),
-                    switchInCurve: Curves.easeOutBack,
-                    switchOutCurve: Curves.easeIn,
-                    child: _ModeSummary(key: ValueKey(_mode), mode: _mode),
+                SliverToBoxAdapter(
+                  child: Padding(
+                    padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
+                    child: AnimatedSwitcher(
+                      duration: const Duration(milliseconds: 350),
+                      switchInCurve: Curves.easeOutBack,
+                      switchOutCurve: Curves.easeIn,
+                      child: _ModeSummary(key: ValueKey(_mode), mode: _mode),
+                    ),
                   ),
                 ),
-              ),
-              SliverToBoxAdapter(
-                child: Padding(
-                  padding: const EdgeInsets.fromLTRB(16, 14, 16, 0),
-                  child: _RulesGrid(
-                    key: ValueKey('rules-${_mode.name}'),
-                    sections: isChaos
-                        ? [...traditionalRuleSections, ...chaosRuleSections]
-                        : traditionalRuleSections,
+                SliverToBoxAdapter(
+                  child: Padding(
+                    padding: const EdgeInsets.fromLTRB(16, 14, 16, 0),
+                    child: _RulesGrid(
+                      key: ValueKey('rules-${_mode.name}'),
+                      sections: isChaos
+                          ? [...traditionalRuleSections, ...chaosRuleSections]
+                          : traditionalRuleSections,
+                    ),
                   ),
                 ),
-              ),
-              SliverToBoxAdapter(
-                child: Padding(
-                  key: _powerLabKey,
-                  padding: const EdgeInsets.fromLTRB(16, 18, 16, 12),
-                  child: const TrapPowerLab(),
+                SliverToBoxAdapter(
+                  child: Padding(
+                    key: _powerLabKey,
+                    padding: const EdgeInsets.fromLTRB(16, 18, 16, 12),
+                    child: const TrapPowerLab(),
+                  ),
                 ),
-              ),
-              const SliverToBoxAdapter(child: _QuickReference()),
-              const SliverToBoxAdapter(child: SizedBox(height: 28)),
-            ],
+                const SliverToBoxAdapter(child: _QuickReference()),
+                const SliverToBoxAdapter(child: SizedBox(height: 28)),
+              ],
+            ),
           ),
         ),
       ),
@@ -122,35 +125,37 @@ class TrapPowerLabScreen extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      key: const ValueKey('trap-power-lab-screen'),
-      backgroundColor: GuidePalette.navy,
-      body: DecoratedBox(
-        decoration: const BoxDecoration(
-          gradient: LinearGradient(
-            begin: Alignment.topLeft,
-            end: Alignment.bottomRight,
-            colors: [
-              GuidePalette.deepBlue,
-              GuidePalette.navy,
-              Color(0xFF111A39),
-            ],
+    return SuppressMobileAdBanner(
+      child: Scaffold(
+        key: const ValueKey('trap-power-lab-screen'),
+        backgroundColor: GuidePalette.navy,
+        body: DecoratedBox(
+          decoration: const BoxDecoration(
+            gradient: LinearGradient(
+              begin: Alignment.topLeft,
+              end: Alignment.bottomRight,
+              colors: [
+                GuidePalette.deepBlue,
+                GuidePalette.navy,
+                Color(0xFF111A39),
+              ],
+            ),
           ),
-        ),
-        child: SafeArea(
-          child: CustomScrollView(
-            key: const ValueKey('trap-power-lab-scroll'),
-            physics: const BouncingScrollPhysics(),
-            slivers: const [
-              SliverToBoxAdapter(child: _TrapLabTopBar()),
-              SliverToBoxAdapter(child: _TrapLabHero()),
-              SliverToBoxAdapter(
-                child: Padding(
-                  padding: EdgeInsets.fromLTRB(16, 8, 16, 28),
-                  child: TrapPowerLab(mode: TrapPowerLabMode.trapsOnly),
+          child: SafeArea(
+            child: CustomScrollView(
+              key: const ValueKey('trap-power-lab-scroll'),
+              physics: const BouncingScrollPhysics(),
+              slivers: const [
+                SliverToBoxAdapter(child: _TrapLabTopBar()),
+                SliverToBoxAdapter(child: _TrapLabHero()),
+                SliverToBoxAdapter(
+                  child: Padding(
+                    padding: EdgeInsets.fromLTRB(16, 8, 16, 28),
+                    child: TrapPowerLab(mode: TrapPowerLabMode.trapsOnly),
+                  ),
                 ),
-              ),
-            ],
+              ],
+            ),
           ),
         ),
       ),

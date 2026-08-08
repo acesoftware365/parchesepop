@@ -1,6 +1,5 @@
 import 'dart:async';
 
-import 'package:app_tracking_transparency/app_tracking_transparency.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:google_mobile_ads/google_mobile_ads.dart';
@@ -27,20 +26,79 @@ bool supportsMobileAds(TargetPlatform platform, {bool isWeb = false}) =>
 RequestConfiguration familySafeAdRequestConfiguration() =>
     RequestConfiguration(maxAdContentRating: MaxAdContentRating.g);
 
+/// Terminal outcome of an explicit rewarded-ad request.
+///
+/// [dismissed] means an ad was shown but closed before a reward was earned.
+/// [unavailable] means no ad could be presented, while [failed] means AdMob
+/// attempted to present one and reported an error.
+enum RewardedAdResult {
+  earned,
+  dismissed,
+  unavailable,
+  failed;
+
+  bool get didEarnReward => this == RewardedAdResult.earned;
+}
+
 abstract class AppAdsController extends ChangeNotifier {
+  final Set<Object> _bannerSuppressors = <Object>{};
+  bool _baseDisposed = false;
+
   bool get supported;
   bool get adsReady;
   bool get rewardedReady;
   bool get privacyOptionsRequired;
+
+  /// Whether the persistent banner may currently use screen space.
+  ///
+  /// Gameplay, tutorials, and matchmaking register a temporary suppressor so
+  /// the banner cannot shrink their mobile layout. Rewarded ads remain
+  /// available because they are opened only from an explicit player action.
+  bool get bannerAllowed => _bannerSuppressors.isEmpty;
+
+  Object suppressBanner() {
+    final token = Object();
+    _bannerSuppressors.add(token);
+    _notifyBannerVisibilityChanged();
+    return token;
+  }
+
+  void restoreBanner(Object token) {
+    if (_bannerSuppressors.remove(token)) {
+      _notifyBannerVisibilityChanged();
+    }
+  }
+
+  void _notifyBannerVisibilityChanged() {
+    scheduleMicrotask(() {
+      if (!_baseDisposed) notifyListeners();
+    });
+  }
 
   Future<void> initialize();
 
   /// Starts or refreshes the rewarded-ad preload without blocking the caller.
   /// Implementations must keep this operation idempotent.
   void preloadRewarded() {}
-  Future<bool> showRewarded();
+
+  /// Presents a rewarded ad and preserves its exact terminal outcome.
+  Future<RewardedAdResult> showRewardedWithResult();
+
+  /// Compatibility wrapper for callers that only need to know whether the
+  /// reward was earned.
+  Future<bool> showRewarded() async =>
+      (await showRewardedWithResult()).didEarnReward;
+
   Future<void> showPrivacyOptions();
   Widget buildBanner(BuildContext context);
+
+  @mustCallSuper
+  @override
+  void dispose() {
+    _baseDisposed = true;
+    _bannerSuppressors.clear();
+    super.dispose();
+  }
 }
 
 AppAdsController createAppAdsController() {
@@ -68,7 +126,8 @@ class NoopAppAdsController extends AppAdsController {
   Future<void> initialize() async {}
 
   @override
-  Future<bool> showRewarded() async => false;
+  Future<RewardedAdResult> showRewardedWithResult() async =>
+      RewardedAdResult.unavailable;
 
   @override
   Future<void> showPrivacyOptions() async {}
@@ -188,7 +247,6 @@ class GoogleMobileAdsController extends AppAdsController {
     try {
       final canRequestAds = await ConsentInformation.instance.canRequestAds();
       if (!canRequestAds) return;
-      await _requestTrackingAuthorizationIfNeeded();
       await MobileAds.instance.updateRequestConfiguration(
         familySafeAdRequestConfiguration(),
       );
@@ -199,14 +257,6 @@ class GoogleMobileAdsController extends AppAdsController {
       _loadRewarded();
     } finally {
       _adsStarting = false;
-    }
-  }
-
-  Future<void> _requestTrackingAuthorizationIfNeeded() async {
-    if (platform != TargetPlatform.iOS) return;
-    final status = await AppTrackingTransparency.trackingAuthorizationStatus;
-    if (status == TrackingStatus.notDetermined) {
-      await AppTrackingTransparency.requestTrackingAuthorization();
     }
   }
 
@@ -300,25 +350,26 @@ class GoogleMobileAdsController extends AppAdsController {
   }
 
   @override
-  Future<bool> showRewarded() async {
-    if (_rewardShowing) return false;
+  Future<RewardedAdResult> showRewardedWithResult() async {
+    if (_rewardShowing || _disposed) return RewardedAdResult.unavailable;
 
     preloadRewarded();
     var ad = _rewardedAd;
     ad ??= await _waitForRewardedAd();
     if (ad == null || _rewardShowing || _disposed) {
-      return false;
+      return RewardedAdResult.unavailable;
     }
 
-    final completed = Completer<bool>();
+    final completed = Completer<RewardedAdResult>();
     var earnedReward = false;
     _rewardedAd = null;
     _rewardLoadedAt = null;
     _rewardShowing = true;
     _notify();
 
-    void finish(bool earned) {
-      if (!completed.isCompleted) completed.complete(earned);
+    void finish(RewardedAdResult result) {
+      if (completed.isCompleted) return;
+      completed.complete(result);
       if (_disposed) return;
       _rewardShowing = false;
       _notify();
@@ -328,12 +379,14 @@ class GoogleMobileAdsController extends AppAdsController {
     ad.fullScreenContentCallback = FullScreenContentCallback(
       onAdDismissedFullScreenContent: (closedAd) {
         closedAd.dispose();
-        finish(earnedReward);
+        finish(
+          earnedReward ? RewardedAdResult.earned : RewardedAdResult.dismissed,
+        );
       },
       onAdFailedToShowFullScreenContent: (failedAd, error) {
         debugPrint('AdMob rewarded show error: $error');
         failedAd.dispose();
-        finish(false);
+        finish(RewardedAdResult.failed);
       },
     );
     try {
@@ -345,7 +398,7 @@ class GoogleMobileAdsController extends AppAdsController {
     } catch (error) {
       debugPrint('AdMob rewarded synchronous show error: $error');
       ad.dispose();
-      finish(false);
+      finish(RewardedAdResult.failed);
     }
     return completed.future;
   }
@@ -400,6 +453,49 @@ class MobileAdsScope extends InheritedNotifier<AppAdsController> {
       context.dependOnInheritedWidgetOfExactType<MobileAdsScope>()?.notifier;
 }
 
+/// Prevents the persistent banner from taking layout space while [child] is
+/// mounted. Use this around focused experiences such as a match or tutorial.
+class SuppressMobileAdBanner extends StatefulWidget {
+  const SuppressMobileAdBanner({super.key, required this.child});
+
+  final Widget child;
+
+  @override
+  State<SuppressMobileAdBanner> createState() => _SuppressMobileAdBannerState();
+}
+
+class _SuppressMobileAdBannerState extends State<SuppressMobileAdBanner> {
+  AppAdsController? _controller;
+  Object? _suppressionToken;
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    final nextController = MobileAdsScope.maybeOf(context);
+    if (identical(nextController, _controller)) return;
+    _releaseSuppression();
+    _controller = nextController;
+    _suppressionToken = nextController?.suppressBanner();
+  }
+
+  void _releaseSuppression() {
+    final controller = _controller;
+    final token = _suppressionToken;
+    _controller = null;
+    _suppressionToken = null;
+    if (controller != null && token != null) controller.restoreBanner(token);
+  }
+
+  @override
+  void dispose() {
+    _releaseSuppression();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) => widget.child;
+}
+
 class MobileAdShell extends StatelessWidget {
   const MobileAdShell({
     super.key,
@@ -417,7 +513,9 @@ class MobileAdShell extends StatelessWidget {
       animation: controller,
       builder: (context, _) {
         final keyboardOpen = MediaQuery.viewInsetsOf(context).bottom > 0;
-        if (!controller.adsReady || keyboardOpen) return child;
+        if (!controller.adsReady || keyboardOpen || !controller.bannerAllowed) {
+          return child;
+        }
         return Column(
           children: [
             Expanded(

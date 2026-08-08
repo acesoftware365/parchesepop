@@ -84,16 +84,16 @@ El nombre de jugador permite entre 3 y 12 caracteres. El prototipo incluye valid
 
 ## Publicidad
 
-- Android e iOS muestran un banner adaptable fijo en la parte inferior de todas
-  las pantallas. La franja pertenece al contenedor global de la aplicación, no
-  a cada pantalla individual, para evitar duplicados al navegar.
-- El banner siempre queda fuera del tablero y de los controles. Nunca cubre
-  fichas, información de turno ni ventanas de movimiento; el contenido recibe
-  su espacio disponible por encima de la franja.
+- Android e iOS pueden mostrar un banner adaptable en pantallas generales como
+  Inicio y Tienda. El banner se suprime por completo durante la partida, la
+  guía, el laboratorio de trampas y la búsqueda de jugadores para conservar
+  todo el espacio del tablero y evitar saltos de tamaño.
 - La tienda ofrece un anuncio recompensado voluntario de `+100` monedas en
   Android e iOS. Las monedas se acreditan únicamente cuando la red confirma
   que el usuario completó el anuncio; cerrar, cancelar o fallar no entrega el
   premio.
+- La mesa final también puede ofrecer voluntariamente `+100` monedas. Reanudar,
+  Jugar otra vez y Volver al inicio nunca abren un anuncio.
 - Al iniciar la aplicación móvil se actualiza el estado de consentimiento.
   Los anuncios se solicitan solamente cuando se permite hacerlo y Ajustes
   ofrece `Opciones de privacidad de anuncios` cuando el proveedor lo exige.
@@ -102,7 +102,8 @@ El nombre de jugador permite entre 3 y 12 caracteres. El prototipo incluye valid
 - macOS no carga el SDK, no reserva espacio, no muestra banners y no ofrece
   anuncios recompensados. Su monetización se resolverá mediante un sistema
   separado. Windows tampoco utiliza AdMob.
-- No se mostrará un anuncio intersticial obligatorio en cada turno. Los intersticiales se reservarán para pausas naturales, preferiblemente al finalizar una partida, y los anuncios recompensados serán opcionales.
+- No se muestran anuncios intersticiales obligatorios. Los anuncios
+  recompensados son siempre opcionales y requieren una acción explícita.
 - Las animaciones que aparecen brevemente dentro de una base de color al capturar, activar una bomba o disparar una trampa serán avisos del propio juego, no anuncios publicitarios reales ni elementos pulsables.
 - No se insertará un anuncio de red que cubra una base o el tablero durante un evento de la partida. Además de interrumpir la jugada, esa ubicación aumenta el riesgo de toques accidentales y rechazo por políticas publicitarias.
 - AdMob se utiliza solamente en Android e iOS.

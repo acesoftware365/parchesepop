@@ -1,6 +1,6 @@
 # Parchís Pop Privacy Policy
 
-**Effective date: July 29, 2026**
+**Effective date: August 8, 2026**
 
 This Privacy Policy explains how Parchís Pop handles information when you use
 the game on Android, iOS, macOS, or another supported platform.
@@ -33,13 +33,13 @@ system, and interaction data according to Google's policies.
 
 The Android and iOS versions use Google AdMob:
 
-- adaptive banner advertisements may appear at the bottom of app screens; and
-- rewarded advertisements may appear after a match when the player explicitly
-  chooses Play Again or Back to Home; and
-- optional rewarded advertisements may also be offered in the shop. A reward
-  is granted only after the rewarded advertisement is completed. If a
-  post-match ad is unavailable or dismissed, the requested navigation still
-  continues.
+- adaptive banner advertisements may appear only outside gameplay, the game
+  guide, and matchmaking; and
+- optional rewarded advertisements may be offered in the shop and after the
+  whole table finishes. A reward is granted only after the advertisement is
+  completed.
+
+Resume, Play Again, and Back to Home never open an advertisement.
 
 The macOS version does not request or display AdMob banner or rewarded
 advertisements.
@@ -121,7 +121,7 @@ repository:
 
 # Política de privacidad de Parchís Pop
 
-**Fecha de vigencia: 29 de julio de 2026**
+**Fecha de vigencia: 8 de agosto de 2026**
 
 Esta Política de privacidad explica cómo Parchís Pop maneja la información
 cuando utilizas el juego en Android, iOS, macOS u otra plataforma compatible.
@@ -156,13 +156,13 @@ políticas.
 
 Las versiones de Android e iOS utilizan Google AdMob:
 
-- pueden mostrar anuncios adaptables en la parte inferior de las pantallas; y
-- pueden mostrar anuncios recompensados después de una partida cuando el
-  jugador elige expresamente Jugar otra vez o Volver al inicio; y
-- también pueden ofrecer anuncios recompensados voluntarios en la tienda. La
-  recompensa se entrega únicamente después de completar el anuncio. Si un
-  anuncio posterior a la partida no está disponible o se cierra, la navegación
-  solicitada continúa.
+- pueden mostrar anuncios adaptables únicamente fuera de la partida, la guía
+  del juego y la búsqueda de jugadores; y
+- pueden ofrecer anuncios recompensados voluntarios en la tienda y después de
+  que termine la mesa completa. La recompensa se entrega únicamente después de
+  completar el anuncio.
+
+Reanudar, Jugar otra vez y Volver al inicio nunca abren un anuncio.
 
 La versión de macOS no solicita ni muestra banners o anuncios recompensados de
 AdMob.

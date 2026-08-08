@@ -14,8 +14,6 @@
 	<false/>
 	<key>GADApplicationIdentifier</key>
 	<string>ca-app-pub-8588489900323524~1344082812</string>
-	<key>NSUserTrackingUsageDescription</key>
-	<string>Tu permiso permite medir campañas y ofrecer anuncios más relevantes. Puedes cambiar esta decisión en Ajustes.</string>
 	<key>SKAdNetworkItems</key>
 	<array>
 		<dict>

@@ -57,6 +57,12 @@ const int activeMatchBoardLayoutVersion = 3;
 const String settingsRollGuideKey = 'settings_roll_guide';
 const String settingsDiceHandKey = 'settings_dice_hand';
 
+String _newAnalyticsReference(String prefix) {
+  final timestamp = DateTime.now().microsecondsSinceEpoch.toRadixString(36);
+  final entropy = math.Random().nextInt(0x7FFFFFFF).toRadixString(36);
+  return '${prefix}_${timestamp}_$entropy';
+}
+
 enum DiceHandPreference { left, right }
 
 DiceHandPreference diceHandPreferenceFromStorage(String? value) =>
@@ -742,6 +748,9 @@ class _ParchesePopAppState extends State<ParchesePopApp>
   PlayerProfile? profile;
   GameEngine? interruptedMatch;
   OnlineMatchSession? interruptedOnlineSession;
+  String? interruptedAnalyticsMatchRef;
+  DateTime? interruptedMatchSavedAt;
+  bool interruptedFirstRollAnalyticsLogged = false;
   String? interruptedMatchOpponent;
   Duration interruptedMatchElapsed = Duration.zero;
   bool loading = true;
@@ -794,6 +803,14 @@ class _ParchesePopAppState extends State<ParchesePopApp>
         final checkpoint = jsonDecode(savedMatch) as Map<String, dynamic>;
         interruptedMatch = GameEngine.fromCheckpoint(checkpoint);
         interruptedOnlineSession = _restoreOnlineSession(checkpoint);
+        interruptedAnalyticsMatchRef =
+            checkpoint['analyticsMatchRef'] as String? ??
+            _newAnalyticsReference('restored_match');
+        interruptedMatchSavedAt = DateTime.tryParse(
+          checkpoint['savedAt'] as String? ?? '',
+        );
+        interruptedFirstRollAnalyticsLogged =
+            checkpoint['analyticsFirstRollLogged'] as bool? ?? false;
         interruptedMatchOpponent = checkpoint['opponent'] as String?;
         interruptedMatchElapsed = Duration(
           seconds: checkpoint['elapsedSeconds'] as int? ?? 0,
@@ -912,27 +929,95 @@ class _ParchesePopAppState extends State<ParchesePopApp>
   Future<void> _resumeSavedMatch(BuildContext context) async {
     if (restoringSavedMatch || interruptedMatch == null) return;
     restoringSavedMatch = true;
+    if (!mounted || !context.mounted || interruptedMatch == null) {
+      restoringSavedMatch = false;
+      return;
+    }
 
-    // A saved game is never gated by an ad: mobile players see the available
-    // rewarded ad first, then always return to their exact saved position.
-    // macOS uses the no-op controller and continues immediately.
-    await adsController.showRewarded();
-    if (!mounted || !context.mounted || interruptedMatch == null) return;
-    restoringSavedMatch = false;
-
-    await Navigator.of(context).push(
-      MaterialPageRoute(
-        builder: (_) => GameScreen(
-          opponent: interruptedMatchOpponent ?? 'Partida guardada',
-          gameEngine: interruptedMatch!,
-          wallet: wallet,
-          localProfile: profile,
-          onlineSession: interruptedOnlineSession,
-          analytics: widget.analytics,
-          initialElapsed: interruptedMatchElapsed,
-        ),
-      ),
+    final resumedEngine = interruptedMatch!;
+    final resumedOnlineSession = interruptedOnlineSession;
+    final matchRef =
+        interruptedAnalyticsMatchRef ??
+        _newAnalyticsReference('restored_match');
+    final resumeSecondsAway = interruptedMatchSavedAt == null
+        ? null
+        : math.max(
+            0,
+            DateTime.now().difference(interruptedMatchSavedAt!).inSeconds,
+          );
+    final analyticsMatch = MatchAnalyticsContext(
+      playType: resumedOnlineSession == null
+          ? MatchPlayType.cpu
+          : MatchPlayType.online,
+      mode: resumedEngine.mode,
+      correlation: AnalyticsCorrelation(anonymousMatchId: matchRef),
     );
+    try {
+      // Preserve event order: an attempted resume must reach analytics before
+      // the resumed GameScreen can report success.
+      await widget.analytics.logEvent(
+        MatchResumeEvent(
+          match: analyticsMatch,
+          stage: MatchResumeStage.attempted,
+          secondsAway: resumeSecondsAway,
+        ),
+      );
+      if (!mounted || !context.mounted) return;
+
+      await Navigator.of(context).push(
+        MaterialPageRoute(
+          builder: (_) => GameScreen(
+            opponent: interruptedMatchOpponent ?? 'Partida guardada',
+            gameEngine: resumedEngine,
+            wallet: wallet,
+            localProfile: profile,
+            onlineSession: resumedOnlineSession,
+            analytics: widget.analytics,
+            analyticsMatchRef: matchRef,
+            analyticsFirstRollLogged: interruptedFirstRollAnalyticsLogged,
+            isResumedMatch: true,
+            resumeSecondsAway: resumeSecondsAway,
+            initialElapsed: interruptedMatchElapsed,
+          ),
+        ),
+      );
+
+      // The game route may have discarded or replaced its checkpoint. Keep
+      // the Home resume action in sync instead of offering stale progress.
+      final store = await SharedPreferences.getInstance();
+      final savedMatch = store.getString('active_match_checkpoint');
+      if (savedMatch == null) {
+        interruptedMatch = null;
+        interruptedOnlineSession = null;
+        interruptedAnalyticsMatchRef = null;
+        interruptedMatchSavedAt = null;
+        interruptedFirstRollAnalyticsLogged = false;
+        interruptedMatchOpponent = null;
+        interruptedMatchElapsed = Duration.zero;
+      } else {
+        try {
+          final checkpoint = jsonDecode(savedMatch) as Map<String, dynamic>;
+          interruptedAnalyticsMatchRef =
+              checkpoint['analyticsMatchRef'] as String? ?? matchRef;
+          interruptedMatchSavedAt = DateTime.tryParse(
+            checkpoint['savedAt'] as String? ?? '',
+          );
+          interruptedFirstRollAnalyticsLogged =
+              checkpoint['analyticsFirstRollLogged'] as bool? ?? false;
+          interruptedMatchOpponent = checkpoint['opponent'] as String?;
+          interruptedMatchElapsed = Duration(
+            seconds: checkpoint['elapsedSeconds'] as int? ?? 0,
+          );
+        } catch (_) {
+          await store.remove('active_match_checkpoint');
+          interruptedMatch = null;
+          interruptedOnlineSession = null;
+        }
+      }
+      if (mounted) setState(() {});
+    } finally {
+      restoringSavedMatch = false;
+    }
   }
 }
 
@@ -1996,7 +2081,10 @@ class PlayHome extends StatelessWidget {
                                 onTap: () => Navigator.push(
                                   context,
                                   MaterialPageRoute(
-                                    builder: (_) => ShopScreen(wallet: wallet),
+                                    builder: (_) => ShopScreen(
+                                      wallet: wallet,
+                                      analytics: analytics,
+                                    ),
                                   ),
                                 ),
                               ),
@@ -4209,133 +4297,138 @@ class _MatchmakingScreenState extends State<MatchmakingScreen> {
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      body: PopBackground(
-        child: Center(
-          child: SingleChildScrollView(
-            padding: const EdgeInsets.all(24),
-            child: ConstrainedBox(
-              constraints: const BoxConstraints(maxWidth: 620),
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  const SizedBox(
-                    width: 74,
-                    height: 74,
-                    child: CircularProgressIndicator(
-                      strokeWidth: 8,
-                      color: PopColors.blue,
+    return SuppressMobileAdBanner(
+      child: Scaffold(
+        body: PopBackground(
+          child: Center(
+            child: SingleChildScrollView(
+              padding: const EdgeInsets.all(24),
+              child: ConstrainedBox(
+                constraints: const BoxConstraints(maxWidth: 620),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    const SizedBox(
+                      width: 74,
+                      height: 74,
+                      child: CircularProgressIndicator(
+                        strokeWidth: 8,
+                        color: PopColors.blue,
+                      ),
                     ),
-                  ),
-                  const SizedBox(height: 22),
-                  const PopText(
-                    'Armando tu mesa…',
-                    textAlign: TextAlign.center,
-                    style: TextStyle(fontSize: 28, fontWeight: FontWeight.w900),
-                  ),
-                  const SizedBox(height: 6),
-                  Container(
-                    key: ValueKey('matchmaking-mode-${widget.mode.name}'),
-                    padding: const EdgeInsets.symmetric(
-                      horizontal: 13,
-                      vertical: 7,
-                    ),
-                    decoration: BoxDecoration(
-                      color:
-                          (widget.mode == GameMode.chaos
-                                  ? const Color(0xFF7B61FF)
-                                  : PopColors.blue)
-                              .withValues(alpha: .12),
-                      borderRadius: BorderRadius.circular(14),
-                    ),
-                    child: PopText(
-                      widget.mode == GameMode.chaos
-                          ? '⚡ CAOS'
-                          : '🏆 TRADICIONAL',
-                      style: const TextStyle(
-                        color: PopColors.navy,
+                    const SizedBox(height: 22),
+                    const PopText(
+                      'Armando tu mesa…',
+                      textAlign: TextAlign.center,
+                      style: TextStyle(
+                        fontSize: 28,
                         fontWeight: FontWeight.w900,
-                        letterSpacing: .4,
                       ),
                     ),
-                  ),
-                  const SizedBox(height: 6),
-                  PopText(
-                    searchStatus,
-                    key: const ValueKey('matchmaking-status'),
-                    textAlign: TextAlign.center,
-                    style: const TextStyle(
-                      fontSize: 16,
-                      color: Color(0xFF667085),
-                      fontWeight: FontWeight.w700,
-                    ),
-                  ),
-                  const SizedBox(height: 18),
-                  Wrap(
-                    key: const ValueKey('matchmaking-seats'),
-                    alignment: WrapAlignment.center,
-                    spacing: 10,
-                    runSpacing: 10,
-                    children: [
-                      _MatchmakingSeat(
-                        participant: localPlayer,
-                        color: PlayerColor.red,
-                        revealed: true,
+                    const SizedBox(height: 6),
+                    Container(
+                      key: ValueKey('matchmaking-mode-${widget.mode.name}'),
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 13,
+                        vertical: 7,
                       ),
-                      for (
-                        var index = 0;
-                        index < virtualSeatColors.length;
-                        index++
-                      )
-                        _MatchmakingSeat(
-                          participant: index < opponents.length
-                              ? opponents[index]
-                              : null,
-                          color: virtualSeatColors[index],
-                          revealed: index < revealedOpponents,
+                      decoration: BoxDecoration(
+                        color:
+                            (widget.mode == GameMode.chaos
+                                    ? const Color(0xFF7B61FF)
+                                    : PopColors.blue)
+                                .withValues(alpha: .12),
+                        borderRadius: BorderRadius.circular(14),
+                      ),
+                      child: PopText(
+                        widget.mode == GameMode.chaos
+                            ? '⚡ CAOS'
+                            : '🏆 TRADICIONAL',
+                        style: const TextStyle(
+                          color: PopColors.navy,
+                          fontWeight: FontWeight.w900,
+                          letterSpacing: .4,
                         ),
-                    ],
-                  ),
-                  const SizedBox(height: 16),
-                  Container(
-                    padding: const EdgeInsets.symmetric(
-                      horizontal: 13,
-                      vertical: 10,
+                      ),
                     ),
-                    decoration: BoxDecoration(
-                      color: Colors.white.withValues(alpha: .86),
-                      borderRadius: BorderRadius.circular(16),
-                      border: Border.all(color: Colors.white, width: 2),
+                    const SizedBox(height: 6),
+                    PopText(
+                      searchStatus,
+                      key: const ValueKey('matchmaking-status'),
+                      textAlign: TextAlign.center,
+                      style: const TextStyle(
+                        fontSize: 16,
+                        color: Color(0xFF667085),
+                        fontWeight: FontWeight.w700,
+                      ),
                     ),
-                    child: const Row(
+                    const SizedBox(height: 18),
+                    Wrap(
+                      key: const ValueKey('matchmaking-seats'),
+                      alignment: WrapAlignment.center,
+                      spacing: 10,
+                      runSpacing: 10,
                       children: [
-                        Icon(
-                          Icons.groups_rounded,
-                          color: PopColors.blue,
-                          size: 20,
+                        _MatchmakingSeat(
+                          participant: localPlayer,
+                          color: PlayerColor.red,
+                          revealed: true,
                         ),
-                        SizedBox(width: 8),
-                        Expanded(
-                          child: PopText(
-                            'Buscamos jugadores durante 6 segundos. Si faltan '
-                            'asientos, los completamos automáticamente para '
-                            'iniciar la partida.',
-                            style: TextStyle(
-                              fontSize: 11,
-                              color: Color(0xFF667085),
-                              fontWeight: FontWeight.w700,
-                            ),
+                        for (
+                          var index = 0;
+                          index < virtualSeatColors.length;
+                          index++
+                        )
+                          _MatchmakingSeat(
+                            participant: index < opponents.length
+                                ? opponents[index]
+                                : null,
+                            color: virtualSeatColors[index],
+                            revealed: index < revealedOpponents,
                           ),
-                        ),
                       ],
                     ),
-                  ),
-                  const SizedBox(height: 14),
-                  TextButton(
-                    onPressed: () => Navigator.pop(context),
-                    child: const PopText('Cancelar'),
-                  ),
-                ],
+                    const SizedBox(height: 16),
+                    Container(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 13,
+                        vertical: 10,
+                      ),
+                      decoration: BoxDecoration(
+                        color: Colors.white.withValues(alpha: .86),
+                        borderRadius: BorderRadius.circular(16),
+                        border: Border.all(color: Colors.white, width: 2),
+                      ),
+                      child: const Row(
+                        children: [
+                          Icon(
+                            Icons.groups_rounded,
+                            color: PopColors.blue,
+                            size: 20,
+                          ),
+                          SizedBox(width: 8),
+                          Expanded(
+                            child: PopText(
+                              'Buscamos jugadores durante 6 segundos. Si faltan '
+                              'asientos, los completamos automáticamente para '
+                              'iniciar la partida.',
+                              style: TextStyle(
+                                fontSize: 11,
+                                color: Color(0xFF667085),
+                                fontWeight: FontWeight.w700,
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                    const SizedBox(height: 14),
+                    TextButton(
+                      onPressed: () => Navigator.pop(context),
+                      child: const PopText('Cancelar'),
+                    ),
+                  ],
+                ),
               ),
             ),
           ),
@@ -4579,7 +4672,11 @@ class GameScreen extends StatefulWidget {
     this.localProfile,
     this.onlineSession,
     this.analytics = const NoopGameAnalytics(),
+    this.analyticsMatchRef,
+    this.analyticsFirstRollLogged = false,
     this.isRematch = false,
+    this.isResumedMatch = false,
+    this.resumeSecondsAway,
     this.matchmakingWaitSeconds,
     this.showAllTestTraps,
     this.cpuThinkDelayProvider,
@@ -4592,7 +4689,11 @@ class GameScreen extends StatefulWidget {
   final PlayerProfile? localProfile;
   final OnlineMatchSession? onlineSession;
   final GameAnalytics analytics;
+  final String? analyticsMatchRef;
+  final bool analyticsFirstRollLogged;
   final bool isRematch;
+  final bool isResumedMatch;
+  final int? resumeSecondsAway;
   final int? matchmakingWaitSeconds;
   final bool? showAllTestTraps;
   final Duration Function()? cpuThinkDelayProvider;
@@ -4609,6 +4710,7 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
 
   late final GameEngine engine;
   late final bool ownsEngine;
+  late final MatchAnalyticsContext analyticsMatch;
   final math.Random cpuPacingRandom = math.Random();
   bool cpuThinking = false;
   GameToken? selectedToken;
@@ -4634,6 +4736,12 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
   SafeChatMessage? visibleChatMessage;
   OnlineParticipant? visibleChatSender;
   int lastAudioEventSequence = 0;
+  int lastAnalyticsEventSequence = 0;
+  bool firstRollAnalyticsLogged = false;
+  bool matchCompletionAnalyticsLogged = false;
+  bool matchAbandonAnalyticsLogged = false;
+  bool rematchOfferAnalyticsLogged = false;
+  bool rewardedOfferAnalyticsLogged = false;
   bool localCpuTakeoverActive = false;
   bool rollGuideEnabled = true;
   DiceHandPreference diceHandPreference = DiceHandPreference.right;
@@ -4745,51 +4853,84 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
               'Tú',
           cpuNames: onlineCpuNames,
         );
-    unawaited(
-      widget.analytics.logMatchStarted(
-        MatchStartEvent(
-          playType: onlineSession == null
-              ? MatchPlayType.cpu
-              : MatchPlayType.online,
-          mode: engine.mode,
-          launchSource: widget.isRematch
-              ? MatchLaunchSource.rematch
-              : MatchLaunchSource.home,
-          cpuDifficulty: onlineSession == null
-              ? switch (level) {
-                  'Fácil' => CpuDifficulty.easy,
-                  'Experto' => CpuDifficulty.expert,
-                  _ => CpuDifficulty.normal,
-                }
-              : null,
-          matchmakingWaitSeconds: onlineSession == null
-              ? null
-              : widget.matchmakingWaitSeconds,
-          fallbackOpponentCount: onlineSession?.participants
-              .where(
-                (participant) => participant.kind == ParticipantKind.virtual,
-              )
-              .length,
-          liveHumanOpponentCount: onlineSession?.participants
-              .where(
-                (participant) =>
-                    participant.kind == ParticipantKind.remoteHuman,
-              )
-              .length,
-          takenOverOpponentCount: onlineSession?.participants
-              .where(
-                (participant) =>
-                    participant.kind == ParticipantKind.humanTakenOver,
-              )
-              .length,
-        ),
-      ),
+    final playType = onlineSession == null
+        ? MatchPlayType.cpu
+        : MatchPlayType.online;
+    final matchRef =
+        widget.analyticsMatchRef ??
+        _newAnalyticsReference(
+          onlineSession == null ? 'cpu_match' : 'online_match',
+        );
+    analyticsMatch = MatchAnalyticsContext(
+      playType: playType,
+      mode: engine.mode,
+      correlation: AnalyticsCorrelation(anonymousMatchId: matchRef),
     );
+    firstRollAnalyticsLogged = widget.analyticsFirstRollLogged;
+    if (widget.isResumedMatch) {
+      unawaited(
+        widget.analytics.logEvent(
+          MatchResumeEvent(
+            match: analyticsMatch,
+            stage: MatchResumeStage.succeeded,
+            secondsAway: widget.resumeSecondsAway,
+          ),
+        ),
+      );
+    } else {
+      unawaited(
+        widget.analytics.logMatchStarted(
+          MatchStartEvent(
+            playType: playType,
+            mode: engine.mode,
+            launchSource: widget.isRematch
+                ? MatchLaunchSource.rematch
+                : MatchLaunchSource.home,
+            cpuDifficulty: onlineSession == null
+                ? switch (level) {
+                    'Fácil' => CpuDifficulty.easy,
+                    'Experto' => CpuDifficulty.expert,
+                    _ => CpuDifficulty.normal,
+                  }
+                : null,
+            matchmakingWaitSeconds: onlineSession == null
+                ? null
+                : widget.matchmakingWaitSeconds,
+            fallbackOpponentCount: onlineSession?.participants
+                .where(
+                  (participant) => participant.kind == ParticipantKind.virtual,
+                )
+                .length,
+            liveHumanOpponentCount: onlineSession?.participants
+                .where(
+                  (participant) =>
+                      participant.kind == ParticipantKind.remoteHuman,
+                )
+                .length,
+            takenOverOpponentCount: onlineSession?.participants
+                .where(
+                  (participant) =>
+                      participant.kind == ParticipantKind.humanTakenOver,
+                )
+                .length,
+            correlation: analyticsMatch.correlation,
+          ),
+        ),
+      );
+    }
+    if (widget.isRematch) {
+      unawaited(
+        widget.analytics.logEvent(
+          RematchEvent(match: analyticsMatch, stage: RematchStage.started),
+        ),
+      );
+    }
     engine.addListener(_onGameChanged);
     widget.wallet?.addListener(_onWalletChanged);
     lastAudioEventSequence = engine.eventHistory.isEmpty
         ? 0
         : engine.eventHistory.last.sequence;
+    lastAnalyticsEventSequence = lastAudioEventSequence;
     matchClockTimer = Timer.periodic(const Duration(seconds: 1), (_) {
       if (!mounted || engine.gameOver) return;
       setState(() => matchElapsed += const Duration(seconds: 1));
@@ -4851,6 +4992,9 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
         state == AppLifecycleState.paused ||
         state == AppLifecycleState.detached;
     if (isLeaving) {
+      if (state == AppLifecycleState.detached && !engine.gameOver) {
+        _logMatchAbandoned(MatchAbandonReason.appClosed);
+      }
       rollGuideAppActive = false;
       _cancelRollGuide(resetWindow: true, notify: false);
       mobileBoardCameraMode = _MobileBoardCameraMode.fullBoard;
@@ -4975,6 +5119,8 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
       'active_match_checkpoint',
       jsonEncode({
         'savedAt': DateTime.now().toIso8601String(),
+        'analyticsMatchRef': analyticsMatch.correlation.anonymousMatchId,
+        'analyticsFirstRollLogged': firstRollAnalyticsLogged,
         'online': widget.onlineSession != null,
         'mode': engine.mode.name,
         'cpuLevel': engine.cpuLevel,
@@ -5039,8 +5185,45 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
     );
   }
 
+  void _trackAnalyticsEvents() {
+    for (final event in engine.eventHistory) {
+      if (event.sequence <= lastAnalyticsEventSequence) continue;
+      lastAnalyticsEventSequence = event.sequence;
+
+      if (!firstRollAnalyticsLogged && event.type == GameEventType.roll) {
+        firstRollAnalyticsLogged = true;
+        unawaited(
+          widget.analytics.logEvent(
+            MatchFirstRollEvent(
+              match: analyticsMatch,
+              secondsFromMatchStart: matchElapsed.inSeconds,
+              turnNumber: math.max(1, event.turn),
+            ),
+          ),
+        );
+      }
+
+      if (!matchCompletionAnalyticsLogged &&
+          event.type == GameEventType.victory) {
+        matchCompletionAnalyticsLogged = true;
+        unawaited(
+          widget.analytics.logEvent(
+            MatchCompletedEvent(
+              match: analyticsMatch,
+              reason: MatchCompletionReason.reachedHome,
+              placement: engine.placementFor(PlayerColor.red),
+              durationSeconds: matchElapsed.inSeconds,
+              turnsPlayed: math.max(0, engine.turnNumber),
+            ),
+          ),
+        );
+      }
+    }
+  }
+
   void _onGameChanged() {
     if (!mounted) return;
+    _trackAnalyticsEvents();
     if (engine.eventHistory.isNotEmpty) {
       final latestEvent = engine.eventHistory.last;
       if (latestEvent.sequence > lastAudioEventSequence) {
@@ -5082,6 +5265,31 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
     victoryTimer = Timer(delay, () {
       if (!mounted) return;
       setState(() => showVictory = true);
+      if (!rematchOfferAnalyticsLogged) {
+        rematchOfferAnalyticsLogged = true;
+        unawaited(
+          widget.analytics.logEvent(
+            RematchEvent(match: analyticsMatch, stage: RematchStage.offered),
+          ),
+        );
+      }
+      final ads = MobileAdsScope.maybeOf(context);
+      if (!rewardedOfferAnalyticsLogged &&
+          engine.standingsComplete &&
+          ads != null &&
+          ads.supported) {
+        rewardedOfferAnalyticsLogged = true;
+        unawaited(
+          widget.analytics.logEvent(
+            RewardedAdEvent(
+              stage: RewardedAdStage.offered,
+              placement: RewardedAdPlacement.postMatchReward,
+              rewardCoins: 100,
+              match: analyticsMatch,
+            ),
+          ),
+        );
+      }
       if (engine.standingsComplete) {
         finalReturnTimer?.cancel();
         finalReturnTimer = Timer(finalStandingsDisplayDuration, () {
@@ -5091,8 +5299,8 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
     });
   }
 
-  /// Optional coin bonus offered after the whole table has finished. The
-  /// Play Again and Home buttons use their own post-victory rewarded flow.
+  /// Optional coin bonus offered after the whole table has finished.
+  /// Navigation never opens an advertisement.
   Future<void> _watchEndMatchRewarded() async {
     if (endMatchRewardInProgress ||
         endMatchRewardClaimed ||
@@ -5104,8 +5312,55 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
 
     finalReturnTimer?.cancel();
     setState(() => endMatchRewardInProgress = true);
-    final earned = await ads.showRewarded();
+    unawaited(
+      widget.analytics.logEvent(
+        RewardedAdEvent(
+          stage: RewardedAdStage.started,
+          placement: RewardedAdPlacement.postMatchReward,
+          rewardCoins: 100,
+          match: analyticsMatch,
+        ),
+      ),
+    );
+    var adResult = RewardedAdResult.failed;
+    try {
+      adResult = await ads.showRewardedWithResult();
+    } catch (_) {
+      debugPrint('Optional post-match rewarded ad could not be completed.');
+    }
+    final earned = adResult.didEarnReward;
     if (earned) await widget.wallet?.addCoins(100);
+    unawaited(
+      widget.analytics.logEvent(
+        RewardedAdEvent(
+          stage: switch (adResult) {
+            RewardedAdResult.earned => RewardedAdStage.completed,
+            RewardedAdResult.dismissed => RewardedAdStage.declined,
+            RewardedAdResult.unavailable => RewardedAdStage.unavailable,
+            RewardedAdResult.failed => RewardedAdStage.failed,
+          },
+          placement: RewardedAdPlacement.postMatchReward,
+          rewardCoins: 100,
+          match: analyticsMatch,
+        ),
+      ),
+    );
+    if (earned) {
+      unawaited(
+        widget.analytics.logEvent(
+          CurrencyEvent(
+            flow: CurrencyFlow.earned,
+            source: CurrencySource.rewardedAd,
+            amount: 100,
+            balanceAfter: widget.wallet?.balance,
+            anonymousTransactionId: _newAnalyticsReference(
+              'reward_transaction',
+            ),
+            match: analyticsMatch,
+          ),
+        ),
+      );
+    }
     if (!mounted) return;
     setState(() {
       endMatchRewardInProgress = false;
@@ -5113,17 +5368,25 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
     });
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
-        content: PopText(
-          earned
-              ? '¡Recibiste 100 monedas por completar la partida!'
-              : 'No se completó el anuncio. Puedes intentarlo otra vez.',
-        ),
+        content: PopText(switch (adResult) {
+          RewardedAdResult.earned =>
+            '¡Recibiste 100 monedas por completar la partida!',
+          RewardedAdResult.dismissed =>
+            'No se completó el anuncio. Puedes intentarlo otra vez.',
+          RewardedAdResult.unavailable =>
+            'No hay un anuncio disponible ahora. Inténtalo más tarde.',
+          RewardedAdResult.failed =>
+            'No se pudo mostrar el anuncio. Tus monedas no cambiaron.',
+        }),
       ),
     );
   }
 
   void _playAgain() {
     finalReturnTimer?.cancel();
+    final nextMatchRef = _newAnalyticsReference(
+      widget.onlineSession == null ? 'cpu_match' : 'online_match',
+    );
     Navigator.of(context).pushReplacement(
       MaterialPageRoute(
         builder: (_) => GameScreen(
@@ -5133,6 +5396,7 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
           localProfile: widget.localProfile,
           onlineSession: widget.onlineSession,
           analytics: widget.analytics,
+          analyticsMatchRef: nextMatchRef,
           isRematch: true,
           cpuThinkDelayProvider: widget.cpuThinkDelayProvider,
         ),
@@ -5140,25 +5404,12 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
     );
   }
 
-  /// Mobile players see the preloaded rewarded ad before leaving the victory
-  /// card. The destination is never gated: if AdMob is unavailable, times out,
-  /// or the ad is dismissed, the requested navigation still continues.
   Future<void> _runPostVictoryNavigation(
     Future<void> Function() navigate,
   ) async {
     if (postVictoryNavigationInProgress || endMatchRewardInProgress) return;
     finalReturnTimer?.cancel();
     setState(() => postVictoryNavigationInProgress = true);
-
-    final ads = MobileAdsScope.maybeOf(context);
-    if (ads != null && ads.supported) {
-      try {
-        final earned = await ads.showRewarded();
-        if (earned) await widget.wallet?.addCoins(100);
-      } catch (error) {
-        debugPrint('Post-victory rewarded ad error: $error');
-      }
-    }
 
     if (!mounted) return;
     await navigate();
@@ -5167,11 +5418,17 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
     }
   }
 
-  Future<void> _playAgainAfterRewarded() =>
+  Future<void> _playAgainFromVictory() =>
       _runPostVictoryNavigation(() async => _playAgain());
 
-  Future<void> _homeAfterRewarded() =>
-      _runPostVictoryNavigation(_returnToStart);
+  Future<void> _homeFromVictory() {
+    unawaited(
+      widget.analytics.logEvent(
+        RematchEvent(match: analyticsMatch, stage: RematchStage.declined),
+      ),
+    );
+    return _runPostVictoryNavigation(_returnToStart);
+  }
 
   void _continueWatching() {
     if (!engine.continueAfterWinner()) return;
@@ -5460,8 +5717,26 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
 
   Future<void> _returnToStart() => _leaveToHome(discardSavedMatch: true);
 
+  void _logMatchAbandoned(MatchAbandonReason reason) {
+    if (matchAbandonAnalyticsLogged || matchCompletionAnalyticsLogged) return;
+    matchAbandonAnalyticsLogged = true;
+    unawaited(
+      widget.analytics.logEvent(
+        MatchAbandonedEvent(
+          match: analyticsMatch,
+          reason: reason,
+          secondsPlayed: matchElapsed.inSeconds,
+          turnsPlayed: math.max(0, engine.turnNumber),
+        ),
+      ),
+    );
+  }
+
   Future<void> _leaveToHome({required bool discardSavedMatch}) async {
     finalReturnTimer?.cancel();
+    if (discardSavedMatch && !engine.gameOver) {
+      _logMatchAbandoned(MatchAbandonReason.backButton);
+    }
     final store = await SharedPreferences.getInstance();
     if (discardSavedMatch) {
       await store.remove('active_match_checkpoint');
@@ -6105,574 +6380,581 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
     final gameBackground = defaultThemeVisualSpec.gameBackgroundColor;
     final mobileAdsSupported =
         MobileAdsScope.maybeOf(context)?.supported ?? false;
-    return PopScope(
-      // Leaving a live match must always happen through its explicit home/exit
-      // action, never through an accidental system back swipe.
-      canPop: false,
-      onPopInvokedWithResult: (didPop, _) {
-        if (!didPop) unawaited(_handleBackRequest());
-      },
-      child: Scaffold(
-        backgroundColor: gameBackground,
-        body: ColoredBox(
-          color: Colors.white,
-          child: SafeArea(
-            child: Stack(
-              fit: StackFit.expand,
-              children: [
-                Positioned.fill(
-                  child: _AnimatedThemeBackdrop(themeId: 'theme_default'),
-                ),
-                LayoutBuilder(
-                  builder: (context, box) {
-                    compactPhoneBoard = _usesCompactPhoneBoard(context);
-                    final sideBySide =
-                        box.maxWidth >= 560 &&
-                        box.maxWidth >= box.maxHeight * 1.15;
-                    final mobileBoardTools = compactPhoneBoard && !sideBySide;
-                    const railGap = 4.0;
-                    final minimumRailWidth = (box.maxWidth * .25)
-                        .clamp(205.0, 290.0)
-                        .toDouble();
-                    final boardSize = sideBySide
-                        ? math
-                              .min(
-                                box.maxHeight,
-                                math.max(
-                                  0,
-                                  box.maxWidth - minimumRailWidth - railGap,
-                                ),
-                              )
-                              .toDouble()
-                        : box.maxWidth;
-                    final availableRailWidth = sideBySide
-                        ? math.max(0.0, box.maxWidth - boardSize - railGap)
-                        : 0.0;
-                    final phoneLandscape =
-                        sideBySide &&
-                        box.maxHeight <= 430 &&
-                        availableRailWidth >= 330;
-                    final selectedMovePreviews = _moveDestinationPreviews(
-                      engine,
-                      selectedToken,
-                    ).where((preview) => !preview.overview).toList();
-                    final mobileMoveChoicesVisible =
-                        mobileBoardTools && selectedMovePreviews.isNotEmpty;
-                    final mobileTurnDecisionVisible =
-                        mobileBoardTools &&
-                        _isLocallyControlledTurn &&
-                        !engine.gameOver &&
-                        (engine.hasRolled || engine.effectResolving);
-                    final rawMovePopup = mobileMoveChoicesVisible
-                        ? null
-                        : _buildMovePopup();
-                    final movePopup = rawMovePopup == null
-                        ? null
-                        : TapRegion(
-                            groupId: moveSelectionTapGroup,
-                            onTapOutside: (_) => _cancelTokenSelection(),
-                            child: rawMovePopup,
-                          );
-                    final trapAlert = _buildTrapAlert();
-                    final trapDiagnostics = _buildTrapDiagnostics();
-                    final chatBanner = _buildChatBanner();
-                    final spectatorBar = _buildSpectatorBar(
-                      compact: sideBySide,
-                    );
-                    final mobileFocus = _mobileBoardFocus;
-                    final mobileFullBoard =
-                        mobileBoardCameraMode ==
-                        _MobileBoardCameraMode.fullBoard;
-                    final cameraScale = mobileBoardTools && !mobileFullBoard
-                        ? _mobileBoardZoomScale
-                        : 1.0;
-                    final cameraTranslation = Offset(
-                      boardSize * (.5 - cameraScale * mobileFocus.dx),
-                      boardSize * (.5 - cameraScale * mobileFocus.dy),
-                    );
-                    final cameraTransform = Matrix4.identity()
-                      ..setEntry(0, 0, cameraScale)
-                      ..setEntry(1, 1, cameraScale)
-                      ..setTranslationRaw(
-                        cameraTranslation.dx,
-                        cameraTranslation.dy,
-                        0,
-                      );
-                    final tokenChoiceGuideTarget = _tokenChoiceGuideTarget;
-                    final tokenChoicePromptTarget = mobileBoardTools
-                        ? _tokenChoicePromptTarget
-                        : null;
-                    final tokenChoiceGuideCell = tokenChoiceGuideTarget == null
-                        ? null
-                        : _displayTokenCells(
-                            engine,
-                            compactPhone: compactPhoneBoard,
-                          )[tokenChoiceGuideTarget];
-                    final tokenChoicePromptCell =
-                        tokenChoicePromptTarget == null
-                        ? null
-                        : _displayTokenCells(
-                            engine,
-                            compactPhone: compactPhoneBoard,
-                          )[tokenChoicePromptTarget];
-                    final boardGeometry = _BoardGeometry(
-                      boardSize,
-                      compactPhone: compactPhoneBoard,
-                    );
-                    final boardHitPlane = SizedBox.square(
-                      key: const ValueKey('game-board-hit-plane'),
-                      dimension: boardSize,
-                      child: GestureDetector(
-                        behavior: HitTestBehavior.opaque,
-                        excludeFromSemantics: true,
-                        onTapUp: (details) =>
-                            _tapBoard(details.localPosition, boardSize),
-                        child: Stack(
-                          fit: StackFit.expand,
-                          children: [
-                            GameBoardMockup(
-                              engine: engine,
-                              compactPhone: compactPhoneBoard,
-                              selectedToken: selectedToken,
-                              revealAllTraps: trapDiagnosticsEnabled,
-                              playerThemeIds: playerThemeIds,
-                              robotTokens: robotTokens,
-                              robotTokenColors: robotTokenColors,
-                              tokenStyleIds: tokenStyleIds,
-                              playerLabels: playerLabels,
-                            ),
-                            if (mobileMoveChoicesVisible)
-                              _BoardMoveChoiceCallouts(
-                                previews: selectedMovePreviews,
-                                geometry: boardGeometry,
-                                selectedTokenCenter: selectedToken == null
-                                    ? null
-                                    : _displayTokenCells(
-                                        engine,
-                                        compactPhone: compactPhoneBoard,
-                                      )[selectedToken!],
-                                onChoice: (preview) {
-                                  if (preview.usesAllDice) {
-                                    _moveSelectedTokenUsingAllDice();
-                                  } else {
-                                    _moveSelectedToken(preview.value);
-                                  }
-                                },
-                              ),
-                            if (mobileBoardTools && trapAlert != null)
-                              _MobileBoardNotice(
-                                anchor: engine.effectBoardCell,
-                                child: trapAlert,
-                              ),
-                            if (mobileBoardTools &&
-                                mobileTurnDecisionVisible &&
-                                trapAlert == null &&
-                                chatBanner != null)
-                              _MobileBoardNotice(
-                                anchor: null,
-                                preferTop: true,
-                                height: 58,
-                                child: chatBanner,
-                              ),
-                            if (mobileBoardTools &&
-                                !mobileMoveChoicesVisible &&
-                                rawMovePopup != null)
-                              _MobileBoardNotice(
-                                anchor: selectedToken == null
-                                    ? null
-                                    : _displayTokenCells(
-                                        engine,
-                                        compactPhone: compactPhoneBoard,
-                                      )[selectedToken!],
-                                interactive: true,
-                                height: 108,
-                                child: movePopup!,
-                              ),
-                            if (tokenChoicePromptTarget != null &&
-                                tokenChoicePromptCell != null)
-                              _BoardTokenChoiceCallout(
-                                geometry: boardGeometry,
-                                target: tokenChoicePromptCell,
-                                rolledDice: engine.dice,
-                                remainingDice: engine.remainingDice,
-                                onTap: () {
-                                  setState(() {
-                                    selectedToken = tokenChoicePromptTarget;
-                                    mobileBoardCameraMode =
-                                        _MobileBoardCameraMode.fullBoard;
-                                  });
-                                },
-                              ),
-                            if (tokenChoiceGuideTarget != null &&
-                                tokenChoiceGuideCell != null)
-                              _TokenChoiceGuide(
-                                key: ValueKey(
-                                  'token-choice-guide-target-'
-                                  '${tokenChoiceGuideTarget.id}',
-                                ),
-                                center: boardGeometry.toPixel(
-                                  tokenChoiceGuideCell,
-                                ),
-                                cell: boardGeometry.cell,
-                                hand: diceHandPreference,
-                              ),
-                          ],
-                        ),
-                      ),
-                    );
-                    final board = TapRegion(
-                      groupId: moveSelectionTapGroup,
-                      onTapOutside: (_) => _cancelTokenSelection(),
-                      child: SizedBox.square(
-                        key: const ValueKey('game-board'),
-                        dimension: boardSize,
-                        child: mobileBoardTools
-                            ? ClipRRect(
-                                borderRadius: BorderRadius.circular(18),
-                                child: Transform(
-                                  key: const ValueKey(
-                                    'mobile-board-camera-transform',
+    return SuppressMobileAdBanner(
+      child: PopScope(
+        // Leaving a live match must always happen through its explicit
+        // home/exit action, never through an accidental system back swipe.
+        canPop: false,
+        onPopInvokedWithResult: (didPop, _) {
+          if (!didPop) unawaited(_handleBackRequest());
+        },
+        child: Scaffold(
+          backgroundColor: gameBackground,
+          body: ColoredBox(
+            color: Colors.white,
+            child: SafeArea(
+              child: Stack(
+                fit: StackFit.expand,
+                children: [
+                  Positioned.fill(
+                    child: _AnimatedThemeBackdrop(themeId: 'theme_default'),
+                  ),
+                  LayoutBuilder(
+                    builder: (context, box) {
+                      compactPhoneBoard = _usesCompactPhoneBoard(context);
+                      final sideBySide =
+                          box.maxWidth >= 560 &&
+                          box.maxWidth >= box.maxHeight * 1.15;
+                      final mobileBoardTools = compactPhoneBoard && !sideBySide;
+                      const railGap = 4.0;
+                      final minimumRailWidth = (box.maxWidth * .25)
+                          .clamp(205.0, 290.0)
+                          .toDouble();
+                      final boardSize = sideBySide
+                          ? math
+                                .min(
+                                  box.maxHeight,
+                                  math.max(
+                                    0,
+                                    box.maxWidth - minimumRailWidth - railGap,
                                   ),
-                                  alignment: Alignment.topLeft,
-                                  transform: cameraTransform,
-                                  transformHitTests: true,
-                                  child: boardHitPlane,
-                                ),
-                              )
-                            : boardHitPlane,
-                      ),
-                    );
-                    final mobileBoardNavigator = mobileBoardTools
-                        ? _MobileBoardNavigator(
-                            boardPainter: _ParcheseBoardPainter(
+                                )
+                                .toDouble()
+                          : box.maxWidth;
+                      final availableRailWidth = sideBySide
+                          ? math.max(0.0, box.maxWidth - boardSize - railGap)
+                          : 0.0;
+                      final phoneLandscape =
+                          sideBySide &&
+                          box.maxHeight <= 430 &&
+                          availableRailWidth >= 330;
+                      final selectedMovePreviews = _moveDestinationPreviews(
+                        engine,
+                        selectedToken,
+                      ).where((preview) => !preview.overview).toList();
+                      final mobileMoveChoicesVisible =
+                          mobileBoardTools && selectedMovePreviews.isNotEmpty;
+                      final mobileTurnDecisionVisible =
+                          mobileBoardTools &&
+                          _isLocallyControlledTurn &&
+                          !engine.gameOver &&
+                          (engine.hasRolled || engine.effectResolving);
+                      final rawMovePopup = mobileMoveChoicesVisible
+                          ? null
+                          : _buildMovePopup();
+                      final movePopup = rawMovePopup == null
+                          ? null
+                          : TapRegion(
+                              groupId: moveSelectionTapGroup,
+                              onTapOutside: (_) => _cancelTokenSelection(),
+                              child: rawMovePopup,
+                            );
+                      final trapAlert = _buildTrapAlert();
+                      final trapDiagnostics = _buildTrapDiagnostics();
+                      final chatBanner = _buildChatBanner();
+                      final spectatorBar = _buildSpectatorBar(
+                        compact: sideBySide,
+                      );
+                      final mobileFocus = _mobileBoardFocus;
+                      final mobileFullBoard =
+                          mobileBoardCameraMode ==
+                          _MobileBoardCameraMode.fullBoard;
+                      final cameraScale = mobileBoardTools && !mobileFullBoard
+                          ? _mobileBoardZoomScale
+                          : 1.0;
+                      final cameraTranslation = Offset(
+                        boardSize * (.5 - cameraScale * mobileFocus.dx),
+                        boardSize * (.5 - cameraScale * mobileFocus.dy),
+                      );
+                      final cameraTransform = Matrix4.identity()
+                        ..setEntry(0, 0, cameraScale)
+                        ..setEntry(1, 1, cameraScale)
+                        ..setTranslationRaw(
+                          cameraTranslation.dx,
+                          cameraTranslation.dy,
+                          0,
+                        );
+                      final tokenChoiceGuideTarget = _tokenChoiceGuideTarget;
+                      final tokenChoicePromptTarget = mobileBoardTools
+                          ? _tokenChoicePromptTarget
+                          : null;
+                      final tokenChoiceGuideCell =
+                          tokenChoiceGuideTarget == null
+                          ? null
+                          : _displayTokenCells(
                               engine,
-                              compactPhone: true,
-                              selectedToken: selectedToken,
-                              animatedCells: _displayTokenCells(
+                              compactPhone: compactPhoneBoard,
+                            )[tokenChoiceGuideTarget];
+                      final tokenChoicePromptCell =
+                          tokenChoicePromptTarget == null
+                          ? null
+                          : _displayTokenCells(
+                              engine,
+                              compactPhone: compactPhoneBoard,
+                            )[tokenChoicePromptTarget];
+                      final boardGeometry = _BoardGeometry(
+                        boardSize,
+                        compactPhone: compactPhoneBoard,
+                      );
+                      final boardHitPlane = SizedBox.square(
+                        key: const ValueKey('game-board-hit-plane'),
+                        dimension: boardSize,
+                        child: GestureDetector(
+                          behavior: HitTestBehavior.opaque,
+                          excludeFromSemantics: true,
+                          onTapUp: (details) =>
+                              _tapBoard(details.localPosition, boardSize),
+                          child: Stack(
+                            fit: StackFit.expand,
+                            children: [
+                              GameBoardMockup(
+                                engine: engine,
+                                compactPhone: compactPhoneBoard,
+                                selectedToken: selectedToken,
+                                revealAllTraps: trapDiagnosticsEnabled,
+                                playerThemeIds: playerThemeIds,
+                                robotTokens: robotTokens,
+                                robotTokenColors: robotTokenColors,
+                                tokenStyleIds: tokenStyleIds,
+                                playerLabels: playerLabels,
+                              ),
+                              if (mobileMoveChoicesVisible)
+                                _BoardMoveChoiceCallouts(
+                                  previews: selectedMovePreviews,
+                                  geometry: boardGeometry,
+                                  selectedTokenCenter: selectedToken == null
+                                      ? null
+                                      : _displayTokenCells(
+                                          engine,
+                                          compactPhone: compactPhoneBoard,
+                                        )[selectedToken!],
+                                  onChoice: (preview) {
+                                    if (preview.usesAllDice) {
+                                      _moveSelectedTokenUsingAllDice();
+                                    } else {
+                                      _moveSelectedToken(preview.value);
+                                    }
+                                  },
+                                ),
+                              if (mobileBoardTools && trapAlert != null)
+                                _MobileBoardNotice(
+                                  anchor: engine.effectBoardCell,
+                                  child: trapAlert,
+                                ),
+                              if (mobileBoardTools &&
+                                  mobileTurnDecisionVisible &&
+                                  trapAlert == null &&
+                                  chatBanner != null)
+                                _MobileBoardNotice(
+                                  anchor: null,
+                                  preferTop: true,
+                                  height: 58,
+                                  child: chatBanner,
+                                ),
+                              if (mobileBoardTools &&
+                                  !mobileMoveChoicesVisible &&
+                                  rawMovePopup != null)
+                                _MobileBoardNotice(
+                                  anchor: selectedToken == null
+                                      ? null
+                                      : _displayTokenCells(
+                                          engine,
+                                          compactPhone: compactPhoneBoard,
+                                        )[selectedToken!],
+                                  interactive: true,
+                                  height: 108,
+                                  child: movePopup!,
+                                ),
+                              if (tokenChoicePromptTarget != null &&
+                                  tokenChoicePromptCell != null)
+                                _BoardTokenChoiceCallout(
+                                  geometry: boardGeometry,
+                                  target: tokenChoicePromptCell,
+                                  rolledDice: engine.dice,
+                                  remainingDice: engine.remainingDice,
+                                  onTap: () {
+                                    setState(() {
+                                      selectedToken = tokenChoicePromptTarget;
+                                      mobileBoardCameraMode =
+                                          _MobileBoardCameraMode.fullBoard;
+                                    });
+                                  },
+                                ),
+                              if (tokenChoiceGuideTarget != null &&
+                                  tokenChoiceGuideCell != null)
+                                _TokenChoiceGuide(
+                                  key: ValueKey(
+                                    'token-choice-guide-target-'
+                                    '${tokenChoiceGuideTarget.id}',
+                                  ),
+                                  center: boardGeometry.toPixel(
+                                    tokenChoiceGuideCell,
+                                  ),
+                                  cell: boardGeometry.cell,
+                                  hand: diceHandPreference,
+                                ),
+                            ],
+                          ),
+                        ),
+                      );
+                      final board = TapRegion(
+                        groupId: moveSelectionTapGroup,
+                        onTapOutside: (_) => _cancelTokenSelection(),
+                        child: SizedBox.square(
+                          key: const ValueKey('game-board'),
+                          dimension: boardSize,
+                          child: mobileBoardTools
+                              ? ClipRRect(
+                                  borderRadius: BorderRadius.circular(18),
+                                  child: Transform(
+                                    key: const ValueKey(
+                                      'mobile-board-camera-transform',
+                                    ),
+                                    alignment: Alignment.topLeft,
+                                    transform: cameraTransform,
+                                    transformHitTests: true,
+                                    child: boardHitPlane,
+                                  ),
+                                )
+                              : boardHitPlane,
+                        ),
+                      );
+                      final mobileBoardNavigator = mobileBoardTools
+                          ? _MobileBoardNavigator(
+                              boardPainter: _ParcheseBoardPainter(
                                 engine,
                                 compactPhone: true,
+                                selectedToken: selectedToken,
+                                animatedCells: _displayTokenCells(
+                                  engine,
+                                  compactPhone: true,
+                                ),
+                                pulse: .32,
+                                cubeSpin: .28,
+                                effectProgress: 0,
+                                playerThemeIds: playerThemeIds,
+                                revealAllTraps: trapDiagnosticsEnabled,
+                                robotTokens: robotTokens,
+                                robotTokenColors: robotTokenColors,
+                                tokenStyleIds: tokenStyleIds,
+                                playerLabels: playerLabels,
+                                localPlayerLabel: appTranslate(context, 'TÚ'),
+                                languageCode: appLanguageCodeOf(context),
+                                movePreviews: _moveDestinationPreviews(
+                                  engine,
+                                  selectedToken,
+                                ),
                               ),
-                              pulse: .32,
-                              cubeSpin: .28,
-                              effectProgress: 0,
-                              playerThemeIds: playerThemeIds,
-                              revealAllTraps: trapDiagnosticsEnabled,
-                              robotTokens: robotTokens,
-                              robotTokenColors: robotTokenColors,
-                              tokenStyleIds: tokenStyleIds,
-                              playerLabels: playerLabels,
-                              localPlayerLabel: appTranslate(context, 'TÚ'),
-                              languageCode: appLanguageCodeOf(context),
-                              movePreviews: _moveDestinationPreviews(
-                                engine,
-                                selectedToken,
+                              focus: mobileFocus,
+                              fullBoard: mobileFullBoard,
+                              onFocusChanged: _setMobileBoardManualFocus,
+                              onInteractionEnd: _showFullMobileBoard,
+                            )
+                          : null;
+                      final rawPanel = GameControlPanel(
+                        engine: engine,
+                        selectedToken: selectedToken,
+                        onDieSelected: _moveSelectedToken,
+                        onCancelSelection: _cancelTokenSelection,
+                        onRollRequested: _rollDiceFromHud,
+                        rollEnabled: _isLocallyControlledTurn,
+                        rollGuideEnabled: rollGuideEnabled,
+                        rollGuideVisible: rollGuideVisible,
+                        rollGuidePulseSerial: rollGuidePulseSerial,
+                        diceHandPreference: diceHandPreference,
+                        onShowChat: widget.onlineSession == null
+                            ? null
+                            : _showSafeChatPicker,
+                        onCustomize: widget.wallet == null
+                            ? null
+                            : _showOwnedCosmetics,
+                        diceStyleId: diceStyleId,
+                        avatarIds: avatarIds,
+                        mobileBoardNavigator: mobileBoardNavigator,
+                        mobileBoardFullView: mobileFullBoard,
+                      );
+                      final Widget panel = mobileBoardTools
+                          ? TapRegion(
+                              groupId: moveSelectionTapGroup,
+                              child: rawPanel,
+                            )
+                          : rawPanel;
+                      final quickBar = _GameQuickBar(
+                        chaos: engine.isChaos,
+                        compact: sideBySide,
+                        phoneLandscape: phoneLandscape,
+                        attached: !sideBySide,
+                        elapsed: matchElapsed,
+                        onBack: _handleBackRequest,
+                        onShowPowers: _showPowerStatus,
+                        onShowHistory: _showEventHistory,
+                        onShowGuide: () {
+                          _cancelRollGuide();
+                          Navigator.push(
+                            context,
+                            MaterialPageRoute(
+                              builder: (_) => GameGuideScreen(
+                                initialMode: engine.isChaos
+                                    ? GameGuideMode.chaos
+                                    : GameGuideMode.traditional,
                               ),
                             ),
-                            focus: mobileFocus,
-                            fullBoard: mobileFullBoard,
-                            onFocusChanged: _setMobileBoardManualFocus,
-                            onInteractionEnd: _showFullMobileBoard,
-                          )
-                        : null;
-                    final rawPanel = GameControlPanel(
-                      engine: engine,
-                      selectedToken: selectedToken,
-                      onDieSelected: _moveSelectedToken,
-                      onCancelSelection: _cancelTokenSelection,
-                      onRollRequested: _rollDiceFromHud,
-                      rollEnabled: _isLocallyControlledTurn,
-                      rollGuideEnabled: rollGuideEnabled,
-                      rollGuideVisible: rollGuideVisible,
-                      rollGuidePulseSerial: rollGuidePulseSerial,
-                      diceHandPreference: diceHandPreference,
-                      onShowChat: widget.onlineSession == null
-                          ? null
-                          : _showSafeChatPicker,
-                      onCustomize: widget.wallet == null
-                          ? null
-                          : _showOwnedCosmetics,
-                      diceStyleId: diceStyleId,
-                      avatarIds: avatarIds,
-                      mobileBoardNavigator: mobileBoardNavigator,
-                      mobileBoardFullView: mobileFullBoard,
-                    );
-                    final Widget panel = mobileBoardTools
-                        ? TapRegion(
-                            groupId: moveSelectionTapGroup,
-                            child: rawPanel,
-                          )
-                        : rawPanel;
-                    final quickBar = _GameQuickBar(
-                      chaos: engine.isChaos,
-                      compact: sideBySide,
-                      phoneLandscape: phoneLandscape,
-                      attached: !sideBySide,
-                      elapsed: matchElapsed,
-                      onBack: _handleBackRequest,
-                      onShowPowers: _showPowerStatus,
-                      onShowHistory: _showEventHistory,
-                      onShowGuide: () {
-                        _cancelRollGuide();
-                        Navigator.push(
-                          context,
-                          MaterialPageRoute(
-                            builder: (_) => GameGuideScreen(
-                              initialMode: engine.isChaos
-                                  ? GameGuideMode.chaos
-                                  : GameGuideMode.traditional,
-                            ),
-                          ),
-                        );
-                      },
-                      onShowSettings: _openGameSettings,
-                    );
-                    return KeyedSubtree(
-                      key: const ValueKey('game-content-area'),
-                      child: sideBySide
-                          ? KeyedSubtree(
-                              key: phoneLandscape
-                                  ? const ValueKey('phone-landscape-layout')
-                                  : null,
-                              child: Row(
-                                key: const ValueKey('game-side-layout'),
-                                crossAxisAlignment: CrossAxisAlignment.start,
-                                children: [
-                                  board,
-                                  const SizedBox(width: railGap),
-                                  Expanded(
-                                    key: const ValueKey('game-rail-slot'),
-                                    child: phoneLandscape
-                                        ? Stack(
-                                            fit: StackFit.expand,
-                                            children: [
-                                              Column(
-                                                children: [
-                                                  quickBar,
-                                                  ?spectatorBar,
-                                                  const SizedBox(height: 3),
-                                                  Expanded(
-                                                    child: _GameSideRail(
-                                                      engine: engine,
-                                                      elapsed: matchElapsed,
-                                                      selectedToken:
-                                                          selectedToken,
-                                                      onDieSelected:
-                                                          _moveSelectedToken,
-                                                      onCancelSelection:
-                                                          _cancelTokenSelection,
-                                                      onRollRequested:
-                                                          _rollDiceFromHud,
-                                                      rollEnabled:
-                                                          _isLocallyControlledTurn,
-                                                      rollGuideEnabled:
-                                                          rollGuideEnabled,
-                                                      rollGuideVisible:
-                                                          rollGuideVisible,
-                                                      rollGuidePulseSerial:
-                                                          rollGuidePulseSerial,
-                                                      diceHandPreference:
-                                                          diceHandPreference,
-                                                      onShowPowers:
-                                                          _showPowerStatus,
-                                                      onShowChat:
-                                                          widget.onlineSession ==
-                                                              null
-                                                          ? null
-                                                          : _showSafeChatPicker,
-                                                      onCustomize:
-                                                          widget.wallet == null
-                                                          ? null
-                                                          : _showOwnedCosmetics,
-                                                      diceStyleId: diceStyleId,
-                                                      onlineSession:
-                                                          widget.onlineSession,
-                                                      avatarIds: avatarIds,
-                                                      revealTrapDetails:
-                                                          trapDiagnosticsEnabled,
-                                                      wideShortLandscape: true,
+                          );
+                        },
+                        onShowSettings: _openGameSettings,
+                      );
+                      return KeyedSubtree(
+                        key: const ValueKey('game-content-area'),
+                        child: sideBySide
+                            ? KeyedSubtree(
+                                key: phoneLandscape
+                                    ? const ValueKey('phone-landscape-layout')
+                                    : null,
+                                child: Row(
+                                  key: const ValueKey('game-side-layout'),
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    board,
+                                    const SizedBox(width: railGap),
+                                    Expanded(
+                                      key: const ValueKey('game-rail-slot'),
+                                      child: phoneLandscape
+                                          ? Stack(
+                                              fit: StackFit.expand,
+                                              children: [
+                                                Column(
+                                                  children: [
+                                                    quickBar,
+                                                    ?spectatorBar,
+                                                    const SizedBox(height: 3),
+                                                    Expanded(
+                                                      child: _GameSideRail(
+                                                        engine: engine,
+                                                        elapsed: matchElapsed,
+                                                        selectedToken:
+                                                            selectedToken,
+                                                        onDieSelected:
+                                                            _moveSelectedToken,
+                                                        onCancelSelection:
+                                                            _cancelTokenSelection,
+                                                        onRollRequested:
+                                                            _rollDiceFromHud,
+                                                        rollEnabled:
+                                                            _isLocallyControlledTurn,
+                                                        rollGuideEnabled:
+                                                            rollGuideEnabled,
+                                                        rollGuideVisible:
+                                                            rollGuideVisible,
+                                                        rollGuidePulseSerial:
+                                                            rollGuidePulseSerial,
+                                                        diceHandPreference:
+                                                            diceHandPreference,
+                                                        onShowPowers:
+                                                            _showPowerStatus,
+                                                        onShowChat:
+                                                            widget.onlineSession ==
+                                                                null
+                                                            ? null
+                                                            : _showSafeChatPicker,
+                                                        onCustomize:
+                                                            widget.wallet ==
+                                                                null
+                                                            ? null
+                                                            : _showOwnedCosmetics,
+                                                        diceStyleId:
+                                                            diceStyleId,
+                                                        onlineSession: widget
+                                                            .onlineSession,
+                                                        avatarIds: avatarIds,
+                                                        revealTrapDetails:
+                                                            trapDiagnosticsEnabled,
+                                                        wideShortLandscape:
+                                                            true,
+                                                      ),
+                                                    ),
+                                                  ],
+                                                ),
+                                                if (trapDiagnostics != null)
+                                                  Positioned(
+                                                    top:
+                                                        49 +
+                                                        (spectatorBar == null
+                                                            ? 0
+                                                            : 40),
+                                                    left: 5,
+                                                    right: 66,
+                                                    child: trapDiagnostics,
+                                                  ),
+                                                if (movePopup ??
+                                                        trapAlert ??
+                                                        chatBanner
+                                                    case final overlay?)
+                                                  Positioned(
+                                                    left: 5,
+                                                    right: 66,
+                                                    bottom: 5,
+                                                    child: ConstrainedBox(
+                                                      constraints:
+                                                          const BoxConstraints(
+                                                            maxHeight: 170,
+                                                          ),
+                                                      child:
+                                                          SingleChildScrollView(
+                                                            child: overlay,
+                                                          ),
                                                     ),
                                                   ),
-                                                ],
-                                              ),
-                                              if (trapDiagnostics != null)
-                                                Positioned(
-                                                  top:
-                                                      49 +
-                                                      (spectatorBar == null
-                                                          ? 0
-                                                          : 40),
-                                                  left: 5,
-                                                  right: 66,
-                                                  child: trapDiagnostics,
-                                                ),
-                                              if (movePopup ??
-                                                      trapAlert ??
-                                                      chatBanner
-                                                  case final overlay?)
-                                                Positioned(
-                                                  left: 5,
-                                                  right: 66,
-                                                  bottom: 5,
-                                                  child: ConstrainedBox(
-                                                    constraints:
-                                                        const BoxConstraints(
-                                                          maxHeight: 170,
-                                                        ),
-                                                    child:
-                                                        SingleChildScrollView(
-                                                          child: overlay,
-                                                        ),
+                                              ],
+                                            )
+                                          : Column(
+                                              children: [
+                                                quickBar,
+                                                ?spectatorBar,
+                                                ?trapDiagnostics,
+                                                ?chatBanner,
+                                                ?trapAlert,
+                                                ?movePopup,
+                                                const SizedBox(height: 3),
+                                                Expanded(
+                                                  child: _GameSideRail(
+                                                    engine: engine,
+                                                    elapsed: matchElapsed,
+                                                    selectedToken:
+                                                        selectedToken,
+                                                    onDieSelected:
+                                                        _moveSelectedToken,
+                                                    onCancelSelection:
+                                                        _cancelTokenSelection,
+                                                    onRollRequested:
+                                                        _rollDiceFromHud,
+                                                    rollEnabled:
+                                                        _isLocallyControlledTurn,
+                                                    rollGuideEnabled:
+                                                        rollGuideEnabled,
+                                                    rollGuideVisible:
+                                                        rollGuideVisible,
+                                                    rollGuidePulseSerial:
+                                                        rollGuidePulseSerial,
+                                                    diceHandPreference:
+                                                        diceHandPreference,
+                                                    onShowPowers:
+                                                        _showPowerStatus,
+                                                    onShowChat:
+                                                        widget.onlineSession ==
+                                                            null
+                                                        ? null
+                                                        : _showSafeChatPicker,
+                                                    onCustomize:
+                                                        widget.wallet == null
+                                                        ? null
+                                                        : _showOwnedCosmetics,
+                                                    diceStyleId: diceStyleId,
+                                                    onlineSession:
+                                                        widget.onlineSession,
+                                                    avatarIds: avatarIds,
+                                                    revealTrapDetails:
+                                                        trapDiagnosticsEnabled,
                                                   ),
                                                 ),
-                                            ],
-                                          )
-                                        : Column(
-                                            children: [
-                                              quickBar,
-                                              ?spectatorBar,
-                                              ?trapDiagnostics,
-                                              ?chatBanner,
-                                              ?trapAlert,
-                                              ?movePopup,
-                                              const SizedBox(height: 3),
-                                              Expanded(
-                                                child: _GameSideRail(
-                                                  engine: engine,
-                                                  elapsed: matchElapsed,
-                                                  selectedToken: selectedToken,
-                                                  onDieSelected:
-                                                      _moveSelectedToken,
-                                                  onCancelSelection:
-                                                      _cancelTokenSelection,
-                                                  onRollRequested:
-                                                      _rollDiceFromHud,
-                                                  rollEnabled:
-                                                      _isLocallyControlledTurn,
-                                                  rollGuideEnabled:
-                                                      rollGuideEnabled,
-                                                  rollGuideVisible:
-                                                      rollGuideVisible,
-                                                  rollGuidePulseSerial:
-                                                      rollGuidePulseSerial,
-                                                  diceHandPreference:
-                                                      diceHandPreference,
-                                                  onShowPowers:
-                                                      _showPowerStatus,
-                                                  onShowChat:
-                                                      widget.onlineSession ==
-                                                          null
-                                                      ? null
-                                                      : _showSafeChatPicker,
-                                                  onCustomize:
-                                                      widget.wallet == null
-                                                      ? null
-                                                      : _showOwnedCosmetics,
-                                                  diceStyleId: diceStyleId,
-                                                  onlineSession:
-                                                      widget.onlineSession,
-                                                  avatarIds: avatarIds,
-                                                  revealTrapDetails:
-                                                      trapDiagnosticsEnabled,
-                                                ),
-                                              ),
-                                            ],
-                                          ),
-                                  ),
-                                ],
-                              ),
-                            )
-                          : mobileBoardTools
-                          ? Column(
-                              key: const ValueKey(
-                                'mobile-portrait-game-layout',
-                              ),
-                              children: [
-                                quickBar,
-                                const SizedBox(height: 3),
-                                Expanded(
-                                  key: const ValueKey('mobile-board-stage'),
-                                  child: Align(
-                                    alignment: Alignment.topCenter,
-                                    child: FittedBox(
-                                      fit: BoxFit.contain,
-                                      alignment: Alignment.topCenter,
-                                      child: board,
+                                              ],
+                                            ),
                                     ),
-                                  ),
+                                  ],
                                 ),
-                                Padding(
-                                  padding: const EdgeInsets.all(4),
-                                  child: Stack(
-                                    clipBehavior: Clip.none,
-                                    children: [
-                                      panel,
-                                      if (spectatorBar ?? chatBanner
-                                          case final overlay?)
-                                        Positioned(
-                                          left: 0,
-                                          top: 0,
-                                          right: 0,
-                                          child: overlay,
-                                        ),
-                                    ],
-                                  ),
+                              )
+                            : mobileBoardTools
+                            ? Column(
+                                key: const ValueKey(
+                                  'mobile-portrait-game-layout',
                                 ),
-                              ],
-                            )
-                          : SingleChildScrollView(
-                              child: Column(
                                 children: [
                                   quickBar,
-                                  ?spectatorBar,
                                   const SizedBox(height: 3),
-                                  board,
-                                  ?trapDiagnostics,
-                                  ?chatBanner,
-                                  ?trapAlert,
-                                  ?movePopup,
-                                  Padding(
-                                    padding: const EdgeInsets.fromLTRB(
-                                      4,
-                                      4,
-                                      4,
-                                      4,
+                                  Expanded(
+                                    key: const ValueKey('mobile-board-stage'),
+                                    child: Align(
+                                      alignment: Alignment.topCenter,
+                                      child: FittedBox(
+                                        fit: BoxFit.contain,
+                                        alignment: Alignment.topCenter,
+                                        child: board,
+                                      ),
                                     ),
-                                    child: panel,
+                                  ),
+                                  Padding(
+                                    padding: const EdgeInsets.all(4),
+                                    child: Stack(
+                                      clipBehavior: Clip.none,
+                                      children: [
+                                        panel,
+                                        if (spectatorBar ?? chatBanner
+                                            case final overlay?)
+                                          Positioned(
+                                            left: 0,
+                                            top: 0,
+                                            right: 0,
+                                            child: overlay,
+                                          ),
+                                      ],
+                                    ),
                                   ),
                                 ],
+                              )
+                            : SingleChildScrollView(
+                                child: Column(
+                                  children: [
+                                    quickBar,
+                                    ?spectatorBar,
+                                    const SizedBox(height: 3),
+                                    board,
+                                    ?trapDiagnostics,
+                                    ?chatBanner,
+                                    ?trapAlert,
+                                    ?movePopup,
+                                    Padding(
+                                      padding: const EdgeInsets.fromLTRB(
+                                        4,
+                                        4,
+                                        4,
+                                        4,
+                                      ),
+                                      child: panel,
+                                    ),
+                                  ],
+                                ),
                               ),
-                            ),
-                    );
-                  },
-                ),
-                if (showVictory && engine.winner != null)
-                  Positioned.fill(
-                    child: BlockSemantics(
-                      child: _VictoryCelebration(
-                        winner: engine.winner!,
-                        mode: engine.mode,
-                        elapsed: matchElapsed,
-                        standings: standingEntries,
-                        standingsComplete: engine.standingsComplete,
-                        onContinueWatching: engine.canContinueAfterWinner
-                            ? _continueWatching
-                            : null,
-                        onWatchRewarded:
-                            engine.standingsComplete &&
-                                mobileAdsSupported &&
-                                !endMatchRewardClaimed &&
-                                !postVictoryNavigationInProgress
-                            ? _watchEndMatchRewarded
-                            : null,
-                        rewardInProgress: endMatchRewardInProgress,
-                        rewardClaimed: endMatchRewardClaimed,
-                        navigationInProgress: postVictoryNavigationInProgress,
-                        onPlayAgain: _playAgainAfterRewarded,
-                        onHome: _homeAfterRewarded,
+                      );
+                    },
+                  ),
+                  if (showVictory && engine.winner != null)
+                    Positioned.fill(
+                      child: BlockSemantics(
+                        child: _VictoryCelebration(
+                          winner: engine.winner!,
+                          mode: engine.mode,
+                          elapsed: matchElapsed,
+                          standings: standingEntries,
+                          standingsComplete: engine.standingsComplete,
+                          onContinueWatching: engine.canContinueAfterWinner
+                              ? _continueWatching
+                              : null,
+                          onWatchRewarded:
+                              engine.standingsComplete &&
+                                  mobileAdsSupported &&
+                                  !endMatchRewardClaimed &&
+                                  !postVictoryNavigationInProgress
+                              ? _watchEndMatchRewarded
+                              : null,
+                          rewardInProgress: endMatchRewardInProgress,
+                          rewardClaimed: endMatchRewardClaimed,
+                          navigationInProgress: postVictoryNavigationInProgress,
+                          onPlayAgain: _playAgainFromVictory,
+                          onHome: _homeFromVictory,
+                        ),
                       ),
                     ),
-                  ),
-              ],
+                ],
+              ),
             ),
           ),
         ),
@@ -8652,7 +8934,13 @@ class _VictoryCelebrationState extends State<_VictoryCelebration>
                                             label: PopText(
                                               widget.rewardInProgress
                                                   ? 'CARGANDO ANUNCIO…'
-                                                  : 'VER ANUNCIO · +100 MONEDAS',
+                                                  : 'VER ANUNCIO\n+100 MONEDAS',
+                                              textAlign: TextAlign.center,
+                                              style: const TextStyle(
+                                                fontSize: 12,
+                                                height: 1.05,
+                                                fontWeight: FontWeight.w900,
+                                              ),
                                             ),
                                           ),
                                         )
@@ -8681,12 +8969,15 @@ class _VictoryCelebrationState extends State<_VictoryCelebration>
                                                 size: 18,
                                               ),
                                               SizedBox(width: 7),
-                                              PopText(
-                                                '+100 MONEDAS RECIBIDAS',
-                                                style: TextStyle(
-                                                  color: PopColors.green,
-                                                  fontSize: 12,
-                                                  fontWeight: FontWeight.w900,
+                                              Flexible(
+                                                child: PopText(
+                                                  '+100 MONEDAS RECIBIDAS',
+                                                  textAlign: TextAlign.center,
+                                                  style: TextStyle(
+                                                    color: PopColors.green,
+                                                    fontSize: 12,
+                                                    fontWeight: FontWeight.w900,
+                                                  ),
                                                 ),
                                               ),
                                             ],
@@ -16383,11 +16674,25 @@ class _DiceMotifPainter extends CustomPainter {
       motif != oldDelegate.motif || accent != oldDelegate.accent;
 }
 
+ShopProductType _shopAnalyticsProductType(CosmeticCategory category) =>
+    switch (category) {
+      CosmeticCategory.theme => ShopProductType.theme,
+      CosmeticCategory.dice => ShopProductType.dice,
+      CosmeticCategory.tokens => ShopProductType.tokens,
+      CosmeticCategory.avatar => ShopProductType.avatar,
+    };
+
 class ShopScreen extends StatefulWidget {
-  const ShopScreen({super.key, this.wallet, this.showTestCoinControls});
+  const ShopScreen({
+    super.key,
+    this.wallet,
+    this.showTestCoinControls,
+    this.analytics = const NoopGameAnalytics(),
+  });
 
   final WalletController? wallet;
   final bool? showTestCoinControls;
+  final GameAnalytics analytics;
 
   @override
   State<ShopScreen> createState() => _ShopScreenState();
@@ -16404,7 +16709,9 @@ class _ShopScreenState extends State<ShopScreen> {
 
   late final WalletController wallet;
   late final bool ownsWallet;
+  late final AnalyticsCorrelation analyticsCorrelation;
   String selectedCategory = categories.first;
+  bool rewardedOfferAnalyticsLogged = false;
 
   bool get testCoinControlsVisible =>
       kDebugMode && (widget.showTestCoinControls ?? true);
@@ -16414,9 +16721,30 @@ class _ShopScreenState extends State<ShopScreen> {
     super.initState();
     ownsWallet = widget.wallet == null;
     wallet = widget.wallet ?? WalletController();
+    analyticsCorrelation = AnalyticsCorrelation(
+      anonymousSessionId: _newAnalyticsReference('shop_session'),
+    );
     wallet.initialize().then((_) {
       if (mounted) setState(() {});
     });
+  }
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    final ads = MobileAdsScope.maybeOf(context);
+    if (rewardedOfferAnalyticsLogged || ads == null || !ads.supported) return;
+    rewardedOfferAnalyticsLogged = true;
+    unawaited(
+      widget.analytics.logEvent(
+        RewardedAdEvent(
+          stage: RewardedAdStage.offered,
+          placement: RewardedAdPlacement.shopCoins,
+          rewardCoins: 100,
+          correlation: analyticsCorrelation,
+        ),
+      ),
+    );
   }
 
   @override
@@ -16426,21 +16754,81 @@ class _ShopScreenState extends State<ShopScreen> {
   }
 
   Future<void> _watchRewardedAd(AppAdsController ads) async {
-    final earned = await ads.showRewarded();
+    unawaited(
+      widget.analytics.logEvent(
+        RewardedAdEvent(
+          stage: RewardedAdStage.started,
+          placement: RewardedAdPlacement.shopCoins,
+          rewardCoins: 100,
+          correlation: analyticsCorrelation,
+        ),
+      ),
+    );
+    var adResult = RewardedAdResult.failed;
+    try {
+      adResult = await ads.showRewardedWithResult();
+    } catch (_) {
+      debugPrint('Optional shop rewarded ad could not be completed.');
+    }
+    final earned = adResult.didEarnReward;
     if (earned) {
       await wallet.addCoins(100);
+    }
+    unawaited(
+      widget.analytics.logEvent(
+        RewardedAdEvent(
+          stage: switch (adResult) {
+            RewardedAdResult.earned => RewardedAdStage.completed,
+            RewardedAdResult.dismissed => RewardedAdStage.declined,
+            RewardedAdResult.unavailable => RewardedAdStage.unavailable,
+            RewardedAdResult.failed => RewardedAdStage.failed,
+          },
+          placement: RewardedAdPlacement.shopCoins,
+          rewardCoins: 100,
+          correlation: analyticsCorrelation,
+        ),
+      ),
+    );
+    if (earned) {
+      unawaited(
+        widget.analytics.logEvent(
+          CurrencyEvent(
+            flow: CurrencyFlow.earned,
+            source: CurrencySource.rewardedAd,
+            amount: 100,
+            balanceAfter: wallet.balance,
+            anonymousTransactionId: _newAnalyticsReference(
+              'reward_transaction',
+            ),
+            correlation: analyticsCorrelation,
+          ),
+        ),
+      );
     }
     if (!mounted) return;
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
-        content: PopText(
-          earned ? '¡Recibiste 100 monedas!' : 'El anuncio no se completó.',
-        ),
+        content: PopText(switch (adResult) {
+          RewardedAdResult.earned => '¡Recibiste 100 monedas!',
+          RewardedAdResult.dismissed => 'El anuncio no se completó.',
+          RewardedAdResult.unavailable => 'No hay un anuncio disponible ahora.',
+          RewardedAdResult.failed => 'No se pudo mostrar el anuncio.',
+        }),
       ),
     );
   }
 
   Future<void> _showProductPreview(WalletProduct product) async {
+    unawaited(
+      widget.analytics.logEvent(
+        ShopEvent(
+          stage: ShopStage.previewed,
+          productId: product.id,
+          productType: _shopAnalyticsProductType(product.category),
+          correlation: analyticsCorrelation,
+        ),
+      ),
+    );
     final useProduct = await showDialog<bool>(
       context: context,
       builder: (dialogContext) {
@@ -16602,6 +16990,19 @@ class _ShopScreenState extends State<ShopScreen> {
   Future<void> _handleProduct(String productId) async {
     if (wallet.isOwned(productId)) {
       final result = await wallet.equip(productId);
+      final product = wallet.productById(productId);
+      if (result != EquipResult.alreadyEquipped && product != null) {
+        unawaited(
+          widget.analytics.logEvent(
+            ShopEvent(
+              stage: ShopStage.equipped,
+              productId: product.id,
+              productType: _shopAnalyticsProductType(product.category),
+              correlation: analyticsCorrelation,
+            ),
+          ),
+        );
+      }
       if (!mounted) return;
       final message = result == EquipResult.alreadyEquipped
           ? 'Ese diseño ya está activo.'
@@ -16830,6 +17231,39 @@ class _ShopScreenState extends State<ShopScreen> {
     final result = await wallet.purchase(productId);
     if (result == PurchaseResult.purchased) {
       await wallet.equip(productId);
+      unawaited(
+        widget.analytics.logEvent(
+          CurrencyEvent(
+            flow: CurrencyFlow.spent,
+            source: CurrencySource.shopPurchase,
+            amount: product.price,
+            balanceAfter: wallet.balance,
+            anonymousTransactionId: _newAnalyticsReference('shop_transaction'),
+            correlation: analyticsCorrelation,
+          ),
+        ),
+      );
+      unawaited(
+        widget.analytics.logEvent(
+          ShopEvent(
+            stage: ShopStage.purchased,
+            productId: product.id,
+            productType: _shopAnalyticsProductType(product.category),
+            priceCoins: product.price,
+            correlation: analyticsCorrelation,
+          ),
+        ),
+      );
+      unawaited(
+        widget.analytics.logEvent(
+          ShopEvent(
+            stage: ShopStage.equipped,
+            productId: product.id,
+            productType: _shopAnalyticsProductType(product.category),
+            correlation: analyticsCorrelation,
+          ),
+        ),
+      );
     }
     if (!mounted) return;
     ScaffoldMessenger.of(context).showSnackBar(
@@ -19880,11 +20314,11 @@ class PoliciesScreen extends StatelessWidget {
             onTap: () => _openPolicy(
               context,
               'Publicidad',
-              'Android y iOS muestran anuncios adaptables y pueden mostrar '
-                  'un anuncio recompensado al elegir Jugar otra vez o Volver '
-                  'al inicio después de una partida. También ofrecen anuncios '
-                  'recompensados voluntarios en la tienda. Si el anuncio no '
-                  'está disponible o se cierra, la acción solicitada continúa. '
+              'Android y iOS pueden mostrar banners únicamente fuera de la '
+                  'partida, la guía y la búsqueda de jugadores. Los anuncios '
+                  'recompensados son voluntarios en la tienda o al finalizar '
+                  'la mesa. Jugar otra vez, Volver al inicio y Reanudar nunca '
+                  'abren anuncios. '
                   'Puedes administrar el consentimiento y las preferencias '
                   'disponibles desde esta pantalla. La versión de macOS no '
                   'muestra estos anuncios.',

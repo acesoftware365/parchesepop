@@ -14,7 +14,8 @@ macOS y Windows.
 - Tienda de temas, fichas, dados y avatares, con vista previa.
 - Interfaz en español, inglés o idioma del sistema.
 - Google Analytics para diferenciar partidas online y contra CPU.
-- AdMob banner y rewarded ads en iOS y Android; macOS no muestra anuncios.
+- Banners AdMob solo fuera de partida/guía/búsqueda y rewarded ads voluntarios
+  en iOS y Android; macOS no muestra anuncios.
 - Diseño adaptable para teléfono, tableta, escritorio y ambas orientaciones.
 
 ## Ejecutar

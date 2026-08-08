@@ -1,10 +1,15 @@
-import 'dart:async';
-
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:parchesepop/game_analytics.dart';
+import 'package:parchesepop/game_guide.dart';
 import 'package:parchesepop/game_engine.dart';
 import 'package:parchesepop/main.dart'
-    show GameScreen, ParchesePopApp, ShopScreen;
+    show
+        GameScreen,
+        MatchmakingScreen,
+        ParchesePopApp,
+        PlayerProfile,
+        ShopScreen;
 import 'package:parchesepop/mobile_ads.dart';
 import 'package:parchesepop/wallet.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -91,6 +96,68 @@ void main() {
       expect(controller.adsReady, isFalse);
       expect(find.byKey(const ValueKey('fake-mobile-banner')), findsNothing);
       expect(find.byType(AdaptiveMobileBanner), findsNothing);
+
+      await tester.pumpWidget(const SizedBox.shrink());
+      controller.dispose();
+    });
+
+    testWidgets(
+      'focused screens suppress banner space until every blocker is removed',
+      (tester) async {
+        final controller = _FakeAdsController(supported: true, adsReady: true);
+
+        await tester.pumpWidget(_testApp(controller, suppressionDepth: 2));
+        await tester.pump();
+        expect(find.byKey(const ValueKey('fake-mobile-banner')), findsNothing);
+        expect(
+          find.byKey(const ValueKey('version-above-ad-banner')),
+          findsNothing,
+        );
+
+        await tester.pumpWidget(_testApp(controller, suppressionDepth: 1));
+        await tester.pump();
+        expect(find.byKey(const ValueKey('fake-mobile-banner')), findsNothing);
+
+        await tester.pumpWidget(_testApp(controller));
+        await tester.pump();
+        expect(
+          find.byKey(const ValueKey('fake-mobile-banner')),
+          findsOneWidget,
+        );
+        expect(
+          find.byKey(const ValueKey('version-above-ad-banner')),
+          findsOneWidget,
+        );
+
+        await tester.pumpWidget(const SizedBox.shrink());
+        controller.dispose();
+      },
+    );
+
+    testWidgets('guide and matchmaking never reserve banner space', (
+      tester,
+    ) async {
+      final controller = _FakeAdsController(supported: true, adsReady: true);
+
+      for (final screen in <Widget>[
+        const GameGuideScreen(),
+        const MatchmakingScreen(
+          profile: PlayerProfile.guest,
+          mode: GameMode.traditional,
+        ),
+      ]) {
+        await tester.pumpWidget(_focusedScreenApp(controller, screen));
+        await tester.pump();
+        expect(find.byKey(const ValueKey('fake-mobile-banner')), findsNothing);
+        expect(
+          find.byKey(const ValueKey('version-above-ad-banner')),
+          findsNothing,
+        );
+      }
+
+      await tester.pumpWidget(_testApp(controller));
+      await tester.pump();
+      expect(find.byKey(const ValueKey('fake-mobile-banner')), findsOneWidget);
 
       await tester.pumpWidget(const SizedBox.shrink());
       controller.dispose();
@@ -203,104 +270,101 @@ void main() {
   });
 
   group('rewarded result contract', () {
-    test(
-      'returns earned only when the fake reward callback earned it',
-      () async {
-        final earnedController = _FakeAdsController(
-          supported: true,
-          adsReady: true,
-          rewardedReady: true,
-          rewardedResult: true,
-        );
-        final dismissedController = _FakeAdsController(
-          supported: true,
-          adsReady: true,
-          rewardedReady: true,
-          rewardedResult: false,
-        );
+    for (final result in RewardedAdResult.values) {
+      test(
+        '${result.name} remains distinct and maps to the legacy bool',
+        () async {
+          final typedController = _FakeAdsController(
+            supported: true,
+            adsReady: true,
+            rewardedReady: true,
+            rewardedResult: result,
+          );
+          final compatibilityController = _FakeAdsController(
+            supported: true,
+            adsReady: true,
+            rewardedReady: true,
+            rewardedResult: result,
+          );
 
-        expect(await earnedController.showRewarded(), isTrue);
-        expect(await dismissedController.showRewarded(), isFalse);
-        expect(earnedController.rewardedShowCount, 1);
-        expect(dismissedController.rewardedShowCount, 1);
+          expect(await typedController.showRewardedWithResult(), result);
+          expect(
+            await compatibilityController.showRewarded(),
+            result == RewardedAdResult.earned,
+          );
+          expect(typedController.rewardedShowCount, 1);
+          expect(compatibilityController.rewardedShowCount, 1);
 
-        earnedController.dispose();
-        dismissedController.dispose();
-      },
-    );
+          typedController.dispose();
+          compatibilityController.dispose();
+        },
+      );
+    }
 
-    test('NoopAppAdsController never grants a reward', () async {
+    test('NoopAppAdsController reports unavailable and never grants', () async {
       final controller = NoopAppAdsController();
 
       controller.preloadRewarded();
       expect(controller.rewardedReady, isFalse);
+      expect(
+        await controller.showRewardedWithResult(),
+        RewardedAdResult.unavailable,
+      );
       expect(await controller.showRewarded(), isFalse);
 
       controller.dispose();
     });
   });
 
-  group('victory navigation rewarded ads', () {
+  group('victory navigation is never gated by ads', () {
     setUp(() => SharedPreferences.setMockInitialValues({}));
 
-    testWidgets(
-      'Play Again waits for one rewarded ad and still continues when dismissed',
-      (tester) async {
-        final engine = _finishedVictoryEngine();
-        final rewarded = Completer<bool>();
-        final ads = _FakeAdsController(
-          supported: true,
-          adsReady: true,
-          rewardedReady: true,
-          onShowRewarded: () => rewarded.future,
-        );
-        addTearDown(engine.dispose);
-        addTearDown(ads.dispose);
-        addTearDown(() => tester.binding.setSurfaceSize(null));
-
-        await tester.binding.setSurfaceSize(const Size(390, 844));
-        await tester.pumpWidget(
-          MobileAdsScope(
-            controller: ads,
-            child: MaterialApp(
-              home: GameScreen(opponent: 'CPU • Fácil', gameEngine: engine),
-            ),
-          ),
-        );
-        await tester.pump(const Duration(milliseconds: 1400));
-
-        expect(ads.rewardedPreloadCount, greaterThanOrEqualTo(1));
-
-        final playAgain = find.byKey(const ValueKey('victory-play-again'));
-        await tester.tap(playAgain);
-        await tester.pump();
-
-        expect(ads.rewardedShowCount, 1);
-        expect(find.byKey(const ValueKey('victory-celebration')), findsOne);
-        expect(tester.widget<FilledButton>(playAgain).onPressed, isNull);
-
-        rewarded.complete(false);
-        await tester.pump();
-        await tester.pump(const Duration(seconds: 1));
-
-        expect(ads.rewardedShowCount, 1);
-        expect(find.byKey(const ValueKey('victory-celebration')), findsNothing);
-        expect(find.byKey(const ValueKey('game-board')), findsOneWidget);
-
-        await tester.pumpWidget(const SizedBox.shrink());
-      },
-    );
-
-    testWidgets('Back to Home waits for its rewarded ad before navigating', (
+    testWidgets('Play Again starts immediately without showing a rewarded ad', (
       tester,
     ) async {
       final engine = _finishedVictoryEngine();
-      final rewarded = Completer<bool>();
       final ads = _FakeAdsController(
         supported: true,
         adsReady: true,
         rewardedReady: true,
-        onShowRewarded: () => rewarded.future,
+      );
+      addTearDown(engine.dispose);
+      addTearDown(ads.dispose);
+      addTearDown(() => tester.binding.setSurfaceSize(null));
+
+      await tester.binding.setSurfaceSize(const Size(390, 844));
+      await tester.pumpWidget(
+        MobileAdsScope(
+          controller: ads,
+          child: MaterialApp(
+            home: GameScreen(opponent: 'CPU • Fácil', gameEngine: engine),
+          ),
+        ),
+      );
+      await tester.pump(const Duration(milliseconds: 1400));
+
+      expect(ads.rewardedPreloadCount, greaterThanOrEqualTo(1));
+
+      final playAgain = find.byKey(const ValueKey('victory-play-again'));
+      await tester.tap(playAgain);
+      await tester.pump();
+      await tester.pump(const Duration(seconds: 1));
+
+      expect(ads.rewardedShowCount, 0);
+      expect(find.byKey(const ValueKey('victory-celebration')), findsNothing);
+      expect(find.byKey(const ValueKey('game-board')), findsOneWidget);
+
+      await tester.pumpWidget(const SizedBox.shrink());
+    });
+
+    testWidgets('Back to Home navigates immediately without showing an ad', (
+      tester,
+    ) async {
+      final engine = _finishedVictoryEngine();
+      final ads = _FakeAdsController(
+        supported: true,
+        adsReady: true,
+        rewardedReady: true,
       );
       addTearDown(engine.dispose);
       addTearDown(ads.dispose);
@@ -325,16 +389,9 @@ void main() {
       final home = find.byKey(const ValueKey('victory-home'));
       await tester.tap(home);
       await tester.pump();
-
-      expect(ads.rewardedShowCount, 1);
-      expect(find.byKey(const ValueKey('home-route-marker')), findsNothing);
-      expect(tester.widget<OutlinedButton>(home).onPressed, isNull);
-
-      rewarded.complete(true);
-      await tester.pump();
       await tester.pump(const Duration(seconds: 1));
 
-      expect(ads.rewardedShowCount, 1);
+      expect(ads.rewardedShowCount, 0);
       expect(find.byKey(const ValueKey('home-route-marker')), findsOneWidget);
       expect(find.byType(GameScreen), findsNothing);
 
@@ -370,6 +427,63 @@ void main() {
 
       await tester.pumpWidget(const SizedBox.shrink());
     });
+  });
+
+  testWidgets('post-match reward is voluntary and credits coins once', (
+    tester,
+  ) async {
+    SharedPreferences.setMockInitialValues({
+      'parchesepop.wallet.balance.v1': 250,
+    });
+    final engine = _completedMatch();
+    final wallet = await WalletController.create();
+    final analytics = _RecordingTypedAnalytics();
+    final ads = _FakeAdsController(
+      supported: true,
+      adsReady: true,
+      rewardedReady: true,
+      rewardedResult: RewardedAdResult.earned,
+    );
+    addTearDown(engine.dispose);
+    addTearDown(wallet.dispose);
+    addTearDown(ads.dispose);
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+
+    await tester.binding.setSurfaceSize(const Size(390, 844));
+    await tester.pumpWidget(
+      MobileAdsScope(
+        controller: ads,
+        child: MaterialApp(
+          home: GameScreen(
+            opponent: 'CPU • Fácil',
+            gameEngine: engine,
+            wallet: wallet,
+            analytics: analytics,
+          ),
+        ),
+      ),
+    );
+    await tester.pump(const Duration(milliseconds: 1900));
+
+    expect(wallet.balance, 250);
+    expect(ads.rewardedShowCount, 0);
+    await tester.tap(find.byKey(const ValueKey('victory-rewarded-ad')));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 100));
+
+    expect(ads.rewardedShowCount, 1);
+    expect(wallet.balance, 350);
+    expect(
+      analytics.events.whereType<RewardedAdEvent>().map((event) => event.stage),
+      containsAllInOrder(<RewardedAdStage>[
+        RewardedAdStage.offered,
+        RewardedAdStage.started,
+        RewardedAdStage.completed,
+      ]),
+    );
+    expect(analytics.events.whereType<CurrencyEvent>(), hasLength(1));
+
+    await tester.pumpWidget(const SizedBox.shrink());
   });
 
   testWidgets('rewarded ads are warmed when a match opens and app resumes', (
@@ -425,55 +539,123 @@ void main() {
     },
   );
 
+  testWidgets(
+    'double-tapping resume opens one saved match with no ad or banner',
+    (tester) async {
+      SharedPreferences.setMockInitialValues({
+        'active_match_board_layout_version': 3,
+        'active_match_checkpoint':
+            '{"savedAt":"2026-08-08T01:00:00Z",'
+            '"analyticsMatchRef":"resume_test_match",'
+            '"mode":"traditional","cpuLevel":"Normal",'
+            '"opponent":"CPU • Normal","elapsedSeconds":12,'
+            '"turn":1,"currentPlayer":"red","dice":[1,1],'
+            '"remainingDice":[],"hasRolled":false,"players":[]}',
+      });
+      final ads = _FakeAdsController(supported: true, adsReady: true);
+
+      await tester.pumpWidget(ParchesePopApp(adsController: ads));
+      for (var attempt = 0; attempt < 30; attempt++) {
+        await tester.pump(const Duration(milliseconds: 100));
+        if (find
+            .byKey(const ValueKey('resume-saved-match-button'))
+            .evaluate()
+            .isNotEmpty) {
+          break;
+        }
+      }
+
+      final resumeButton = tester.widget<InkWell>(
+        find.byKey(const ValueKey('resume-saved-match-button')),
+      );
+      resumeButton.onTap!();
+      resumeButton.onTap!();
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 500));
+
+      expect(find.byType(GameScreen), findsOneWidget);
+      expect(ads.rewardedShowCount, 0);
+      expect(find.byKey(const ValueKey('fake-mobile-banner')), findsNothing);
+      expect(
+        find.byKey(const ValueKey('version-above-ad-banner')),
+        findsNothing,
+      );
+
+      await tester.pumpWidget(const SizedBox.shrink());
+    },
+  );
+
   group('ShopScreen rewarded coins integration', () {
-    testWidgets('adds exactly 100 coins after an earned mobile reward', (
-      tester,
-    ) async {
-      final harness = await _pumpRewardedShop(tester, rewardedResult: true);
-      final startingBalance = harness.wallet.balance;
+    for (final result in RewardedAdResult.values) {
+      testWidgets('${result.name} maps to exact metrics and coin balance', (
+        tester,
+      ) async {
+        final harness = await _pumpRewardedShop(tester, rewardedResult: result);
+        final startingBalance = harness.wallet.balance;
 
-      await tester.ensureVisible(
-        find.byKey(const ValueKey('shop-rewarded-coins')),
-      );
-      await tester.tap(find.byKey(const ValueKey('shop-rewarded-coins')));
-      await tester.pumpAndSettle();
+        await tester.ensureVisible(
+          find.byKey(const ValueKey('shop-rewarded-coins')),
+        );
+        await tester.tap(find.byKey(const ValueKey('shop-rewarded-coins')));
+        await tester.pumpAndSettle();
 
-      expect(harness.ads.rewardedShowCount, 1);
-      expect(harness.wallet.balance, startingBalance + 100);
+        expect(harness.ads.rewardedShowCount, 1);
+        expect(
+          harness.wallet.balance,
+          startingBalance + (result == RewardedAdResult.earned ? 100 : 0),
+        );
+        final expectedStage = switch (result) {
+          RewardedAdResult.earned => RewardedAdStage.completed,
+          RewardedAdResult.dismissed => RewardedAdStage.declined,
+          RewardedAdResult.unavailable => RewardedAdStage.unavailable,
+          RewardedAdResult.failed => RewardedAdStage.failed,
+        };
+        expect(
+          harness.analytics.events.whereType<RewardedAdEvent>().map(
+            (event) => event.stage,
+          ),
+          containsAllInOrder(<RewardedAdStage>[
+            RewardedAdStage.offered,
+            RewardedAdStage.started,
+            expectedStage,
+          ]),
+        );
+        expect(
+          harness.analytics.events.whereType<CurrencyEvent>(),
+          result == RewardedAdResult.earned ? hasLength(1) : isEmpty,
+        );
 
-      await tester.pumpWidget(const SizedBox.shrink());
-      harness.dispose();
-    });
-
-    testWidgets('does not add coins when the mobile reward was not earned', (
-      tester,
-    ) async {
-      final harness = await _pumpRewardedShop(tester, rewardedResult: false);
-      final startingBalance = harness.wallet.balance;
-
-      await tester.ensureVisible(
-        find.byKey(const ValueKey('shop-rewarded-coins')),
-      );
-      await tester.tap(find.byKey(const ValueKey('shop-rewarded-coins')));
-      await tester.pumpAndSettle();
-
-      expect(harness.ads.rewardedShowCount, 1);
-      expect(harness.wallet.balance, startingBalance);
-
-      await tester.pumpWidget(const SizedBox.shrink());
-      harness.dispose();
-    });
+        await tester.pumpWidget(const SizedBox.shrink());
+        harness.dispose();
+      });
+    }
   });
 }
 
-Widget _testApp(AppAdsController controller) {
-  return MaterialApp(
-    home: MobileAdShell(
-      controller: controller,
-      child: const ColoredBox(
-        key: ValueKey('screen-content'),
-        color: Colors.white,
-      ),
+Widget _testApp(AppAdsController controller, {int suppressionDepth = 0}) {
+  Widget content = const ColoredBox(
+    key: ValueKey('screen-content'),
+    color: Colors.white,
+  );
+  for (var index = 0; index < suppressionDepth; index++) {
+    content = SuppressMobileAdBanner(
+      key: ValueKey('banner-suppressor-$index'),
+      child: content,
+    );
+  }
+  return MobileAdsScope(
+    controller: controller,
+    child: MaterialApp(
+      home: MobileAdShell(controller: controller, child: content),
+    ),
+  );
+}
+
+Widget _focusedScreenApp(AppAdsController controller, Widget screen) {
+  return MobileAdsScope(
+    controller: controller,
+    child: MaterialApp(
+      home: MobileAdShell(controller: controller, child: screen),
     ),
   );
 }
@@ -507,7 +689,7 @@ Widget _insetTestApp(AppAdsController controller) {
 
 Future<_RewardedShopHarness> _pumpRewardedShop(
   WidgetTester tester, {
-  required bool rewardedResult,
+  required RewardedAdResult rewardedResult,
 }) async {
   SharedPreferences.setMockInitialValues({
     'parchesepop.wallet.balance.v1': 250,
@@ -520,6 +702,7 @@ Future<_RewardedShopHarness> _pumpRewardedShop(
     rewardedReady: true,
     rewardedResult: rewardedResult,
   );
+  final analytics = _RecordingTypedAnalytics();
 
   tester.view.physicalSize = const Size(1000, 1400);
   tester.view.devicePixelRatio = 1;
@@ -530,21 +713,30 @@ Future<_RewardedShopHarness> _pumpRewardedShop(
     MaterialApp(
       home: MobileAdsScope(
         controller: ads,
-        child: ShopScreen(wallet: wallet, showTestCoinControls: false),
+        child: ShopScreen(
+          wallet: wallet,
+          showTestCoinControls: false,
+          analytics: analytics,
+        ),
       ),
     ),
   );
   await tester.pump();
 
   expect(find.byKey(const ValueKey('shop-rewarded-coins')), findsOneWidget);
-  return _RewardedShopHarness(wallet: wallet, ads: ads);
+  return _RewardedShopHarness(wallet: wallet, ads: ads, analytics: analytics);
 }
 
 class _RewardedShopHarness {
-  const _RewardedShopHarness({required this.wallet, required this.ads});
+  const _RewardedShopHarness({
+    required this.wallet,
+    required this.ads,
+    required this.analytics,
+  });
 
   final WalletController wallet;
   final _FakeAdsController ads;
+  final _RecordingTypedAnalytics analytics;
 
   void dispose() {
     wallet.dispose();
@@ -552,13 +744,24 @@ class _RewardedShopHarness {
   }
 }
 
+class _RecordingTypedAnalytics implements TypedGameAnalytics {
+  final events = <GameAnalyticsEvent>[];
+
+  @override
+  Future<void> logEvent(GameAnalyticsEvent event) async {
+    events.add(event);
+  }
+
+  @override
+  Future<void> logMatchStarted(MatchStartEvent event) => logEvent(event);
+}
+
 class _FakeAdsController extends AppAdsController {
   _FakeAdsController({
     required this.supported,
     required bool adsReady,
     this.rewardedReady = false,
-    this.rewardedResult = false,
-    this.onShowRewarded,
+    this.rewardedResult = RewardedAdResult.dismissed,
   }) : _adsReady = adsReady;
 
   @override
@@ -575,8 +778,7 @@ class _FakeAdsController extends AppAdsController {
   @override
   bool get privacyOptionsRequired => false;
 
-  final bool rewardedResult;
-  final Future<bool> Function()? onShowRewarded;
+  final RewardedAdResult rewardedResult;
   int rewardedShowCount = 0;
   int rewardedPreloadCount = 0;
 
@@ -604,9 +806,8 @@ class _FakeAdsController extends AppAdsController {
   }
 
   @override
-  Future<bool> showRewarded() async {
+  Future<RewardedAdResult> showRewardedWithResult() async {
     rewardedShowCount += 1;
-    if (onShowRewarded != null) return onShowRewarded!();
     return rewardedResult;
   }
 
@@ -624,5 +825,35 @@ GameEngine _finishedVictoryEngine() {
     ..gameOver = true
     ..hasRolled = false
     ..remainingDice.clear();
+  return engine;
+}
+
+void _putCurrentPlayerOneMoveFromFinishing(GameEngine engine) {
+  final player = engine.currentPlayer;
+  for (var tokenId = 0; tokenId < player.tokens.length - 1; tokenId++) {
+    player.tokens[tokenId].progress = GameEngine.finishProgress;
+  }
+  player.tokens.last.progress = GameEngine.finishProgress - 1;
+  engine
+    ..hasRolled = true
+    ..dice = const [1, 2];
+  engine.remainingDice
+    ..clear()
+    ..addAll(const [1, 2]);
+}
+
+GameEngine _completedMatch() {
+  final engine = GameEngine();
+  _putCurrentPlayerOneMoveFromFinishing(engine);
+  expect(engine.moveToken(engine.currentPlayer.tokens.last, die: 1), isTrue);
+  expect(engine.continueAfterWinner(), isTrue);
+
+  for (final expectedColor in const [PlayerColor.green, PlayerColor.yellow]) {
+    expect(engine.currentPlayer.color, expectedColor);
+    _putCurrentPlayerOneMoveFromFinishing(engine);
+    expect(engine.moveToken(engine.currentPlayer.tokens.last, die: 1), isTrue);
+  }
+
+  expect(engine.standingsComplete, isTrue);
   return engine;
 }
