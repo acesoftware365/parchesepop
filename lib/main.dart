@@ -2180,7 +2180,7 @@ class PlayHome extends StatelessWidget {
                         padding: EdgeInsets.symmetric(
                           vertical: compactLandscape
                               ? 5
-                              : densePortrait
+                              : narrow
                               ? 10
                               : 18,
                         ),
@@ -2204,7 +2204,9 @@ class PlayHome extends StatelessWidget {
                               ),
                               SizedBox(height: compactLandscape ? 5 : 10),
                             ],
-                            _HomeSectionTitle(compact: compactLandscape),
+                            _HomeSectionTitle(
+                              compact: compactLandscape || narrow,
+                            ),
                             SizedBox(height: compactLandscape ? 4 : 12),
                             if (horizontalModes)
                               Row(
@@ -2256,7 +2258,7 @@ class PlayHome extends StatelessWidget {
                       Column(
                         children: [
                           _HomeMenuDock(
-                            compact: compactLandscape,
+                            compact: compactLandscape || narrow,
                             children: [
                               _RoundMenuButton(
                                 color: PopColors.yellow,
@@ -2271,16 +2273,6 @@ class PlayHome extends StatelessWidget {
                                     ),
                                   ),
                                 ),
-                              ),
-                              _RoundMenuButton(
-                                color: PopColors.green,
-                                icon: profile.isGuest
-                                    ? Icons.person_add_alt_1_rounded
-                                    : Icons.person_rounded,
-                                label: profile.isGuest
-                                    ? 'Registrarme'
-                                    : 'Mi perfil',
-                                onTap: () => _openProfile(context),
                               ),
                               if (appFeatureRollout.retentionRewards)
                                 if (progression case final controller?)
@@ -3097,13 +3089,20 @@ class _HomeTopBar extends StatelessWidget {
   @override
   Widget build(BuildContext context) => LayoutBuilder(
     builder: (context, box) {
-      final stackPlayer = box.maxWidth < 720 && !compactLandscape;
       final compactLogo = box.maxWidth < 500 || compactLandscape;
+      final controlGap = compactLogo ? 6.0 : 8.0;
       final controls = Row(
         mainAxisSize: MainAxisSize.min,
         children: [
+          _HomeProfileButton(
+            profile: profile,
+            wallet: wallet,
+            compact: compactLogo,
+            onTap: onProfileTap,
+          ),
+          SizedBox(width: controlGap),
           _CoinPill(wallet: wallet),
-          const SizedBox(width: 8),
+          SizedBox(width: controlGap),
           Container(
             decoration: BoxDecoration(
               color: Colors.white.withValues(alpha: .94),
@@ -3128,43 +3127,10 @@ class _HomeTopBar extends StatelessWidget {
           ),
         ],
       );
-      final playerCard = _HomePlayerCard(
-        profile: profile,
-        wallet: wallet,
-        compact: compactLandscape,
-        onTap: onProfileTap,
-      );
-
-      if (stackPlayer) {
-        return Column(
-          children: [
-            Row(
-              children: [
-                Expanded(child: _GameLogo(compact: compactLogo)),
-                controls,
-              ],
-            ),
-            const SizedBox(height: 11),
-            SizedBox(width: double.infinity, child: playerCard),
-          ],
-        );
-      }
       return Row(
         children: [
-          _GameLogo(compact: compactLogo),
-          const SizedBox(width: 16),
-          Expanded(
-            child: Align(
-              alignment: Alignment.center,
-              child: ConstrainedBox(
-                constraints: BoxConstraints(
-                  maxWidth: compactLandscape ? 300 : 380,
-                ),
-                child: playerCard,
-              ),
-            ),
-          ),
-          const SizedBox(width: 16),
+          Expanded(child: _GameLogo(compact: compactLogo)),
+          SizedBox(width: compactLogo ? 8 : 16),
           controls,
         ],
       );
@@ -3172,8 +3138,8 @@ class _HomeTopBar extends StatelessWidget {
   );
 }
 
-class _HomePlayerCard extends StatelessWidget {
-  const _HomePlayerCard({
+class _HomeProfileButton extends StatelessWidget {
+  const _HomeProfileButton({
     required this.profile,
     required this.wallet,
     required this.compact,
@@ -3193,148 +3159,64 @@ class _HomePlayerCard extends StatelessWidget {
       return Semantics(
         button: true,
         label: profile.isGuest
-            ? appTranslate(context, '¡Listo para jugar!')
-            : '${profile.name} ${profile.flag}',
+            ? appTranslate(context, 'Registrarme')
+            : appTranslate(context, 'Mi perfil'),
         child: Material(
-          key: const ValueKey('home-game-hero'),
+          key: const ValueKey('home-profile-button'),
           color: Colors.transparent,
           child: InkWell(
-            borderRadius: BorderRadius.circular(22),
+            customBorder: const CircleBorder(),
             onTap: onTap,
             child: Ink(
-              padding: EdgeInsets.symmetric(
-                horizontal: compact ? 10 : 13,
-                vertical: compact ? 7 : 9,
-              ),
+              width: compact ? 44 : 48,
+              height: compact ? 44 : 48,
               decoration: BoxDecoration(
-                borderRadius: BorderRadius.circular(22),
-                gradient: LinearGradient(
-                  colors: [
-                    Colors.white.withValues(alpha: .22),
-                    Colors.white.withValues(alpha: .11),
-                  ],
+                gradient: const LinearGradient(
+                  begin: Alignment.topLeft,
+                  end: Alignment.bottomRight,
+                  colors: [PopColors.yellow, Color(0xFFFFA928)],
                 ),
-                border: Border.all(
-                  color: Colors.white.withValues(alpha: .65),
-                  width: 1.6,
-                ),
+                shape: BoxShape.circle,
+                border: Border.all(color: Colors.white, width: 2.5),
                 boxShadow: const [
                   BoxShadow(
-                    color: Color(0x3307132D),
-                    blurRadius: 11,
-                    offset: Offset(0, 6),
+                    color: Color(0x50000000),
+                    blurRadius: 7,
+                    offset: Offset(0, 4),
                   ),
                 ],
               ),
-              child: Row(
+              child: Stack(
+                clipBehavior: Clip.none,
                 children: [
-                  Container(
-                    width: compact ? 44 : 52,
-                    height: compact ? 44 : 52,
-                    alignment: Alignment.center,
-                    decoration: BoxDecoration(
-                      gradient: const LinearGradient(
-                        begin: Alignment.topLeft,
-                        end: Alignment.bottomRight,
-                        colors: [PopColors.yellow, Color(0xFFFFA928)],
-                      ),
-                      shape: BoxShape.circle,
-                      border: Border.all(color: Colors.white, width: 3),
-                      boxShadow: const [
-                        BoxShadow(
-                          color: Color(0x50000000),
-                          blurRadius: 7,
-                          offset: Offset(0, 4),
-                        ),
-                      ],
-                    ),
+                  Center(
                     child: _AvatarArt(
                       key: ValueKey('home-avatar-${avatarId ?? 'default'}'),
                       avatarId: avatarId,
-                      size: compact ? 39 : 47,
+                      size: compact ? 38 : 42,
                       withFrame: false,
                     ),
                   ),
-                  const SizedBox(width: 11),
-                  Expanded(
-                    child: Column(
-                      mainAxisSize: MainAxisSize.min,
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        _AutoFitSingleLineText(
-                          profile.isGuest
-                              ? '¡Listo para jugar!'
-                              : '${profile.name} ${profile.flag}',
-                          style: TextStyle(
-                            fontSize: compact ? 16 : 19,
-                            fontWeight: FontWeight.w900,
-                            color: Colors.white,
-                            letterSpacing: -.2,
-                            shadows: const [
-                              Shadow(
-                                color: Color(0x55000000),
-                                offset: Offset(0, 2),
-                                blurRadius: 4,
-                              ),
-                            ],
-                          ),
+                  if (profile.isGuest)
+                    Positioned(
+                      right: -2,
+                      bottom: -2,
+                      child: Container(
+                        key: const ValueKey('home-profile-sign-up-badge'),
+                        width: 17,
+                        height: 17,
+                        decoration: BoxDecoration(
+                          color: PopColors.green,
+                          shape: BoxShape.circle,
+                          border: Border.all(color: Colors.white, width: 1.5),
                         ),
-                        const SizedBox(height: 3),
-                        Row(
-                          children: [
-                            Container(
-                              padding: const EdgeInsets.symmetric(
-                                horizontal: 8,
-                                vertical: 3,
-                              ),
-                              decoration: BoxDecoration(
-                                color: PopColors.yellow,
-                                borderRadius: BorderRadius.circular(20),
-                              ),
-                              child: PopText(
-                                profile.isGuest
-                                    ? 'Invitado'
-                                    : 'Nv. ${profile.level}',
-                                style: const TextStyle(
-                                  color: PopColors.navy,
-                                  fontSize: 10,
-                                  fontWeight: FontWeight.w900,
-                                ),
-                              ),
-                            ),
-                            const SizedBox(width: 7),
-                            for (final color in const [
-                              PopColors.red,
-                              PopColors.yellow,
-                              PopColors.green,
-                              PopColors.blue,
-                            ])
-                              Padding(
-                                padding: const EdgeInsets.only(right: 3),
-                                child: Container(
-                                  width: 7,
-                                  height: 7,
-                                  decoration: BoxDecoration(
-                                    color: color,
-                                    shape: BoxShape.circle,
-                                    border: Border.all(
-                                      color: Colors.white,
-                                      width: 1,
-                                    ),
-                                  ),
-                                ),
-                              ),
-                          ],
+                        child: const Icon(
+                          Icons.add_rounded,
+                          size: 12,
+                          color: Colors.white,
                         ),
-                      ],
+                      ),
                     ),
-                  ),
-                  const SizedBox(width: 5),
-                  const Icon(
-                    Icons.chevron_right_rounded,
-                    color: Colors.white,
-                    size: 27,
-                  ),
                 ],
               ),
             ),
@@ -3488,70 +3370,29 @@ class _HomeSectionTitle extends StatelessWidget {
   final bool compact;
 
   @override
-  Widget build(BuildContext context) => Column(
-    children: [
-      Row(
+  Widget build(BuildContext context) {
+    if (compact) {
+      return Row(
         children: [
+          const Icon(Icons.stars_rounded, color: PopColors.yellow, size: 18),
+          const SizedBox(width: 7),
+          const PopText(
+            'ELIGE TU PARTIDA',
+            style: TextStyle(
+              fontSize: 13,
+              letterSpacing: .8,
+              fontWeight: FontWeight.w900,
+              color: Colors.white,
+            ),
+          ),
+          const SizedBox(width: 9),
           Expanded(
             child: Container(
               height: 2,
               decoration: BoxDecoration(
                 gradient: LinearGradient(
                   colors: [
-                    Colors.white.withValues(alpha: 0),
-                    Colors.white.withValues(alpha: .72),
-                  ],
-                ),
-              ),
-            ),
-          ),
-          const SizedBox(width: 12),
-          Container(
-            padding: EdgeInsets.symmetric(
-              horizontal: compact ? 14 : 17,
-              vertical: compact ? 5 : 7,
-            ),
-            decoration: BoxDecoration(
-              color: PopColors.yellow,
-              borderRadius: BorderRadius.circular(30),
-              border: Border.all(color: Colors.white, width: 2),
-              boxShadow: const [
-                BoxShadow(
-                  color: Color(0x4207132D),
-                  blurRadius: 8,
-                  offset: Offset(0, 4),
-                ),
-              ],
-            ),
-            child: Row(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                const Icon(
-                  Icons.stars_rounded,
-                  color: PopColors.navy,
-                  size: 18,
-                ),
-                const SizedBox(width: 7),
-                PopText(
-                  'ELIGE TU PARTIDA',
-                  style: TextStyle(
-                    fontSize: compact ? 11.5 : 13,
-                    letterSpacing: compact ? .8 : 1.1,
-                    fontWeight: FontWeight.w900,
-                    color: PopColors.navy,
-                  ),
-                ),
-              ],
-            ),
-          ),
-          const SizedBox(width: 12),
-          Expanded(
-            child: Container(
-              height: 2,
-              decoration: BoxDecoration(
-                gradient: LinearGradient(
-                  colors: [
-                    Colors.white.withValues(alpha: .72),
+                    Colors.white.withValues(alpha: .62),
                     Colors.white.withValues(alpha: 0),
                   ],
                 ),
@@ -3559,8 +3400,80 @@ class _HomeSectionTitle extends StatelessWidget {
             ),
           ),
         ],
-      ),
-      if (!compact) ...[
+      );
+    }
+    return Column(
+      children: [
+        Row(
+          children: [
+            Expanded(
+              child: Container(
+                height: 2,
+                decoration: BoxDecoration(
+                  gradient: LinearGradient(
+                    colors: [
+                      Colors.white.withValues(alpha: 0),
+                      Colors.white.withValues(alpha: .72),
+                    ],
+                  ),
+                ),
+              ),
+            ),
+            const SizedBox(width: 12),
+            Container(
+              padding: EdgeInsets.symmetric(
+                horizontal: compact ? 14 : 17,
+                vertical: compact ? 5 : 7,
+              ),
+              decoration: BoxDecoration(
+                color: PopColors.yellow,
+                borderRadius: BorderRadius.circular(30),
+                border: Border.all(color: Colors.white, width: 2),
+                boxShadow: const [
+                  BoxShadow(
+                    color: Color(0x4207132D),
+                    blurRadius: 8,
+                    offset: Offset(0, 4),
+                  ),
+                ],
+              ),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  const Icon(
+                    Icons.stars_rounded,
+                    color: PopColors.navy,
+                    size: 18,
+                  ),
+                  const SizedBox(width: 7),
+                  PopText(
+                    'ELIGE TU PARTIDA',
+                    style: TextStyle(
+                      fontSize: compact ? 11.5 : 13,
+                      letterSpacing: compact ? .8 : 1.1,
+                      fontWeight: FontWeight.w900,
+                      color: PopColors.navy,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(width: 12),
+            Expanded(
+              child: Container(
+                height: 2,
+                decoration: BoxDecoration(
+                  gradient: LinearGradient(
+                    colors: [
+                      Colors.white.withValues(alpha: .72),
+                      Colors.white.withValues(alpha: 0),
+                    ],
+                  ),
+                ),
+              ),
+            ),
+          ],
+        ),
         const SizedBox(height: 7),
         const PopText(
           'Elige tu partida y lleva tus cuatro fichas al centro.',
@@ -3572,8 +3485,8 @@ class _HomeSectionTitle extends StatelessWidget {
           ),
         ),
       ],
-    ],
-  );
+    );
+  }
 }
 
 class _HomeMenuDock extends StatelessWidget {
@@ -3605,13 +3518,22 @@ class _HomeMenuDock extends StatelessWidget {
         ),
       ],
     ),
-    child: Wrap(
-      alignment: WrapAlignment.spaceEvenly,
-      runAlignment: WrapAlignment.center,
-      spacing: compact ? 4 : 8,
-      runSpacing: 8,
-      children: children,
-    ),
+    child: compact
+        ? Row(
+            children: [
+              for (var index = 0; index < children.length; index++) ...[
+                if (index > 0) const SizedBox(width: 4),
+                Expanded(child: children[index]),
+              ],
+            ],
+          )
+        : Wrap(
+            alignment: WrapAlignment.spaceEvenly,
+            runAlignment: WrapAlignment.center,
+            spacing: 8,
+            runSpacing: 8,
+            children: children,
+          ),
   );
 }
 
@@ -3706,9 +3628,6 @@ class _RoundMenuButtonState extends State<_RoundMenuButton> {
         ? PopColors.navy
         : Colors.white;
     if (compact) {
-      final compactWidth = ((MediaQuery.sizeOf(context).width - 54) / 3)
-          .clamp(86.0, 112.0)
-          .toDouble();
       return MouseRegion(
         onEnter: (_) => setState(() => hovered = true),
         onExit: (_) => setState(() => hovered = false),
@@ -3717,23 +3636,23 @@ class _RoundMenuButtonState extends State<_RoundMenuButton> {
           duration: const Duration(milliseconds: 120),
           curve: Curves.easeOut,
           child: SizedBox(
-            width: compactWidth,
-            height: 48,
+            height: 54,
             child: Material(
               color: Colors.white.withValues(alpha: .08),
-              borderRadius: BorderRadius.circular(15),
+              borderRadius: BorderRadius.circular(13),
               clipBehavior: Clip.antiAlias,
               child: InkWell(
-                borderRadius: BorderRadius.circular(15),
+                borderRadius: BorderRadius.circular(13),
                 onHighlightChanged: (value) => setState(() => pressed = value),
                 onTap: widget.onTap,
                 child: Padding(
-                  padding: const EdgeInsets.symmetric(horizontal: 5),
-                  child: Row(
+                  padding: const EdgeInsets.fromLTRB(2, 4, 2, 3),
+                  child: Column(
+                    mainAxisAlignment: MainAxisAlignment.center,
                     children: [
                       Container(
-                        width: 38,
-                        height: 38,
+                        width: 31,
+                        height: 31,
                         decoration: BoxDecoration(
                           gradient: LinearGradient(
                             begin: Alignment.topLeft,
@@ -3743,24 +3662,26 @@ class _RoundMenuButtonState extends State<_RoundMenuButton> {
                               widget.color,
                             ],
                           ),
-                          borderRadius: BorderRadius.circular(12),
-                          border: Border.all(color: Colors.white, width: 2),
+                          borderRadius: BorderRadius.circular(10),
+                          border: Border.all(color: Colors.white, width: 1.7),
                           boxShadow: [
                             BoxShadow(
                               color: widget.color.withValues(alpha: .28),
-                              blurRadius: 6,
-                              offset: const Offset(0, 3),
+                              blurRadius: 5,
+                              offset: const Offset(0, 2),
                             ),
                           ],
                         ),
-                        child: Icon(widget.icon, color: foreground, size: 22),
+                        child: Icon(widget.icon, color: foreground, size: 19),
                       ),
-                      const SizedBox(width: 5),
+                      const SizedBox(height: 2),
                       Expanded(
                         child: _AutoFitSingleLineText(
                           widget.label,
+                          alignment: Alignment.center,
+                          textAlign: TextAlign.center,
                           style: const TextStyle(
-                            fontSize: 9.5,
+                            fontSize: 9,
                             fontWeight: FontWeight.w900,
                             color: Colors.white,
                             shadows: [

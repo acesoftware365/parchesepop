@@ -114,14 +114,20 @@ void main() {
   });
   tearDown(binding.platformDispatcher.clearLocaleTestValue);
 
-  testWidgets('allows a new player to continue as guest', (tester) async {
+  testWidgets('guest home keeps one compact profile entry', (tester) async {
     SharedPreferences.setMockInitialValues({});
 
     await tester.pumpWidget(const ParchesePopApp());
     await tester.pumpAndSettle();
 
-    expect(find.text('¡Listo para jugar!'), findsOneWidget);
-    expect(find.text('Registrarme'), findsOneWidget);
+    expect(find.text('¡Listo para jugar!'), findsNothing);
+    expect(find.text('Registrarme'), findsNothing);
+    expect(find.byKey(const ValueKey('home-profile-button')), findsOneWidget);
+    expect(find.byKey(const ValueKey('home-mode-cpu')), findsOneWidget);
+
+    await tester.tap(find.byKey(const ValueKey('home-profile-button')));
+    await tester.pumpAndSettle();
+    expect(find.byType(ProfileSetupScreen), findsOneWidget);
   });
 
   testWidgets('game history button opens the visible event timeline', (
@@ -224,6 +230,8 @@ void main() {
   });
 
   for (final size in <String, Size>{
+    'compact phone': const Size(320, 568),
+    'iPhone SE': const Size(375, 667),
     'small phone': const Size(390, 844),
     'regular modern phone': const Size(402, 874),
     'large phone': const Size(440, 956),
@@ -243,7 +251,7 @@ void main() {
       await tester.pumpWidget(const ParchesePopApp());
       await tester.pumpAndSettle();
 
-      expect(find.textContaining('JuanPop'), findsOneWidget);
+      expect(find.byKey(const ValueKey('home-profile-button')), findsOneWidget);
       expect(tester.takeException(), isNull);
       await tester.binding.setSurfaceSize(null);
     });

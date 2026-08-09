@@ -565,7 +565,7 @@ void main() {
           'MESA RÁPIDA',
           'CONTRA CPU',
           'Tienda',
-          'Mi perfil',
+          'Misiones',
           'Cómo jugar',
           'Trampas',
         ]) {
@@ -586,9 +586,75 @@ void main() {
           expect(tappable.hitTestable(), findsOneWidget);
         }
 
+        final profile = find.byKey(const ValueKey('home-profile-button'));
+        expect(profile, findsOneWidget);
+        final profileRect = tester.getRect(profile);
+        final banner = tester.getRect(
+          find.byKey(const ValueKey('fake-mobile-banner')),
+        );
+        expect(profileRect.top, greaterThanOrEqualTo(47));
+        expect(profileRect.bottom, lessThanOrEqualTo(banner.top));
+        expect(profile.hitTestable(), findsOneWidget);
+
         await tester.pumpWidget(const SizedBox.shrink());
       },
     );
+
+    testWidgets('iPhone SE shows the compact home before the banner', (
+      tester,
+    ) async {
+      _configureIPhoneSEView(tester);
+      SharedPreferences.setMockInitialValues({
+        'profile_name': 'JuanPop',
+        'profile_email': 'juan@example.com',
+        'profile_flag': '🇩🇴',
+      });
+      final controller = _FakeAdsController(supported: true, adsReady: true);
+
+      await tester.pumpWidget(ParchesePopApp(adsController: controller));
+      for (var attempt = 0; attempt < 30; attempt++) {
+        await tester.pump(const Duration(milliseconds: 100));
+        if (find
+            .byKey(const ValueKey('home-menu-dock'))
+            .evaluate()
+            .isNotEmpty) {
+          break;
+        }
+      }
+
+      final banner = tester.getRect(
+        find.byKey(const ValueKey('fake-mobile-banner')),
+      );
+      for (final label in const [
+        'QUICK POP',
+        'MESA RÁPIDA',
+        'CONTRA CPU',
+        'Tienda',
+        'Misiones',
+        'Cómo jugar',
+        'Trampas',
+      ]) {
+        final text = find.text(label);
+        expect(text, findsOneWidget);
+        final tappable = find
+            .ancestor(of: text, matching: find.byType(InkWell))
+            .first;
+        final rect = tester.getRect(tappable);
+        expect(rect.left, greaterThanOrEqualTo(0));
+        expect(rect.right, lessThanOrEqualTo(375));
+        expect(rect.top, greaterThanOrEqualTo(20));
+        expect(rect.bottom, lessThanOrEqualTo(banner.top));
+        expect(tappable.hitTestable(), findsOneWidget);
+      }
+      final profile = find.byKey(const ValueKey('home-profile-button'));
+      final profileRect = tester.getRect(profile);
+      expect(profileRect.top, greaterThanOrEqualTo(20));
+      expect(profileRect.bottom, lessThanOrEqualTo(banner.top));
+      expect(profile.hitTestable(), findsOneWidget);
+      expect(tester.takeException(), isNull);
+
+      await tester.pumpWidget(const SizedBox.shrink());
+    });
   });
 
   group('rewarded result contract', () {

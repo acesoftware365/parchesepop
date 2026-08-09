@@ -149,22 +149,23 @@ void main() {
           'MESA RÁPIDA',
           'CONTRA CPU',
           'Tienda',
-          'Mi perfil',
+          'Misiones',
           'Cómo jugar',
           'Trampas',
         ]) {
           await _expectReachableControl(tester, label, viewport.value);
         }
 
-        expect(find.byKey(const ValueKey('home-game-hero')), findsOneWidget);
+        expect(
+          find.byKey(const ValueKey('home-profile-button')),
+          findsOneWidget,
+        );
         expect(tester.takeException(), isNull);
       },
     );
   }
 
-  testWidgets('welcome card has no redundant trailing play control', (
-    tester,
-  ) async {
+  testWidgets('top bar keeps one compact profile access', (tester) async {
     _useSpanish();
     _useViewport(tester, const Size(1180, 820));
     SharedPreferences.setMockInitialValues({
@@ -175,16 +176,79 @@ void main() {
 
     await _pumpLoadedHome(tester);
 
-    final welcomeCard = find.byKey(const ValueKey('home-game-hero'));
-    expect(welcomeCard, findsOneWidget);
+    final profileButton = find.byKey(const ValueKey('home-profile-button'));
+    expect(profileButton, findsOneWidget);
+    expect(find.byKey(const ValueKey('home-game-hero')), findsNothing);
     expect(
       find.descendant(
-        of: welcomeCard,
+        of: profileButton,
         matching: find.byIcon(Icons.play_circle_fill_rounded),
       ),
       findsNothing,
     );
-    expect(find.textContaining('JuanPop'), findsOneWidget);
+    final profileSize = tester.getSize(profileButton);
+    expect(profileSize.width, inInclusiveRange(44, 48));
+    expect(profileSize.height, inInclusiveRange(44, 48));
+    expect(
+      find.byWidgetPredicate(
+        (widget) =>
+            widget is Semantics && widget.properties.label == 'Mi perfil',
+      ),
+      findsOneWidget,
+    );
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('phone home removes duplicate actions and uses one utility row', (
+    tester,
+  ) async {
+    _useSpanish();
+    const viewport = Size(390, 844);
+    _useViewport(tester, viewport);
+    SharedPreferences.setMockInitialValues({});
+
+    await _pumpLoadedHome(tester);
+
+    expect(find.text('¡Listo para jugar!'), findsNothing);
+    expect(find.text('Registrarme'), findsNothing);
+    expect(find.byKey(const ValueKey('home-game-hero')), findsNothing);
+    final profile = find.byKey(const ValueKey('home-profile-button'));
+    expect(profile, findsOneWidget);
+    expect(tester.getSize(profile).width, greaterThanOrEqualTo(44));
+    expect(tester.getSize(profile).height, greaterThanOrEqualTo(44));
+    expect(profile.hitTestable(), findsOneWidget);
+    expect(
+      find.byWidgetPredicate(
+        (widget) =>
+            widget is Semantics && widget.properties.label == 'Registrarme',
+      ),
+      findsOneWidget,
+    );
+    expect(
+      find.byKey(const ValueKey('home-profile-sign-up-badge')),
+      findsOneWidget,
+    );
+
+    final dock = find.byKey(const ValueKey('home-menu-dock'));
+    expect(dock, findsOneWidget);
+    expect(tester.getSize(dock).height, lessThanOrEqualTo(68));
+    final centers = <double>[];
+    for (final label in const ['Tienda', 'Misiones', 'Cómo jugar', 'Trampas']) {
+      final button = find
+          .ancestor(of: find.text(label), matching: find.byType(InkWell))
+          .first;
+      expect(button, findsOneWidget);
+      final rect = tester.getRect(button);
+      expect(rect.width, greaterThanOrEqualTo(70));
+      expect(rect.height, greaterThanOrEqualTo(48));
+      expect(rect.left, greaterThanOrEqualTo(0));
+      expect(rect.right, lessThanOrEqualTo(viewport.width));
+      expect(button.hitTestable(), findsOneWidget);
+      centers.add(rect.center.dy);
+    }
+    for (final center in centers.skip(1)) {
+      expect(center, closeTo(centers.first, .1));
+    }
     expect(tester.takeException(), isNull);
   });
 
@@ -206,7 +270,7 @@ void main() {
         'MESA RÁPIDA',
         'CONTRA CPU',
         'Tienda',
-        'Mi perfil',
+        'Misiones',
         'Cómo jugar',
         'Trampas',
       ]) {
@@ -293,7 +357,7 @@ void main() {
     expect(tester.takeException(), isNull);
   });
 
-  testWidgets('player card uses the avatar equipped in the shop', (
+  testWidgets('compact profile uses the avatar equipped in the shop', (
     tester,
   ) async {
     _useSpanish();
@@ -310,7 +374,7 @@ void main() {
 
     expect(
       find.descendant(
-        of: find.byKey(const ValueKey('home-game-hero')),
+        of: find.byKey(const ValueKey('home-profile-button')),
         matching: find.byKey(const ValueKey('home-avatar-avatar_ninja')),
       ),
       findsOneWidget,
@@ -318,7 +382,7 @@ void main() {
     expect(tester.takeException(), isNull);
   });
 
-  testWidgets('player card and Mi perfil open the same compact dialog', (
+  testWidgets('compact profile button opens the profile dialog', (
     tester,
   ) async {
     _useSpanish();
@@ -331,23 +395,11 @@ void main() {
 
     await _pumpLoadedHome(tester);
 
-    await tester.tap(find.byKey(const ValueKey('home-game-hero')));
+    await tester.tap(find.byKey(const ValueKey('home-profile-button')));
     await _expectProfileDialog(tester);
     await tester.tap(find.byKey(const ValueKey('home-profile-close')));
     await tester.pump();
     await tester.pump(const Duration(milliseconds: 450));
-    expect(find.byKey(const ValueKey('home-profile-dialog')), findsNothing);
-    expect(find.byType(HomeScreen), findsOneWidget);
-
-    final menuProfile = find.text('Mi perfil');
-    await tester.ensureVisible(menuProfile);
-    await tester.pump(const Duration(milliseconds: 100));
-    await tester.tap(menuProfile);
-    await _expectProfileDialog(tester);
-    await tester.tap(find.byKey(const ValueKey('home-profile-close')));
-    await tester.pump();
-    await tester.pump(const Duration(milliseconds: 450));
-
     expect(find.byKey(const ValueKey('home-profile-dialog')), findsNothing);
     expect(find.byType(HomeScreen), findsOneWidget);
     expect(find.text('MESA RÁPIDA'), findsOneWidget);
@@ -392,7 +444,7 @@ void main() {
       }
 
       expect(find.byKey(const ValueKey('resume-saved-match-button')), findsOne);
-      expect(find.text('JuanPop 🇩🇴'), findsOneWidget);
+      expect(find.byKey(const ValueKey('home-profile-button')), findsOneWidget);
       expect(find.text('1,800'), findsOneWidget);
       expect(
         find.byKey(const ValueKey('start-contextual-tutorial')),
@@ -400,7 +452,7 @@ void main() {
       );
       expect(analytics.analyticsCollectionEnabled, isTrue);
 
-      await tester.tap(find.byKey(const ValueKey('home-game-hero')));
+      await tester.tap(find.byKey(const ValueKey('home-profile-button')));
       await _expectProfileDialog(tester);
       await tester.ensureVisible(
         find.byKey(const ValueKey('home-profile-delete')),
@@ -419,10 +471,14 @@ void main() {
         find.byKey(const ValueKey('resume-saved-match-button')),
         findsNothing,
       );
-      expect(find.text('¡Listo para jugar!'), findsOneWidget);
+      expect(find.byKey(const ValueKey('home-profile-button')), findsOneWidget);
       expect(
         find.byKey(const ValueKey('home-avatar-avatar_default')),
         findsOne,
+      );
+      expect(
+        find.byKey(const ValueKey('home-profile-sign-up-badge')),
+        findsOneWidget,
       );
       expect(find.text('250'), findsOneWidget);
       expect(
@@ -445,7 +501,7 @@ void main() {
     });
 
     await _pumpLoadedHome(tester);
-    await tester.tap(find.byKey(const ValueKey('home-game-hero')));
+    await tester.tap(find.byKey(const ValueKey('home-profile-button')));
     await _expectProfileDialog(tester);
 
     await tester.tap(find.byKey(const ValueKey('home-profile-edit')));
@@ -478,7 +534,7 @@ void main() {
     });
 
     await _pumpLoadedHome(tester);
-    await tester.tap(find.byKey(const ValueKey('home-game-hero')));
+    await tester.tap(find.byKey(const ValueKey('home-profile-button')));
     await _expectProfileDialog(tester);
     await tester.tap(find.byKey(const ValueKey('home-profile-edit')));
     await tester.pump();
