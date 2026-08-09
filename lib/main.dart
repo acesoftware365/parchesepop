@@ -80,6 +80,8 @@ const int activeMatchBoardLayoutVersion = 4;
 
 const String settingsRollGuideKey = 'settings_roll_guide';
 const String settingsDiceHandKey = 'settings_dice_hand';
+const String diceRollGuideHandAsset = 'assets/images/dice_hand_roll.png';
+const String diceRollGuideReleaseAsset = 'assets/images/dice_hand_release.png';
 const AppFeatureRollout appFeatureRollout = AppFeatureRollout.safeDefaults;
 // Retained only in debug/test builds for the existing ad diagnostics. Release
 // builds use the single post-match "double reward" offer.
@@ -5746,6 +5748,7 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
     final isLeaving =
         state == AppLifecycleState.inactive ||
         state == AppLifecycleState.paused ||
+        state == AppLifecycleState.hidden ||
         state == AppLifecycleState.detached;
     if (isLeaving) {
       if (state == AppLifecycleState.detached) {
@@ -16912,6 +16915,7 @@ class GameControlPanel extends StatelessWidget {
         !engine.hasRolled &&
         !engine.gameOver &&
         !engine.effectResolving;
+    final showRollGuide = rollGuideEnabled && rollGuideVisible && canRollDice;
 
     void rollDice() {
       if (!canRollDice) return;
@@ -17062,7 +17066,7 @@ class GameControlPanel extends StatelessWidget {
       ),
     );
     final guidedMobileDice = _DiceRollGuideTarget(
-      visible: rollGuideEnabled && rollGuideVisible && canRollDice,
+      visible: showRollGuide,
       pulseSerial: rollGuidePulseSerial,
       hand: diceHandPreference,
       child: dice,
@@ -17519,18 +17523,52 @@ class GameControlPanel extends StatelessWidget {
                               ),
                             ),
                             const SizedBox(height: 5),
-                            FittedBox(
-                              fit: BoxFit.scaleDown,
-                              child: guidedMobileDice,
-                            ),
-                            if (engine.isChaos) ...[
-                              const SizedBox(height: 5),
-                              SizedBox(
-                                height: 40,
-                                width: double.infinity,
-                                child: portraitItem,
+                            SizedBox(
+                              key: const ValueKey('portrait-dice-hand-stage'),
+                              height: navigatorWidth,
+                              width: double.infinity,
+                              child: Stack(
+                                fit: StackFit.expand,
+                                children: [
+                                  _DiceRollGuideTarget(
+                                    visible: showRollGuide,
+                                    pulseSerial: rollGuidePulseSerial,
+                                    hand: diceHandPreference,
+                                    expandedStage: true,
+                                    child: Center(
+                                      child: Column(
+                                        mainAxisSize: MainAxisSize.min,
+                                        children: [
+                                          FittedBox(
+                                            fit: BoxFit.scaleDown,
+                                            child: dice,
+                                          ),
+                                          if (engine.isChaos &&
+                                              !showRollGuide) ...[
+                                            const SizedBox(height: 5),
+                                            SizedBox(
+                                              height: 40,
+                                              width: double.infinity,
+                                              child: portraitItem,
+                                            ),
+                                          ],
+                                        ],
+                                      ),
+                                    ),
+                                  ),
+                                  if (engine.isChaos &&
+                                      showRollGuide &&
+                                      canUseHeldPower)
+                                    Positioned(
+                                      left: 0,
+                                      right: 0,
+                                      bottom: 0,
+                                      height: 40,
+                                      child: portraitItem,
+                                    ),
+                                ],
                               ),
-                            ],
+                            ),
                           ],
                         ),
                       ),
@@ -17828,21 +17866,37 @@ class _DiceRollGuideTarget extends StatelessWidget {
     required this.visible,
     required this.pulseSerial,
     required this.hand,
+    this.expandedStage = false,
   });
 
   final Widget child;
   final bool visible;
   final int pulseSerial;
   final DiceHandPreference hand;
+  final bool expandedStage;
 
   @override
   Widget build(BuildContext context) {
     final reduceMotion =
         MediaQuery.maybeOf(context)?.disableAnimations ?? false;
+    final stagedChild = reduceMotion
+        ? Opacity(
+            opacity: visible ? 0 : 1,
+            alwaysIncludeSemantics: true,
+            child: child,
+          )
+        : AnimatedOpacity(
+            duration: const Duration(milliseconds: 180),
+            curve: Curves.easeOut,
+            opacity: visible ? 0 : 1,
+            alwaysIncludeSemantics: true,
+            child: child,
+          );
     return Stack(
-      clipBehavior: Clip.none,
+      fit: expandedStage ? StackFit.expand : StackFit.loose,
+      clipBehavior: expandedStage ? Clip.hardEdge : Clip.none,
       children: [
-        child,
+        stagedChild,
         if (visible)
           Positioned.fill(
             child: ExcludeSemantics(
@@ -17850,12 +17904,16 @@ class _DiceRollGuideTarget extends StatelessWidget {
                 child: KeyedSubtree(
                   key: const ValueKey('dice-roll-guide'),
                   child: reduceMotion
-                      ? _StaticDiceRollGuide(hand: hand)
+                      ? _StaticDiceRollGuide(
+                          hand: hand,
+                          expandedStage: expandedStage,
+                        )
                       : _RepeatingDiceRollGuide(
                           key: ValueKey(
                             'dice-roll-guide-pulse-$pulseSerial-${hand.name}',
                           ),
                           hand: hand,
+                          expandedStage: expandedStage,
                         ),
                 ),
               ),
@@ -17867,9 +17925,14 @@ class _DiceRollGuideTarget extends StatelessWidget {
 }
 
 class _RepeatingDiceRollGuide extends StatefulWidget {
-  const _RepeatingDiceRollGuide({super.key, required this.hand});
+  const _RepeatingDiceRollGuide({
+    super.key,
+    required this.hand,
+    required this.expandedStage,
+  });
 
   final DiceHandPreference hand;
+  final bool expandedStage;
 
   @override
   State<_RepeatingDiceRollGuide> createState() =>
@@ -17885,7 +17948,7 @@ class _RepeatingDiceRollGuideState extends State<_RepeatingDiceRollGuide>
     super.initState();
     controller = AnimationController(
       vsync: this,
-      duration: const Duration(milliseconds: 1450),
+      duration: const Duration(milliseconds: 2100),
     )..repeat();
   }
 
@@ -17900,9 +17963,19 @@ class _RepeatingDiceRollGuideState extends State<_RepeatingDiceRollGuide>
     animation: controller,
     builder: (context, _) {
       final progress = controller.value;
-      final touchProgress = progress < .72 ? progress / .72 : 0.0;
-      final reach = math.sin(math.pi * touchProgress.clamp(0.0, 1.0));
-      return _AnimatedDiceRollGuide(hand: widget.hand, reach: reach);
+      final reach = switch (progress) {
+        < .12 => .72 + .28 * Curves.easeOutCubic.transform(progress / .12),
+        < .66 => 1.0,
+        < .82 =>
+          .72 + .28 * Curves.easeOutCubic.transform((.82 - progress) / .16),
+        _ => .72,
+      };
+      return _AnimatedDiceRollGuide(
+        hand: widget.hand,
+        reach: reach,
+        phase: progress,
+        expandedStage: widget.expandedStage,
+      );
     },
   );
 }
@@ -18096,77 +18169,120 @@ class _TokenChoiceGuideVisual extends StatelessWidget {
 }
 
 class _AnimatedDiceRollGuide extends StatelessWidget {
-  const _AnimatedDiceRollGuide({required this.hand, required this.reach});
+  const _AnimatedDiceRollGuide({
+    required this.hand,
+    required this.reach,
+    required this.phase,
+    required this.expandedStage,
+  });
 
   final DiceHandPreference hand;
   final double reach;
+  final double phase;
+  final bool expandedStage;
 
   @override
   Widget build(BuildContext context) {
     final fromRight = hand == DiceHandPreference.right;
     final easedReach = Curves.easeInOutCubic.transform(reach);
-    final handOpacity = .26 + (.22 * easedReach);
-    final shadowOpacity = .24 + (.18 * easedReach);
-    final horizontalOffset = (1 - easedReach) * (fromRight ? 22.0 : -22.0);
-    final verticalOffset = (1 - easedReach) * 14;
+    final shakeProgress = ((phase - .25) / .28).clamp(0.0, 1.0);
+    final shakeEnvelope = phase >= .25 && phase <= .53
+        ? math.sin(math.pi * shakeProgress)
+        : 0.0;
+    final shake = math.sin(shakeProgress * math.pi * 4) * 4 * shakeEnvelope;
+    final contactProgress = ((phase - .49) / .15).clamp(0.0, 1.0);
+    final contactPulse = phase >= .49 && phase <= .64
+        ? math.sin(math.pi * contactProgress)
+        : 0.0;
+    final releaseBlend = switch (phase) {
+      < .14 => 1.0,
+      < .28 => 1 - Curves.easeInOutCubic.transform((phase - .14) / .14),
+      < .58 => 0.0,
+      < .76 => Curves.easeInOutCubic.transform((phase - .58) / .18),
+      _ => 1.0,
+    };
+    final horizontalOffset =
+        (1 - easedReach) * (fromRight ? -12.0 : 12.0) +
+        (fromRight ? shake : -shake);
+    final verticalOffset = (1 - easedReach) * 12 - contactPulse * 3;
+    final handOpacity = (.44 + (.22 * easedReach)).clamp(.44, .66);
+    final rotation =
+        (fromRight ? 1 : -1) *
+        (shake * math.pi / 185 - (1 - easedReach) * .035);
     return KeyedSubtree(
       key: ValueKey('dice-roll-guide-${hand.name}'),
       child: Stack(
-        clipBehavior: Clip.none,
+        fit: StackFit.expand,
+        clipBehavior: expandedStage ? Clip.hardEdge : Clip.none,
         children: [
           Positioned.fill(
-            child: Opacity(
-              opacity: (.12 + (.14 * easedReach)).clamp(0.0, .26).toDouble(),
-              child: DecoratedBox(
-                decoration: BoxDecoration(
-                  borderRadius: BorderRadius.circular(14),
-                  border: Border.all(
-                    color: const Color(0xFFD9EEFF),
-                    width: 2.5,
-                  ),
-                  boxShadow: const [
-                    BoxShadow(
-                      color: Color(0x553A94FF),
-                      blurRadius: 10,
-                      spreadRadius: 1,
+            child: Align(
+              alignment: const Alignment(.10, -.05),
+              child: FractionallySizedBox(
+                widthFactor: expandedStage ? .72 : .92,
+                heightFactor: expandedStage ? .68 : .92,
+                child: DecoratedBox(
+                  decoration: BoxDecoration(
+                    shape: BoxShape.circle,
+                    gradient: RadialGradient(
+                      colors: [
+                        const Color(
+                          0xFF8FCBFF,
+                        ).withValues(alpha: (.14 + .16 * easedReach)),
+                        Colors.transparent,
+                      ],
                     ),
-                  ],
+                    boxShadow: [
+                      BoxShadow(
+                        color: const Color(
+                          0xFF70B8FF,
+                        ).withValues(alpha: .08 + .12 * easedReach),
+                        blurRadius: expandedStage ? 18 : 10,
+                        spreadRadius: 1,
+                      ),
+                    ],
+                  ),
                 ),
               ),
             ),
           ),
           Positioned.fill(
-            child: CustomPaint(
-              painter: _DiceGuideMotionPainter(
-                intensity: easedReach,
-                fromRight: fromRight,
+            child: Transform.translate(
+              offset: Offset(
+                (fromRight ? shake : -shake) * .65,
+                -contactPulse * 2,
+              ),
+              child: Transform.rotate(
+                angle: rotation * .72,
+                child: CustomPaint(
+                  key: const ValueKey('dice-hand-motion-arcs'),
+                  painter: _DiceGuideMotionPainter(
+                    intensity: easedReach * (.74 + .26 * shakeEnvelope),
+                    fromRight: fromRight,
+                  ),
+                ),
               ),
             ),
           ),
           Positioned.fill(
-            child: Align(
-              alignment: fromRight
-                  ? const Alignment(.62, .68)
-                  : const Alignment(-.62, .68),
+            child: _DiceHandStageFeather(
+              hand: hand,
+              enabled: expandedStage,
               child: Transform.translate(
+                key: const ValueKey('dice-hand-pose'),
                 offset: Offset(horizontalOffset, verticalOffset),
                 child: Transform.rotate(
-                  angle: fromRight ? -.43 : .43,
-                  child: Icon(
-                    Icons.pan_tool_alt_rounded,
-                    color: const Color(
-                      0xFFE7F5FF,
-                    ).withValues(alpha: handOpacity),
-                    size: 65,
-                    shadows: [
-                      Shadow(
-                        color: const Color(
-                          0xFF0A2452,
-                        ).withValues(alpha: shadowOpacity),
-                        blurRadius: 4,
-                        offset: const Offset(0, 2),
+                  angle: rotation,
+                  child: Transform.scale(
+                    scale: .92 + .08 * easedReach + .018 * contactPulse,
+                    child: Opacity(
+                      opacity: handOpacity,
+                      child: _DiceRollHandArtwork(
+                        hand: hand,
+                        expandedStage: expandedStage,
+                        releaseBlend: releaseBlend,
                       ),
-                    ],
+                    ),
                   ),
                 ),
               ),
@@ -18179,35 +18295,173 @@ class _AnimatedDiceRollGuide extends StatelessWidget {
 }
 
 class _StaticDiceRollGuide extends StatelessWidget {
-  const _StaticDiceRollGuide({required this.hand});
+  const _StaticDiceRollGuide({required this.hand, required this.expandedStage});
 
   final DiceHandPreference hand;
+  final bool expandedStage;
 
   @override
   Widget build(BuildContext context) => KeyedSubtree(
     key: ValueKey('dice-roll-guide-static-${hand.name}'),
-    child: Align(
-      alignment: hand == DiceHandPreference.right
-          ? const Alignment(.62, .68)
-          : const Alignment(-.62, .68),
-      child: Container(
-        width: 54,
-        height: 54,
-        decoration: BoxDecoration(
-          shape: BoxShape.circle,
-          color: const Color(0x143A94FF),
-          border: Border.all(color: const Color(0x5CD9EEFF), width: 2),
-          boxShadow: const [
-            BoxShadow(color: Color(0x293A94FF), blurRadius: 12),
-          ],
+    child: Stack(
+      fit: StackFit.expand,
+      children: [
+        const Positioned.fill(
+          child: DecoratedBox(
+            decoration: BoxDecoration(
+              gradient: RadialGradient(
+                colors: [Color(0x2970B8FF), Colors.transparent],
+              ),
+            ),
+          ),
         ),
-        child: const Icon(
-          Icons.touch_app_rounded,
-          color: Color(0x66E7F5FF),
-          size: 30,
+        Positioned.fill(
+          child: _DiceHandStageFeather(
+            hand: hand,
+            enabled: expandedStage,
+            child: Opacity(
+              key: const ValueKey('dice-hand-static'),
+              opacity: .72,
+              child: _DiceRollHandArtwork(
+                hand: hand,
+                expandedStage: expandedStage,
+                releaseBlend: 1,
+              ),
+            ),
+          ),
         ),
-      ),
+      ],
     ),
+  );
+}
+
+class _DiceHandStageFeather extends StatelessWidget {
+  const _DiceHandStageFeather({
+    required this.hand,
+    required this.enabled,
+    required this.child,
+  });
+
+  final DiceHandPreference hand;
+  final bool enabled;
+  final Widget child;
+
+  @override
+  Widget build(BuildContext context) {
+    if (!enabled) return child;
+    final fromRight = hand == DiceHandPreference.right;
+    return ShaderMask(
+      key: const ValueKey('dice-hand-wrist-bottom-feather'),
+      blendMode: BlendMode.dstIn,
+      shaderCallback: (bounds) => const LinearGradient(
+        begin: Alignment.topCenter,
+        end: Alignment.bottomCenter,
+        colors: [Colors.white, Colors.white, Colors.transparent],
+        stops: [0, .82, 1],
+      ).createShader(bounds),
+      child: ShaderMask(
+        key: const ValueKey('dice-hand-wrist-side-feather'),
+        blendMode: BlendMode.dstIn,
+        shaderCallback: (bounds) => LinearGradient(
+          begin: fromRight ? Alignment.centerLeft : Alignment.centerRight,
+          end: fromRight ? Alignment.centerRight : Alignment.centerLeft,
+          colors: const [
+            Colors.transparent,
+            Colors.transparent,
+            Colors.white,
+            Colors.white,
+          ],
+          stops: const [0, .10, .28, .42],
+        ).createShader(bounds),
+        child: child,
+      ),
+    );
+  }
+}
+
+class _DiceRollHandArtwork extends StatelessWidget {
+  const _DiceRollHandArtwork({
+    required this.hand,
+    required this.expandedStage,
+    required this.releaseBlend,
+  });
+
+  final DiceHandPreference hand;
+  final bool expandedStage;
+  final double releaseBlend;
+
+  @override
+  Widget build(BuildContext context) => LayoutBuilder(
+    builder: (context, constraints) {
+      final width = constraints.hasBoundedWidth ? constraints.maxWidth : 120.0;
+      final height = constraints.hasBoundedHeight
+          ? constraints.maxHeight
+          : 72.0;
+      final artSize = expandedStage
+          ? math.max(width, height * 1.27)
+          : math.max(width * 1.34, height * 2.05);
+      return Align(
+        alignment: expandedStage
+            ? const Alignment(.24, .18)
+            : const Alignment(-.04, .12),
+        child: Transform.translate(
+          offset: Offset(
+            expandedStage ? (hand == DiceHandPreference.right ? -16 : 16) : 0,
+            expandedStage ? 5 : 0,
+          ),
+          child: SizedBox.square(
+            dimension: artSize,
+            child: Transform(
+              key: ValueKey('dice-hand-art-${hand.name}'),
+              alignment: Alignment.center,
+              transform: Matrix4.diagonal3Values(
+                (hand == DiceHandPreference.right ? 1 : -1) *
+                    (expandedStage ? 1.20 : 1.06),
+                expandedStage ? 1.05 : 1,
+                1,
+              ),
+              child: Stack(
+                fit: StackFit.expand,
+                children: [
+                  Opacity(
+                    key: const ValueKey('dice-hand-grip-layer'),
+                    opacity: 1 - releaseBlend,
+                    child: Image.asset(
+                      diceRollGuideHandAsset,
+                      key: const ValueKey('dice-hand-art'),
+                      fit: BoxFit.contain,
+                      filterQuality: FilterQuality.high,
+                      isAntiAlias: true,
+                      gaplessPlayback: true,
+                      errorBuilder: (context, error, stackTrace) =>
+                          const Center(
+                            child: Icon(
+                              Icons.touch_app_rounded,
+                              color: Color(0x99E7F5FF),
+                              size: 44,
+                            ),
+                          ),
+                    ),
+                  ),
+                  Opacity(
+                    key: const ValueKey('dice-hand-release-layer'),
+                    opacity: releaseBlend,
+                    child: Image.asset(
+                      diceRollGuideReleaseAsset,
+                      key: const ValueKey('dice-hand-release-art'),
+                      fit: BoxFit.contain,
+                      filterQuality: FilterQuality.high,
+                      isAntiAlias: true,
+                      gaplessPlayback: true,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ),
+      );
+    },
   );
 }
 
@@ -18228,35 +18482,33 @@ class _DiceGuideMotionPainter extends CustomPainter {
       canvas.translate(size.width, 0);
       canvas.scale(-1, 1);
     }
+    final glowPaint = Paint()
+      ..color = const Color(0xFFD9EEFF).withValues(alpha: .18 * intensity)
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 5
+      ..strokeCap = StrokeCap.round
+      ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 4);
     final paint = Paint()
-      ..color = const Color(0xFFD9EEFF).withValues(alpha: .24 * intensity)
+      ..color = const Color(0xFFD9EEFF).withValues(alpha: .34 * intensity)
       ..style = PaintingStyle.stroke
       ..strokeWidth = 1.8
       ..strokeCap = StrokeCap.round;
-    canvas.drawArc(
-      Rect.fromLTWH(
-        size.width * .42,
-        -size.height * .04,
-        size.width * .50,
-        size.height * .78,
-      ),
-      -.92,
-      .66,
-      false,
-      paint,
+    final outerArc = Rect.fromLTWH(
+      size.width * .22,
+      -size.height * .04,
+      size.width * .58,
+      size.height * .70,
     );
-    canvas.drawArc(
-      Rect.fromLTWH(
-        size.width * .53,
-        size.height * .08,
-        size.width * .40,
-        size.height * .66,
-      ),
-      -.95,
-      .48,
-      false,
-      paint..strokeWidth = 1.2,
+    final innerArc = Rect.fromLTWH(
+      size.width * .31,
+      size.height * .05,
+      size.width * .44,
+      size.height * .56,
     );
+    canvas.drawArc(outerArc, -.98, .72, false, glowPaint);
+    canvas.drawArc(outerArc, -.98, .72, false, paint);
+    canvas.drawArc(innerArc, -1.04, .50, false, glowPaint..strokeWidth = 3.5);
+    canvas.drawArc(innerArc, -1.04, .50, false, paint..strokeWidth = 1.25);
     canvas.restore();
   }
 

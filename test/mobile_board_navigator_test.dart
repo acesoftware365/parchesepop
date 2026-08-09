@@ -616,6 +616,54 @@ void main() {
     await tester.pump(const Duration(milliseconds: 900));
     expect(find.byKey(const ValueKey('dice-roll-guide')), findsOneWidget);
     expect(find.byKey(const ValueKey('dice-roll-guide-right')), findsOneWidget);
+    expect(find.byKey(const ValueKey('dice-hand-art')), findsOneWidget);
+    expect(find.byKey(const ValueKey('dice-hand-release-art')), findsOneWidget);
+    final handImage = tester.widget<Image>(
+      find.byKey(const ValueKey('dice-hand-art')),
+    );
+    final releaseImage = tester.widget<Image>(
+      find.byKey(const ValueKey('dice-hand-release-art')),
+    );
+    expect(handImage.image, isA<AssetImage>());
+    expect(releaseImage.image, isA<AssetImage>());
+    expect((handImage.image as AssetImage).assetName, diceRollGuideHandAsset);
+    expect(
+      (releaseImage.image as AssetImage).assetName,
+      diceRollGuideReleaseAsset,
+    );
+    final bottomFeather = tester.widget<ShaderMask>(
+      find.byKey(const ValueKey('dice-hand-wrist-bottom-feather')),
+    );
+    final sideFeather = tester.widget<ShaderMask>(
+      find.byKey(const ValueKey('dice-hand-wrist-side-feather')),
+    );
+    expect(bottomFeather.blendMode, BlendMode.dstIn);
+    expect(sideFeather.blendMode, BlendMode.dstIn);
+    final gripOpacityBefore = tester
+        .widget<Opacity>(find.byKey(const ValueKey('dice-hand-grip-layer')))
+        .opacity;
+    final releaseOpacityBefore = tester
+        .widget<Opacity>(find.byKey(const ValueKey('dice-hand-release-layer')))
+        .opacity;
+    expect(gripOpacityBefore + releaseOpacityBefore, closeTo(1, .001));
+    expect(releaseOpacityBefore, greaterThan(gripOpacityBefore));
+    await tester.pump(const Duration(milliseconds: 600));
+    final gripOpacityAfter = tester
+        .widget<Opacity>(find.byKey(const ValueKey('dice-hand-grip-layer')))
+        .opacity;
+    final releaseOpacityAfter = tester
+        .widget<Opacity>(find.byKey(const ValueKey('dice-hand-release-layer')))
+        .opacity;
+    expect(gripOpacityAfter + releaseOpacityAfter, closeTo(1, .001));
+    expect(gripOpacityAfter, greaterThan(releaseOpacityAfter));
+    expect(releaseOpacityAfter, isNot(closeTo(releaseOpacityBefore, .01)));
+    final handStage = tester.getRect(
+      find.byKey(const ValueKey('portrait-dice-hand-stage')),
+    );
+    final minimapColumn = tester.getRect(
+      find.byKey(const ValueKey('portrait-minimap-column')),
+    );
+    expect(handStage.right, lessThanOrEqualTo(minimapColumn.left));
     expect(
       find.byKey(const ValueKey('dice-roll-target')).hitTestable(),
       findsOne,
@@ -652,6 +700,10 @@ void main() {
 
     expect(find.byKey(const ValueKey('dice-roll-guide-left')), findsOneWidget);
     expect(find.byKey(const ValueKey('dice-roll-guide-right')), findsNothing);
+    final mirroredHand = tester.widget<Transform>(
+      find.byKey(const ValueKey('dice-hand-art-left')),
+    );
+    expect(mirroredHand.transform.storage[0], lessThan(0));
     expect(tester.takeException(), isNull);
   });
 
@@ -673,6 +725,37 @@ void main() {
       find.byKey(const ValueKey('dice-roll-target')).hitTestable(),
       findsOne,
     );
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('the roll guide keeps a held Turbo visible and tappable', (
+    tester,
+  ) async {
+    SharedPreferences.setMockInitialValues({settingsRollGuideKey: true});
+    _useViewport(tester, const Size(402, 707));
+    final engine = GameEngine(mode: GameMode.chaos);
+    final wallet = await WalletController.create();
+    engine.currentPlayer.inventory = PowerUp.boost;
+    addTearDown(engine.dispose);
+    addTearDown(wallet.dispose);
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: GameScreen(
+          opponent: 'CPU • Fácil',
+          mode: GameMode.chaos,
+          gameEngine: engine,
+          wallet: wallet,
+        ),
+      ),
+    );
+    await tester.pump(const Duration(seconds: 1));
+
+    expect(find.byKey(const ValueKey('dice-roll-guide')), findsOneWidget);
+    final itemAction = find.byKey(const ValueKey('item-action'));
+    expect(itemAction, findsOneWidget);
+    expect(itemAction.hitTestable(), findsOneWidget);
+    expect(tester.widget<OutlinedButton>(itemAction).onPressed, isNotNull);
     expect(tester.takeException(), isNull);
   });
 
@@ -705,9 +788,25 @@ void main() {
     expect(
       find.descendant(
         of: find.byKey(const ValueKey('dice-roll-guide')),
-        matching: find.byType(TweenAnimationBuilder<double>),
+        matching: find.byType(AnimatedBuilder),
       ),
       findsNothing,
+    );
+    expect(find.byKey(const ValueKey('dice-hand-static')), findsOneWidget);
+    expect(find.byKey(const ValueKey('dice-hand-art')), findsOneWidget);
+    expect(
+      tester
+          .widget<Opacity>(find.byKey(const ValueKey('dice-hand-grip-layer')))
+          .opacity,
+      0,
+    );
+    expect(
+      tester
+          .widget<Opacity>(
+            find.byKey(const ValueKey('dice-hand-release-layer')),
+          )
+          .opacity,
+      1,
     );
     expect(tester.takeException(), isNull);
   });
