@@ -80,8 +80,9 @@ const int activeMatchBoardLayoutVersion = 4;
 
 const String settingsRollGuideKey = 'settings_roll_guide';
 const String settingsDiceHandKey = 'settings_dice_hand';
-const String diceRollGuideHandAsset = 'assets/images/dice_hand_roll.png';
-const String diceRollGuideReleaseAsset = 'assets/images/dice_hand_release.png';
+const String diceRollGuideHandAsset = 'assets/images/dice_hand_grip_empty.png';
+const String diceRollGuideReleaseAsset =
+    'assets/images/dice_hand_release_empty.png';
 const AppFeatureRollout appFeatureRollout = AppFeatureRollout.safeDefaults;
 // Retained only in debug/test builds for the existing ad diagnostics. Release
 // builds use the single post-match "double reward" offer.
@@ -5392,6 +5393,10 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
   int completedGuidedRolls = 0;
   int? rollGuideArmedTurn;
   Timer? rollGuideDelayTimer;
+  bool diceThrowInProgress = false;
+  int diceThrowSerial = 0;
+  (int, int)? diceThrowResult;
+  Timer? diceThrowTimer;
 
   bool get _isLocallyControlledTurn =>
       engine.currentPlayer.isHuman && !localCpuTakeoverActive;
@@ -5456,6 +5461,7 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
 
   GameToken? get _tokenChoiceGuideTarget {
     if (!rollGuideAppActive ||
+        diceThrowInProgress ||
         !_isLocallyControlledTurn ||
         !engine.hasRolled ||
         engine.gameOver ||
@@ -5495,6 +5501,7 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
 
   GameToken? get _tokenChoicePromptTarget {
     if (!_isLocallyControlledTurn ||
+        diceThrowInProgress ||
         !engine.hasRolled ||
         engine.gameOver ||
         engine.effectResolving ||
@@ -5736,6 +5743,7 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
     chatReactionTimer?.cancel();
     eventChatTimer?.cancel();
     matchClockTimer?.cancel();
+    diceThrowTimer?.cancel();
     _cancelRollGuide(notify: false);
     widget.wallet?.removeListener(_onWalletChanged);
     engine.removeListener(_onGameChanged);
@@ -5760,6 +5768,10 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
         }
       }
       rollGuideAppActive = false;
+      diceThrowTimer?.cancel();
+      diceThrowTimer = null;
+      diceThrowInProgress = false;
+      diceThrowResult = null;
       _cancelRollGuide(resetWindow: true, notify: false);
       mobileBoardCameraMode = _MobileBoardCameraMode.fullBoard;
       unawaited(_saveMatchCheckpoint());
@@ -5775,6 +5787,28 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
       unawaited(_saveMatchCheckpoint());
       unawaited(_loadRollGuidePreferences(rearm: true));
       MobileAdsScope.maybeOf(context)?.preloadRewarded();
+      if (_isLocallyControlledTurn &&
+          engine.matchFormat == MatchFormat.quickPop &&
+          engine.hasRolled &&
+          !engine.gameOver &&
+          !engine.effectResolving) {
+        final command = engine.uniqueLegalMoveCommand;
+        if (command != null) {
+          diceThrowTimer?.cancel();
+          diceThrowTimer = Timer(const Duration(milliseconds: 80), () {
+            if (!mounted ||
+                !_isLocallyControlledTurn ||
+                engine.gameOver ||
+                engine.effectResolving) {
+              return;
+            }
+            final resumedCommand = engine.uniqueLegalMoveCommand;
+            if (resumedCommand != null) {
+              engine.executeMoveCommand(resumedCommand);
+            }
+          });
+        }
+      }
       if (mounted) setState(() {});
     }
   }
@@ -5786,7 +5820,8 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
       _isLocallyControlledTurn &&
       !engine.hasRolled &&
       !engine.gameOver &&
-      !engine.effectResolving;
+      !engine.effectResolving &&
+      !diceThrowInProgress;
 
   Future<void> _loadRollGuidePreferences({bool rearm = false}) async {
     final store = await SharedPreferences.getInstance();
@@ -5848,30 +5883,59 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
   void _rollDiceFromHud() {
     if (!_tutorialAllowsRoll ||
         !_isLocallyControlledTurn ||
+        diceThrowInProgress ||
         engine.hasRolled ||
         engine.gameOver ||
         engine.effectResolving) {
       return;
     }
+    final reduceMotion =
+        MediaQuery.maybeOf(context)?.disableAnimations ?? false;
     _cancelRollGuide(notify: false);
     if (rollGuideEnabled) {
       completedGuidedRolls = math.min(completedGuidedRolls + 1, 2);
     }
+    diceThrowTimer?.cancel();
+    if (!reduceMotion) {
+      setState(() {
+        diceThrowInProgress = true;
+        diceThrowResult = null;
+        diceThrowSerial++;
+      });
+    }
     engine.roll();
-    if (engine.matchFormat == MatchFormat.quickPop) {
-      final command = engine.uniqueLegalMoveCommand;
-      if (command != null) {
-        final reduceMotion =
-            MediaQuery.maybeOf(context)?.disableAnimations ?? false;
-        Future<void>.delayed(
-          Duration(milliseconds: reduceMotion ? 80 : 620),
-          () {
-            if (!mounted || engine.gameOver || engine.effectResolving) return;
-            engine.executeMoveCommand(command);
-          },
-        );
+    (int, int) rolledResult = (engine.dice[0], engine.dice[1]);
+    for (final event in engine.eventHistory.reversed) {
+      if (event.type == GameEventType.roll && event.dice != null) {
+        rolledResult = event.dice!;
+        break;
       }
     }
+    final quickPopCommand = engine.matchFormat == MatchFormat.quickPop
+        ? engine.uniqueLegalMoveCommand
+        : null;
+    if (reduceMotion) {
+      if (quickPopCommand != null) {
+        diceThrowTimer = Timer(const Duration(milliseconds: 80), () {
+          if (!mounted || engine.gameOver || engine.effectResolving) return;
+          engine.executeMoveCommand(quickPopCommand);
+        });
+      }
+      return;
+    }
+    if (mounted) {
+      setState(() => diceThrowResult = rolledResult);
+    }
+    final activeThrow = diceThrowSerial;
+    diceThrowTimer = Timer(const Duration(milliseconds: 620), () {
+      if (!mounted || activeThrow != diceThrowSerial) return;
+      setState(() => diceThrowInProgress = false);
+      if (quickPopCommand != null &&
+          !engine.gameOver &&
+          !engine.effectResolving) {
+        engine.executeMoveCommand(quickPopCommand);
+      }
+    });
   }
 
   Future<void> _openGameSettings() async {
@@ -7464,7 +7528,8 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
                     final mobileBoardTools = compactPhoneBoard && !sideBySide;
                     final interactionState = GameInteractionState.derive(
                       engine: engine,
-                      isLocallyControlledTurn: _isLocallyControlledTurn,
+                      isLocallyControlledTurn:
+                          _isLocallyControlledTurn && !diceThrowInProgress,
                       selectedToken: selectedToken,
                     );
                     const railGap = 4.0;
@@ -7489,14 +7554,16 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
                         sideBySide &&
                         box.maxHeight <= 430 &&
                         availableRailWidth >= 330;
-                    final selectedMovePreviews =
-                        _visibleMoveDestinationPreviews(
-                          selectedToken,
-                        ).where((preview) => !preview.overview).toList();
+                    final selectedMovePreviews = diceThrowInProgress
+                        ? const <MoveDestinationPreview>[]
+                        : _visibleMoveDestinationPreviews(
+                            selectedToken,
+                          ).where((preview) => !preview.overview).toList();
                     final mobileMoveChoicesVisible =
                         mobileBoardTools && selectedMovePreviews.isNotEmpty;
                     final mobileTurnDecisionVisible =
                         mobileBoardTools &&
+                        !diceThrowInProgress &&
                         _isLocallyControlledTurn &&
                         !engine.gameOver &&
                         (engine.hasRolled || engine.effectResolving);
@@ -7683,6 +7750,13 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
                         ),
                       ),
                     );
+                    final boardInteractionLayer = IgnorePointer(
+                      key: const ValueKey('game-board-interaction-lock'),
+                      ignoring: diceThrowInProgress,
+                      child: diceThrowInProgress
+                          ? ExcludeSemantics(child: boardHitPlane)
+                          : boardHitPlane,
+                    );
                     final board = TapRegion(
                       groupId: moveSelectionTapGroup,
                       onTapOutside: (_) => _cancelTokenSelection(),
@@ -7699,10 +7773,10 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
                                   alignment: Alignment.topLeft,
                                   transform: cameraTransform,
                                   transformHitTests: true,
-                                  child: boardHitPlane,
+                                  child: boardInteractionLayer,
                                 ),
                               )
-                            : boardHitPlane,
+                            : boardInteractionLayer,
                       ),
                     );
                     final mobileBoardNavigator = mobileBoardTools
@@ -7743,11 +7817,16 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
                       onCancelSelection: _cancelTokenSelection,
                       onRollRequested: _rollDiceFromHud,
                       rollEnabled:
-                          interactionState.canRollDice && _tutorialAllowsRoll,
+                          interactionState.canRollDice &&
+                          _tutorialAllowsRoll &&
+                          !diceThrowInProgress,
                       rollGuideEnabled: rollGuideEnabled,
                       rollGuideVisible: rollGuideVisible,
                       rollGuidePulseSerial: rollGuidePulseSerial,
                       diceHandPreference: diceHandPreference,
+                      diceThrowInProgress: diceThrowInProgress,
+                      diceThrowSerial: diceThrowSerial,
+                      diceThrowResult: diceThrowResult,
                       onShowChat: widget.onlineSession == null
                           ? null
                           : _showSafeChatPicker,
@@ -7842,6 +7921,12 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
                                                           rollGuidePulseSerial,
                                                       diceHandPreference:
                                                           diceHandPreference,
+                                                      diceThrowInProgress:
+                                                          diceThrowInProgress,
+                                                      diceThrowSerial:
+                                                          diceThrowSerial,
+                                                      diceThrowResult:
+                                                          diceThrowResult,
                                                       onShowPowers:
                                                           _showPowerStatus,
                                                       onShowChat:
@@ -7930,6 +8015,12 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
                                                       rollGuidePulseSerial,
                                                   diceHandPreference:
                                                       diceHandPreference,
+                                                  diceThrowInProgress:
+                                                      diceThrowInProgress,
+                                                  diceThrowSerial:
+                                                      diceThrowSerial,
+                                                  diceThrowResult:
+                                                      diceThrowResult,
                                                   onShowPowers:
                                                       _showPowerStatus,
                                                   onShowChat:
@@ -7965,32 +8056,30 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
                               children: [
                                 quickBar,
                                 const SizedBox(height: 3),
-                                Expanded(
+                                SizedBox.square(
                                   key: const ValueKey('mobile-board-stage'),
-                                  child: Align(
-                                    alignment: Alignment.topCenter,
-                                    child: FittedBox(
-                                      fit: BoxFit.contain,
-                                      alignment: Alignment.topCenter,
-                                      child: board,
-                                    ),
-                                  ),
+                                  dimension: boardSize,
+                                  child: board,
                                 ),
-                                Padding(
-                                  padding: const EdgeInsets.all(4),
-                                  child: Stack(
-                                    clipBehavior: Clip.none,
-                                    children: [
-                                      panel,
-                                      if (spectatorBar ?? chatBanner
-                                          case final overlay?)
-                                        Positioned(
-                                          left: 0,
-                                          top: 0,
-                                          right: 0,
-                                          child: overlay,
-                                        ),
-                                    ],
+                                Expanded(
+                                  key: const ValueKey('mobile-hud-slot'),
+                                  child: Padding(
+                                    padding: const EdgeInsets.all(4),
+                                    child: Stack(
+                                      fit: StackFit.expand,
+                                      clipBehavior: Clip.none,
+                                      children: [
+                                        panel,
+                                        if (spectatorBar ?? chatBanner
+                                            case final overlay?)
+                                          Positioned(
+                                            left: 0,
+                                            top: 0,
+                                            right: 0,
+                                            child: overlay,
+                                          ),
+                                      ],
+                                    ),
                                   ),
                                 ),
                               ],
@@ -9716,6 +9805,9 @@ class _GameSideRail extends StatefulWidget {
     required this.rollGuideVisible,
     required this.rollGuidePulseSerial,
     required this.diceHandPreference,
+    required this.diceThrowInProgress,
+    required this.diceThrowSerial,
+    required this.diceThrowResult,
     required this.onShowPowers,
     this.onShowChat,
     this.onCustomize,
@@ -9738,6 +9830,9 @@ class _GameSideRail extends StatefulWidget {
   final bool rollGuideVisible;
   final int rollGuidePulseSerial;
   final DiceHandPreference diceHandPreference;
+  final bool diceThrowInProgress;
+  final int diceThrowSerial;
+  final (int, int)? diceThrowResult;
   final VoidCallback onShowPowers;
   final VoidCallback? onShowChat;
   final VoidCallback? onCustomize;
@@ -9799,6 +9894,9 @@ class _GameSideRailState extends State<_GameSideRail> {
                     rollGuideVisible: widget.rollGuideVisible,
                     rollGuidePulseSerial: widget.rollGuidePulseSerial,
                     diceHandPreference: widget.diceHandPreference,
+                    diceThrowInProgress: widget.diceThrowInProgress,
+                    diceThrowSerial: widget.diceThrowSerial,
+                    diceThrowResult: widget.diceThrowResult,
                     onShowChat: widget.onShowChat,
                     onCustomize: widget.onCustomize,
                     compact: true,
@@ -9830,6 +9928,9 @@ class _GameSideRailState extends State<_GameSideRail> {
                     rollGuideVisible: widget.rollGuideVisible,
                     rollGuidePulseSerial: widget.rollGuidePulseSerial,
                     diceHandPreference: widget.diceHandPreference,
+                    diceThrowInProgress: widget.diceThrowInProgress,
+                    diceThrowSerial: widget.diceThrowSerial,
+                    diceThrowResult: widget.diceThrowResult,
                     onShowChat: widget.onShowChat,
                     onCustomize: widget.onCustomize,
                     compact: true,
@@ -16773,6 +16874,9 @@ class GameControlPanel extends StatelessWidget {
     this.rollGuideVisible = false,
     this.rollGuidePulseSerial = 0,
     this.diceHandPreference = DiceHandPreference.right,
+    this.diceThrowInProgress = false,
+    this.diceThrowSerial = 0,
+    this.diceThrowResult,
     this.onShowChat,
     this.onCustomize,
     this.compact = false,
@@ -16793,6 +16897,9 @@ class GameControlPanel extends StatelessWidget {
   final bool rollGuideVisible;
   final int rollGuidePulseSerial;
   final DiceHandPreference diceHandPreference;
+  final bool diceThrowInProgress;
+  final int diceThrowSerial;
+  final (int, int)? diceThrowResult;
   final VoidCallback? onShowChat;
   final VoidCallback? onCustomize;
   final bool compact;
@@ -16835,7 +16942,9 @@ class GameControlPanel extends StatelessWidget {
         engine.hasRolled &&
         !engine.effectResolving &&
         engine.remainingDice.contains(20);
-    final phaseLabel = engine.effectResolving
+    final phaseLabel = diceThrowInProgress
+        ? 'Lanzando los dados…'
+        : engine.effectResolving
         ? 'Resolviendo el efecto…'
         : selectedToken != null
         ? moveChoices.contains(20)
@@ -16911,11 +17020,16 @@ class GameControlPanel extends StatelessWidget {
     ];
     final canRollDice =
         rollEnabled &&
+        !diceThrowInProgress &&
         engine.currentPlayer.isHuman &&
         !engine.hasRolled &&
         !engine.gameOver &&
         !engine.effectResolving;
-    final showRollGuide = rollGuideEnabled && rollGuideVisible && canRollDice;
+    final showRollGuide =
+        !diceThrowInProgress &&
+        rollGuideEnabled &&
+        rollGuideVisible &&
+        canRollDice;
 
     void rollDice() {
       if (!canRollDice) return;
@@ -17069,6 +17183,10 @@ class GameControlPanel extends StatelessWidget {
       visible: showRollGuide,
       pulseSerial: rollGuidePulseSerial,
       hand: diceHandPreference,
+      diceStyle: diceStyle,
+      throwing: diceThrowInProgress,
+      throwSerial: diceThrowSerial,
+      throwResult: diceThrowResult,
       child: dice,
     );
     final heldPower = engine.currentPlayer.inventory;
@@ -17376,18 +17494,56 @@ class GameControlPanel extends StatelessWidget {
               PlayerColor.yellow => PopColors.yellow,
               PlayerColor.blue => PopColors.blue,
             };
-            final dicePrompt = selectedToken != null && moveChoices.isNotEmpty
+            final dicePrompt = diceThrowInProgress
+                ? 'Lanzando los dados…'
+                : selectedToken != null && moveChoices.isNotEmpty
                 ? 'Elige ${moveChoices.join(' o ')}'
                 : engine.hasRolled
                 ? 'Elige una ficha'
                 : 'Lanza los dados';
             final isLocalTurn = engine.currentPlayer.isHuman;
-            final navigatorWidth = ((box.maxWidth - 32) * .43)
+            final desiredNavigatorWidth = ((box.maxWidth - 32) * .43)
                 .clamp(128.0, 156.0)
                 .toDouble();
+            final compactPortraitHud =
+                box.hasBoundedHeight && box.maxHeight < 222;
+            final ultraCompactPortraitHud =
+                box.hasBoundedHeight && box.maxHeight < 150;
+            final showPortraitStatus = !ultraCompactPortraitHud;
+            final showPortraitLabels =
+                !box.hasBoundedHeight || box.maxHeight >= 58;
+            final verticalPadding = ultraCompactPortraitHud
+                ? 3.0
+                : compactPortraitHud
+                ? 5.0
+                : 7.0;
+            final sectionGap = compactPortraitHud ? 2.0 : 5.0;
+            final labelHeight = compactPortraitHud ? 14.0 : 18.0;
+            final labelGap = compactPortraitHud ? 2.0 : 5.0;
+            // The board above this panel always keeps its full width. When an
+            // adaptive banner becomes taller, only this secondary HUD stage
+            // contracts to the height still available below the board.
+            final hudChromeHeight =
+                verticalPadding * 2 +
+                (showPortraitStatus ? 44 + sectionGap * 2 + 1 : 0) +
+                (showPortraitLabels ? labelHeight + labelGap : 0);
+            final availableStageHeight = box.hasBoundedHeight
+                ? math.max(0.0, box.maxHeight - hudChromeHeight - 2)
+                : desiredNavigatorWidth;
+            final navigatorWidth = math
+                .min(desiredNavigatorWidth, availableStageHeight)
+                .clamp(0.0, 156.0)
+                .toDouble();
+            final showPortraitItem = engine.isChaos && navigatorWidth >= 112;
+            final showNavigatorHint = navigatorWidth >= 96;
             return Container(
               key: const ValueKey('portrait-game-hud'),
-              padding: const EdgeInsets.fromLTRB(12, 7, 12, 8),
+              padding: EdgeInsets.fromLTRB(
+                12,
+                verticalPadding,
+                12,
+                verticalPadding,
+              ),
               decoration: BoxDecoration(
                 gradient: const LinearGradient(
                   begin: Alignment.topLeft,
@@ -17407,81 +17563,89 @@ class GameControlPanel extends StatelessWidget {
               child: Column(
                 mainAxisSize: MainAxisSize.min,
                 children: [
-                  Row(
-                    key: const ValueKey('portrait-player-status'),
-                    children: [
-                      Container(
-                        width: 34,
-                        height: 34,
-                        padding: const EdgeInsets.all(4),
-                        decoration: BoxDecoration(
-                          color: currentColor,
-                          shape: BoxShape.circle,
-                          border: Border.all(color: Colors.white, width: 2),
-                          boxShadow: [
-                            BoxShadow(
-                              color: currentColor.withValues(alpha: .42),
-                              blurRadius: 7,
-                            ),
-                          ],
-                        ),
-                        child: DecoratedBox(
+                  if (showPortraitStatus) ...[
+                    Row(
+                      key: const ValueKey('portrait-player-status'),
+                      children: [
+                        Container(
+                          width: 34,
+                          height: 34,
+                          padding: const EdgeInsets.all(4),
                           decoration: BoxDecoration(
-                            color: Color.lerp(currentColor, Colors.white, .32),
+                            color: currentColor,
                             shape: BoxShape.circle,
+                            border: Border.all(color: Colors.white, width: 2),
+                            boxShadow: [
+                              BoxShadow(
+                                color: currentColor.withValues(alpha: .42),
+                                blurRadius: 7,
+                              ),
+                            ],
+                          ),
+                          child: DecoratedBox(
+                            decoration: BoxDecoration(
+                              color: Color.lerp(
+                                currentColor,
+                                Colors.white,
+                                .32,
+                              ),
+                              shape: BoxShape.circle,
+                            ),
                           ),
                         ),
-                      ),
-                      const SizedBox(width: 9),
-                      Expanded(
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            _AutoFitSingleLineText(
-                              isLocalTurn
-                                  ? 'Tu movimiento'
-                                  : engine.currentPlayer.name,
-                              style: const TextStyle(
-                                color: Colors.white,
-                                fontSize: 14,
-                                fontWeight: FontWeight.w900,
+                        const SizedBox(width: 9),
+                        Expanded(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              _AutoFitSingleLineText(
+                                isLocalTurn
+                                    ? 'Tu movimiento'
+                                    : engine.currentPlayer.name,
+                                style: const TextStyle(
+                                  color: Colors.white,
+                                  fontSize: 14,
+                                  fontWeight: FontWeight.w900,
+                                ),
                               ),
-                            ),
-                            const SizedBox(height: 2),
-                            _AutoFitSingleLineText(
-                              isLocalTurn
-                                  ? engine.hasRolled
-                                        ? 'Selecciona un dado o revisa el tablero'
-                                        : 'Lanza los dados o revisa el tablero'
-                                  : 'Observa el turno en el tablero',
-                              style: const TextStyle(
-                                color: Color(0xFFB8C1D2),
-                                fontSize: 9.5,
-                                fontWeight: FontWeight.w600,
+                              const SizedBox(height: 2),
+                              _AutoFitSingleLineText(
+                                isLocalTurn
+                                    ? diceThrowInProgress
+                                          ? 'Los dados están girando'
+                                          : engine.hasRolled
+                                          ? 'Selecciona un dado o revisa el tablero'
+                                          : 'Lanza los dados o revisa el tablero'
+                                    : 'Observa el turno en el tablero',
+                                style: const TextStyle(
+                                  color: Color(0xFFB8C1D2),
+                                  fontSize: 9.5,
+                                  fontWeight: FontWeight.w600,
+                                ),
                               ),
-                            ),
-                          ],
+                            ],
+                          ),
                         ),
-                      ),
-                      if (onShowChat != null) ...[
-                        const SizedBox(width: 4),
-                        _HudMessageButton(
-                          onPressed: onShowChat!,
-                          compact: true,
-                        ),
+                        if (onShowChat != null) ...[
+                          const SizedBox(width: 4),
+                          _HudMessageButton(
+                            onPressed: onShowChat!,
+                            compact: true,
+                          ),
+                        ],
+                        if (onCustomize != null) ...[
+                          const SizedBox(width: 4),
+                          _HudCosmeticsButton(
+                            onPressed: onCustomize!,
+                            compact: true,
+                          ),
+                        ],
                       ],
-                      if (onCustomize != null) ...[
-                        const SizedBox(width: 4),
-                        _HudCosmeticsButton(
-                          onPressed: onCustomize!,
-                          compact: true,
-                        ),
-                      ],
-                    ],
-                  ),
-                  const SizedBox(height: 5),
-                  const Divider(height: 1, color: Color(0xFF40506C)),
-                  const SizedBox(height: 5),
+                    ),
+                    SizedBox(height: sectionGap),
+                    const Divider(height: 1, color: Color(0xFF40506C)),
+                    SizedBox(height: sectionGap),
+                  ],
                   Row(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
@@ -17491,38 +17655,40 @@ class GameControlPanel extends StatelessWidget {
                           mainAxisSize: MainAxisSize.min,
                           crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
-                            SizedBox(
-                              height: 18,
-                              child: Row(
-                                children: [
-                                  const PopText(
-                                    'DADOS',
-                                    style: TextStyle(
-                                      color: Color(0xFFB8C1D2),
-                                      fontSize: 9,
-                                      fontWeight: FontWeight.w800,
-                                      letterSpacing: .5,
-                                    ),
-                                  ),
-                                  const SizedBox(width: 5),
-                                  Expanded(
-                                    child: _AutoFitSingleLineText(
-                                      canRollDice
-                                          ? 'TOCA PARA LANZAR'
-                                          : dicePrompt,
-                                      alignment: Alignment.centerRight,
-                                      textAlign: TextAlign.right,
-                                      style: const TextStyle(
-                                        color: Colors.white,
-                                        fontSize: 8.5,
+                            if (showPortraitLabels) ...[
+                              SizedBox(
+                                height: labelHeight,
+                                child: Row(
+                                  children: [
+                                    const PopText(
+                                      'DADOS',
+                                      style: TextStyle(
+                                        color: Color(0xFFB8C1D2),
+                                        fontSize: 9,
                                         fontWeight: FontWeight.w800,
+                                        letterSpacing: .5,
                                       ),
                                     ),
-                                  ),
-                                ],
+                                    const SizedBox(width: 5),
+                                    Expanded(
+                                      child: _AutoFitSingleLineText(
+                                        canRollDice
+                                            ? 'TOCA PARA LANZAR'
+                                            : dicePrompt,
+                                        alignment: Alignment.centerRight,
+                                        textAlign: TextAlign.right,
+                                        style: const TextStyle(
+                                          color: Colors.white,
+                                          fontSize: 8.5,
+                                          fontWeight: FontWeight.w800,
+                                        ),
+                                      ),
+                                    ),
+                                  ],
+                                ),
                               ),
-                            ),
-                            const SizedBox(height: 5),
+                              SizedBox(height: labelGap),
+                            ],
                             SizedBox(
                               key: const ValueKey('portrait-dice-hand-stage'),
                               height: navigatorWidth,
@@ -17534,36 +17700,33 @@ class GameControlPanel extends StatelessWidget {
                                     visible: showRollGuide,
                                     pulseSerial: rollGuidePulseSerial,
                                     hand: diceHandPreference,
+                                    diceStyle: diceStyle,
+                                    throwing: diceThrowInProgress,
+                                    throwSerial: diceThrowSerial,
+                                    throwResult: diceThrowResult,
                                     expandedStage: true,
                                     child: Center(
-                                      child: Column(
-                                        mainAxisSize: MainAxisSize.min,
-                                        children: [
-                                          FittedBox(
-                                            fit: BoxFit.scaleDown,
-                                            child: dice,
-                                          ),
-                                          if (engine.isChaos &&
-                                              !showRollGuide) ...[
-                                            const SizedBox(height: 5),
-                                            SizedBox(
-                                              height: 40,
-                                              width: double.infinity,
-                                              child: portraitItem,
-                                            ),
-                                          ],
-                                        ],
+                                      child: Padding(
+                                        padding: EdgeInsets.only(
+                                          bottom:
+                                              showPortraitItem && !showRollGuide
+                                              ? 49
+                                              : 0,
+                                        ),
+                                        child: FittedBox(
+                                          fit: BoxFit.scaleDown,
+                                          child: dice,
+                                        ),
                                       ),
                                     ),
                                   ),
-                                  if (engine.isChaos &&
-                                      showRollGuide &&
-                                      canUseHeldPower)
+                                  if (showPortraitItem &&
+                                      (!showRollGuide || canUseHeldPower))
                                     Positioned(
                                       left: 0,
                                       right: 0,
                                       bottom: 0,
-                                      height: 40,
+                                      height: 44,
                                       child: portraitItem,
                                     ),
                                 ],
@@ -17579,46 +17742,51 @@ class GameControlPanel extends StatelessWidget {
                         child: Column(
                           mainAxisSize: MainAxisSize.min,
                           children: [
-                            SizedBox(
-                              height: 18,
-                              child: Row(
-                                children: [
-                                  const PopText(
-                                    'MINIMAPA',
-                                    style: TextStyle(
-                                      color: Color(0xFFB8C1D2),
-                                      fontSize: 9,
-                                      fontWeight: FontWeight.w800,
-                                      letterSpacing: .5,
-                                    ),
-                                  ),
-                                  const Spacer(),
-                                  Icon(
-                                    mobileBoardFullView
-                                        ? Icons.touch_app_rounded
-                                        : Icons.zoom_in_rounded,
-                                    color: Colors.white,
-                                    size: 13,
-                                  ),
-                                  const SizedBox(width: 3),
-                                  Flexible(
-                                    child: _AutoFitSingleLineText(
-                                      mobileBoardFullView
-                                          ? 'MANTÉN Y ARRASTRA'
-                                          : 'SUELTA PARA VOLVER',
-                                      alignment: Alignment.centerRight,
-                                      textAlign: TextAlign.right,
-                                      style: const TextStyle(
-                                        color: Colors.white,
-                                        fontSize: 8,
-                                        fontWeight: FontWeight.w800,
+                            if (showPortraitLabels) ...[
+                              SizedBox(
+                                height: labelHeight,
+                                child: Row(
+                                  children: [
+                                    const Expanded(
+                                      child: _AutoFitSingleLineText(
+                                        'MINIMAPA',
+                                        style: TextStyle(
+                                          color: Color(0xFFB8C1D2),
+                                          fontSize: 9,
+                                          fontWeight: FontWeight.w800,
+                                          letterSpacing: .5,
+                                        ),
                                       ),
                                     ),
-                                  ),
-                                ],
+                                    if (showNavigatorHint) ...[
+                                      Icon(
+                                        mobileBoardFullView
+                                            ? Icons.touch_app_rounded
+                                            : Icons.zoom_in_rounded,
+                                        color: Colors.white,
+                                        size: 13,
+                                      ),
+                                      const SizedBox(width: 3),
+                                      Flexible(
+                                        child: _AutoFitSingleLineText(
+                                          mobileBoardFullView
+                                              ? 'MANTÉN Y ARRASTRA'
+                                              : 'SUELTA PARA VOLVER',
+                                          alignment: Alignment.centerRight,
+                                          textAlign: TextAlign.right,
+                                          style: const TextStyle(
+                                            color: Colors.white,
+                                            fontSize: 8,
+                                            fontWeight: FontWeight.w800,
+                                          ),
+                                        ),
+                                      ),
+                                    ],
+                                  ],
+                                ),
                               ),
-                            ),
-                            const SizedBox(height: 5),
+                              SizedBox(height: labelGap),
+                            ],
                             AspectRatio(
                               aspectRatio: 1,
                               child: mobileBoardNavigator!,
@@ -17866,6 +18034,10 @@ class _DiceRollGuideTarget extends StatelessWidget {
     required this.visible,
     required this.pulseSerial,
     required this.hand,
+    required this.diceStyle,
+    required this.throwing,
+    required this.throwSerial,
+    required this.throwResult,
     this.expandedStage = false,
   });
 
@@ -17873,53 +18045,88 @@ class _DiceRollGuideTarget extends StatelessWidget {
   final bool visible;
   final int pulseSerial;
   final DiceHandPreference hand;
+  final DiceVisualSpec diceStyle;
+  final bool throwing;
+  final int throwSerial;
+  final (int, int)? throwResult;
   final bool expandedStage;
 
   @override
   Widget build(BuildContext context) {
     final reduceMotion =
         MediaQuery.maybeOf(context)?.disableAnimations ?? false;
-    final stagedChild = reduceMotion
+    final hideChild = visible || throwing;
+    final fadedChild = reduceMotion
         ? Opacity(
-            opacity: visible ? 0 : 1,
-            alwaysIncludeSemantics: true,
+            opacity: hideChild ? 0 : 1,
+            alwaysIncludeSemantics: !throwing,
             child: child,
           )
         : AnimatedOpacity(
             duration: const Duration(milliseconds: 180),
             curve: Curves.easeOut,
-            opacity: visible ? 0 : 1,
-            alwaysIncludeSemantics: true,
+            opacity: hideChild ? 0 : 1,
+            alwaysIncludeSemantics: !throwing,
             child: child,
           );
-    return Stack(
-      fit: expandedStage ? StackFit.expand : StackFit.loose,
-      clipBehavior: expandedStage ? Clip.hardEdge : Clip.none,
-      children: [
-        stagedChild,
-        if (visible)
-          Positioned.fill(
-            child: ExcludeSemantics(
-              child: IgnorePointer(
-                child: KeyedSubtree(
-                  key: const ValueKey('dice-roll-guide'),
-                  child: reduceMotion
-                      ? _StaticDiceRollGuide(
-                          hand: hand,
-                          expandedStage: expandedStage,
-                        )
-                      : _RepeatingDiceRollGuide(
-                          key: ValueKey(
-                            'dice-roll-guide-pulse-$pulseSerial-${hand.name}',
+    final stagedChild = throwing
+        ? ExcludeSemantics(
+            key: const ValueKey('dice-throw-hidden-controls'),
+            child: IgnorePointer(
+              key: const ValueKey('dice-throw-input-lock'),
+              child: fadedChild,
+            ),
+          )
+        : fadedChild;
+    return Semantics(
+      container: throwing,
+      liveRegion: throwing,
+      label: throwing ? appTranslate(context, 'Lanzando los dados…') : null,
+      child: Stack(
+        fit: expandedStage ? StackFit.expand : StackFit.loose,
+        clipBehavior: expandedStage ? Clip.hardEdge : Clip.none,
+        children: [
+          stagedChild,
+          if (throwing)
+            Positioned.fill(
+              child: ExcludeSemantics(
+                child: IgnorePointer(
+                  child: _DiceThrowAnimation(
+                    key: ValueKey('dice-throw-animation-$throwSerial'),
+                    hand: hand,
+                    diceStyle: diceStyle,
+                    result: throwResult,
+                    expandedStage: expandedStage,
+                  ),
+                ),
+              ),
+            )
+          else if (visible)
+            Positioned.fill(
+              child: ExcludeSemantics(
+                child: IgnorePointer(
+                  child: KeyedSubtree(
+                    key: const ValueKey('dice-roll-guide'),
+                    child: reduceMotion
+                        ? _StaticDiceRollGuide(
+                            hand: hand,
+                            diceStyle: diceStyle,
+                            expandedStage: expandedStage,
+                          )
+                        : _RepeatingDiceRollGuide(
+                            key: ValueKey(
+                              'dice-roll-guide-pulse-$pulseSerial-${hand.name}',
+                            ),
+                            hand: hand,
+                            diceStyle: diceStyle,
+                            expandedStage: expandedStage,
                           ),
-                          hand: hand,
-                          expandedStage: expandedStage,
-                        ),
+                  ),
                 ),
               ),
             ),
-          ),
-      ],
+        ],
+      ),
     );
   }
 }
@@ -17928,10 +18135,12 @@ class _RepeatingDiceRollGuide extends StatefulWidget {
   const _RepeatingDiceRollGuide({
     super.key,
     required this.hand,
+    required this.diceStyle,
     required this.expandedStage,
   });
 
   final DiceHandPreference hand;
+  final DiceVisualSpec diceStyle;
   final bool expandedStage;
 
   @override
@@ -17972,12 +18181,228 @@ class _RepeatingDiceRollGuideState extends State<_RepeatingDiceRollGuide>
       };
       return _AnimatedDiceRollGuide(
         hand: widget.hand,
+        diceStyle: widget.diceStyle,
         reach: reach,
         phase: progress,
         expandedStage: widget.expandedStage,
       );
     },
   );
+}
+
+class _DiceThrowAnimation extends StatefulWidget {
+  const _DiceThrowAnimation({
+    super.key,
+    required this.hand,
+    required this.diceStyle,
+    required this.result,
+    required this.expandedStage,
+  });
+
+  final DiceHandPreference hand;
+  final DiceVisualSpec diceStyle;
+  final (int, int)? result;
+  final bool expandedStage;
+
+  @override
+  State<_DiceThrowAnimation> createState() => _DiceThrowAnimationState();
+}
+
+class _DiceThrowAnimationState extends State<_DiceThrowAnimation>
+    with SingleTickerProviderStateMixin {
+  late final AnimationController controller;
+
+  @override
+  void initState() {
+    super.initState();
+    controller = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 620),
+    )..forward();
+  }
+
+  @override
+  void dispose() {
+    controller.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) => KeyedSubtree(
+    key: const ValueKey('dice-throw-overlay'),
+    child: AnimatedBuilder(
+      animation: controller,
+      builder: (context, _) {
+        final progress = controller.value;
+        final windUp = (progress / .18).clamp(0.0, 1.0);
+        final launchProgress = ((progress - .16) / .72).clamp(0.0, 1.0);
+        final handOpens = Curves.easeInOutCubic.transform(
+          ((progress - .12) / .24).clamp(0.0, 1.0),
+        );
+        final handExit = Curves.easeInCubic.transform(
+          ((progress - .66) / .34).clamp(0.0, 1.0),
+        );
+        final direction = widget.hand == DiceHandPreference.right ? 1.0 : -1.0;
+        final shake = math.sin(windUp * math.pi * 3) * (1 - windUp) * 3;
+        return LayoutBuilder(
+          builder: (context, constraints) {
+            final width = constraints.hasBoundedWidth
+                ? constraints.maxWidth
+                : 112.0;
+            final height = constraints.hasBoundedHeight
+                ? constraints.maxHeight
+                : 72.0;
+            final dieSize = (height * (widget.expandedStage ? .34 : .38))
+                .clamp(
+                  widget.expandedStage ? 27.0 : 19.0,
+                  widget.expandedStage ? 40.0 : 30.0,
+                )
+                .toDouble();
+            final firstStart = Offset(
+              width * (widget.hand == DiceHandPreference.right ? .47 : .53),
+              height * .58,
+            );
+            final secondStart = Offset(
+              width * (widget.hand == DiceHandPreference.right ? .60 : .40),
+              height * .61,
+            );
+            final firstEnd = Offset(width * .38, height * .43);
+            final secondEnd = Offset(width * .66, height * .43);
+            final safeArcHeight = math.max(
+              0.0,
+              math.min(firstEnd.dy, secondEnd.dy) - dieSize / 2 - 2,
+            );
+            final rolled = widget.result ?? (1, 5);
+            return Stack(
+              fit: StackFit.expand,
+              clipBehavior: Clip.hardEdge,
+              children: [
+                Positioned.fill(
+                  child: DecoratedBox(
+                    decoration: BoxDecoration(
+                      gradient: RadialGradient(
+                        center: const Alignment(0, .1),
+                        radius: .76,
+                        colors: [
+                          widget.diceStyle.glowColor.withValues(alpha: .22),
+                          Colors.transparent,
+                        ],
+                      ),
+                    ),
+                  ),
+                ),
+                Positioned.fill(
+                  child: Transform.translate(
+                    key: const ValueKey('dice-throw-hand'),
+                    offset: Offset(
+                      direction * (shake - handExit * 17),
+                      5 + windUp * 4 + handExit * 17,
+                    ),
+                    child: Transform.rotate(
+                      angle: direction * (-.045 * windUp + .10 * handOpens),
+                      child: Opacity(
+                        opacity: (.72 * (1 - handExit)).clamp(0.0, 1.0),
+                        child: _DiceRollHandArtwork(
+                          hand: widget.hand,
+                          expandedStage: widget.expandedStage,
+                          releaseBlend: handOpens,
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+                _ThrownDie(
+                  key: const ValueKey('dice-throw-die-0'),
+                  slotIndex: 0,
+                  value: rolled.$1,
+                  style: widget.diceStyle,
+                  size: dieSize,
+                  progress: launchProgress,
+                  start: firstStart,
+                  end: firstEnd,
+                  arcHeight: math.min(height * .26, safeArcHeight),
+                ),
+                _ThrownDie(
+                  key: const ValueKey('dice-throw-die-1'),
+                  slotIndex: 1,
+                  value: rolled.$2,
+                  style: widget.diceStyle,
+                  size: dieSize,
+                  progress: launchProgress,
+                  start: secondStart,
+                  end: secondEnd,
+                  arcHeight: math.min(height * .32, safeArcHeight),
+                ),
+              ],
+            );
+          },
+        );
+      },
+    ),
+  );
+}
+
+class _ThrownDie extends StatelessWidget {
+  const _ThrownDie({
+    super.key,
+    required this.slotIndex,
+    required this.value,
+    required this.style,
+    required this.size,
+    required this.progress,
+    required this.start,
+    required this.end,
+    required this.arcHeight,
+  });
+
+  final int slotIndex;
+  final int value;
+  final DiceVisualSpec style;
+  final double size;
+  final double progress;
+  final Offset start;
+  final Offset end;
+  final double arcHeight;
+
+  @override
+  Widget build(BuildContext context) {
+    final flight = Curves.easeOutCubic.transform(progress);
+    var center = Offset.lerp(start, end, flight)!;
+    final arc = math.sin(progress * math.pi) * arcHeight;
+    final settle = ((progress - .78) / .22).clamp(0.0, 1.0);
+    final bounce = progress < .78
+        ? 0.0
+        : math.sin(settle * math.pi) * (1 - settle) * size * .32;
+    center = Offset(center.dx, center.dy - arc - bounce);
+    final faceStep = (progress * 17).floor();
+    final shown = progress < .84
+        ? ((value + slotIndex * 2 + faceStep * 5) % 6) + 1
+        : value;
+    final direction = slotIndex.isEven ? 1.0 : -1.0;
+    final spin = Curves.easeOutQuart.transform(progress);
+    final transform = Matrix4.identity()
+      ..setEntry(3, 2, .0025)
+      ..rotateX(math.sin(spin * math.pi * 6) * .30)
+      ..rotateY(math.sin(spin * math.pi * 7) * direction * .36)
+      ..rotateZ(direction * spin * math.pi * 4);
+    return Positioned(
+      left: center.dx - size / 2,
+      top: center.dy - size / 2,
+      width: size,
+      height: size,
+      child: Transform(
+        alignment: Alignment.center,
+        transform: transform,
+        child: _DieSurface(
+          value: shown,
+          style: style,
+          slotIndex: slotIndex,
+          size: size,
+          shadowLift: arc * .08,
+        ),
+      ),
+    );
+  }
 }
 
 class _TokenChoiceGuide extends StatelessWidget {
@@ -18171,12 +18596,14 @@ class _TokenChoiceGuideVisual extends StatelessWidget {
 class _AnimatedDiceRollGuide extends StatelessWidget {
   const _AnimatedDiceRollGuide({
     required this.hand,
+    required this.diceStyle,
     required this.reach,
     required this.phase,
     required this.expandedStage,
   });
 
   final DiceHandPreference hand;
+  final DiceVisualSpec diceStyle;
   final double reach;
   final double phase;
   final bool expandedStage;
@@ -18265,25 +18692,35 @@ class _AnimatedDiceRollGuide extends StatelessWidget {
             ),
           ),
           Positioned.fill(
-            child: _DiceHandStageFeather(
-              hand: hand,
-              enabled: expandedStage,
-              child: Transform.translate(
-                key: const ValueKey('dice-hand-pose'),
-                offset: Offset(horizontalOffset, verticalOffset),
-                child: Transform.rotate(
-                  angle: rotation,
-                  child: Transform.scale(
-                    scale: .92 + .08 * easedReach + .018 * contactPulse,
-                    child: Opacity(
-                      opacity: handOpacity,
-                      child: _DiceRollHandArtwork(
-                        hand: hand,
-                        expandedStage: expandedStage,
-                        releaseBlend: releaseBlend,
-                      ),
+            child: Transform.translate(
+              key: const ValueKey('dice-hand-pose'),
+              offset: Offset(horizontalOffset, verticalOffset),
+              child: Transform.rotate(
+                angle: rotation,
+                child: Transform.scale(
+                  scale: .92 + .08 * easedReach + .018 * contactPulse,
+                  child: Opacity(
+                    opacity: handOpacity,
+                    child: _DiceRollHandArtwork(
+                      hand: hand,
+                      expandedStage: expandedStage,
+                      releaseBlend: releaseBlend,
                     ),
                   ),
+                ),
+              ),
+            ),
+          ),
+          Positioned.fill(
+            child: Transform.translate(
+              offset: Offset(horizontalOffset, verticalOffset),
+              child: Transform.rotate(
+                angle: rotation,
+                child: _HeldDicePair(
+                  hand: hand,
+                  style: diceStyle,
+                  expandedStage: expandedStage,
+                  phase: phase,
                 ),
               ),
             ),
@@ -18295,9 +18732,14 @@ class _AnimatedDiceRollGuide extends StatelessWidget {
 }
 
 class _StaticDiceRollGuide extends StatelessWidget {
-  const _StaticDiceRollGuide({required this.hand, required this.expandedStage});
+  const _StaticDiceRollGuide({
+    required this.hand,
+    required this.diceStyle,
+    required this.expandedStage,
+  });
 
   final DiceHandPreference hand;
+  final DiceVisualSpec diceStyle;
   final bool expandedStage;
 
   @override
@@ -18316,18 +18758,22 @@ class _StaticDiceRollGuide extends StatelessWidget {
           ),
         ),
         Positioned.fill(
-          child: _DiceHandStageFeather(
-            hand: hand,
-            enabled: expandedStage,
-            child: Opacity(
-              key: const ValueKey('dice-hand-static'),
-              opacity: .72,
-              child: _DiceRollHandArtwork(
-                hand: hand,
-                expandedStage: expandedStage,
-                releaseBlend: 1,
-              ),
+          child: Opacity(
+            key: const ValueKey('dice-hand-static'),
+            opacity: .72,
+            child: _DiceRollHandArtwork(
+              hand: hand,
+              expandedStage: expandedStage,
+              releaseBlend: 1,
             ),
+          ),
+        ),
+        Positioned.fill(
+          child: _HeldDicePair(
+            hand: hand,
+            style: diceStyle,
+            expandedStage: expandedStage,
+            phase: 0,
           ),
         ),
       ],
@@ -18335,21 +18781,13 @@ class _StaticDiceRollGuide extends StatelessWidget {
   );
 }
 
-class _DiceHandStageFeather extends StatelessWidget {
-  const _DiceHandStageFeather({
-    required this.hand,
-    required this.enabled,
-    required this.child,
-  });
+class _DiceHandAssetFeather extends StatelessWidget {
+  const _DiceHandAssetFeather({required this.child});
 
-  final DiceHandPreference hand;
-  final bool enabled;
   final Widget child;
 
   @override
   Widget build(BuildContext context) {
-    if (!enabled) return child;
-    final fromRight = hand == DiceHandPreference.right;
     return ShaderMask(
       key: const ValueKey('dice-hand-wrist-bottom-feather'),
       blendMode: BlendMode.dstIn,
@@ -18362,16 +18800,11 @@ class _DiceHandStageFeather extends StatelessWidget {
       child: ShaderMask(
         key: const ValueKey('dice-hand-wrist-side-feather'),
         blendMode: BlendMode.dstIn,
-        shaderCallback: (bounds) => LinearGradient(
-          begin: fromRight ? Alignment.centerLeft : Alignment.centerRight,
-          end: fromRight ? Alignment.centerRight : Alignment.centerLeft,
-          colors: const [
-            Colors.transparent,
-            Colors.transparent,
-            Colors.white,
-            Colors.white,
-          ],
-          stops: const [0, .10, .28, .42],
+        shaderCallback: (bounds) => const LinearGradient(
+          begin: Alignment.centerLeft,
+          end: Alignment.centerRight,
+          colors: [Colors.transparent, Colors.white, Colors.white],
+          stops: [0, .14, .24],
         ).createShader(bounds),
         child: child,
       ),
@@ -18420,46 +18853,123 @@ class _DiceRollHandArtwork extends StatelessWidget {
                 expandedStage ? 1.05 : 1,
                 1,
               ),
-              child: Stack(
-                fit: StackFit.expand,
-                children: [
-                  Opacity(
-                    key: const ValueKey('dice-hand-grip-layer'),
-                    opacity: 1 - releaseBlend,
-                    child: Image.asset(
-                      diceRollGuideHandAsset,
-                      key: const ValueKey('dice-hand-art'),
-                      fit: BoxFit.contain,
-                      filterQuality: FilterQuality.high,
-                      isAntiAlias: true,
-                      gaplessPlayback: true,
-                      errorBuilder: (context, error, stackTrace) =>
-                          const Center(
-                            child: Icon(
-                              Icons.touch_app_rounded,
-                              color: Color(0x99E7F5FF),
-                              size: 44,
+              child: _DiceHandAssetFeather(
+                child: Stack(
+                  fit: StackFit.expand,
+                  children: [
+                    Opacity(
+                      key: const ValueKey('dice-hand-grip-layer'),
+                      opacity: 1 - releaseBlend,
+                      child: Image.asset(
+                        diceRollGuideHandAsset,
+                        key: const ValueKey('dice-hand-art'),
+                        fit: BoxFit.contain,
+                        filterQuality: FilterQuality.high,
+                        isAntiAlias: true,
+                        gaplessPlayback: true,
+                        errorBuilder: (context, error, stackTrace) =>
+                            const Center(
+                              child: Icon(
+                                Icons.touch_app_rounded,
+                                color: Color(0x99E7F5FF),
+                                size: 44,
+                              ),
                             ),
-                          ),
+                      ),
                     ),
-                  ),
-                  Opacity(
-                    key: const ValueKey('dice-hand-release-layer'),
-                    opacity: releaseBlend,
-                    child: Image.asset(
-                      diceRollGuideReleaseAsset,
-                      key: const ValueKey('dice-hand-release-art'),
-                      fit: BoxFit.contain,
-                      filterQuality: FilterQuality.high,
-                      isAntiAlias: true,
-                      gaplessPlayback: true,
+                    Opacity(
+                      key: const ValueKey('dice-hand-release-layer'),
+                      opacity: releaseBlend,
+                      child: Image.asset(
+                        diceRollGuideReleaseAsset,
+                        key: const ValueKey('dice-hand-release-art'),
+                        fit: BoxFit.contain,
+                        filterQuality: FilterQuality.high,
+                        isAntiAlias: true,
+                        gaplessPlayback: true,
+                      ),
                     ),
-                  ),
-                ],
+                  ],
+                ),
               ),
             ),
           ),
         ),
+      );
+    },
+  );
+}
+
+class _HeldDicePair extends StatelessWidget {
+  const _HeldDicePair({
+    required this.hand,
+    required this.style,
+    required this.expandedStage,
+    required this.phase,
+  });
+
+  final DiceHandPreference hand;
+  final DiceVisualSpec style;
+  final bool expandedStage;
+  final double phase;
+
+  @override
+  Widget build(BuildContext context) => LayoutBuilder(
+    builder: (context, constraints) {
+      final width = constraints.hasBoundedWidth ? constraints.maxWidth : 112.0;
+      final height = constraints.hasBoundedHeight
+          ? constraints.maxHeight
+          : 72.0;
+      final dieSize = (height * (expandedStage ? .36 : .40))
+          .clamp(expandedStage ? 24.0 : 18.0, expandedStage ? 36.0 : 28.0)
+          .toDouble();
+      final mirror = hand == DiceHandPreference.right ? 1.0 : -1.0;
+      final shakeWindow = phase >= .25 && phase <= .58
+          ? math.sin(((phase - .25) / .33) * math.pi)
+          : 0.0;
+      final shake = math.sin(phase * math.pi * 9) * shakeWindow * 2.5;
+      final firstCenter = Offset(
+        width * (hand == DiceHandPreference.right ? .43 : .57),
+        height * .53,
+      );
+      final secondCenter = Offset(
+        width * (hand == DiceHandPreference.right ? .59 : .41),
+        height * .60,
+      );
+      return Stack(
+        clipBehavior: Clip.hardEdge,
+        children: [
+          Positioned(
+            left: firstCenter.dx - dieSize / 2 + mirror * shake,
+            top: firstCenter.dy - dieSize / 2,
+            width: dieSize,
+            height: dieSize,
+            child: Transform.rotate(
+              angle: mirror * (-.18 + shake * .012),
+              child: _DieSurface(
+                value: 1,
+                style: style,
+                slotIndex: 0,
+                size: dieSize,
+              ),
+            ),
+          ),
+          Positioned(
+            left: secondCenter.dx - dieSize / 2 - mirror * shake,
+            top: secondCenter.dy - dieSize / 2,
+            width: dieSize,
+            height: dieSize,
+            child: Transform.rotate(
+              angle: mirror * (.24 - shake * .012),
+              child: _DieSurface(
+                value: 5,
+                style: style,
+                slotIndex: 1,
+                size: dieSize,
+              ),
+            ),
+          ),
+        ],
       );
     },
   );
@@ -19168,6 +19678,88 @@ Color _playerUiColor(PlayerColor color) => switch (color) {
   PlayerColor.blue => PopColors.blue,
 };
 
+class _DieSurface extends StatelessWidget {
+  const _DieSurface({
+    required this.value,
+    required this.style,
+    required this.slotIndex,
+    required this.size,
+    this.shadowLift = 0,
+  });
+
+  final int value;
+  final DiceVisualSpec style;
+  final int slotIndex;
+  final double size;
+  final double shadowLift;
+
+  @override
+  Widget build(BuildContext context) {
+    final faceColor = style.faceColors[slotIndex % style.faceColors.length];
+    return Container(
+      width: size,
+      height: size,
+      decoration: BoxDecoration(
+        gradient: LinearGradient(
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+          colors: [
+            Color.lerp(faceColor, Colors.white, .34)!,
+            faceColor,
+            Color.lerp(faceColor, PopColors.navy, .30)!,
+          ],
+        ),
+        borderRadius: BorderRadius.circular(size * .25),
+        border: Border.all(
+          color: style.borderColor.withValues(alpha: .94),
+          width: math.max(1.2, size * .05),
+        ),
+        boxShadow: [
+          BoxShadow(
+            color: style.glowColor.withValues(alpha: .58),
+            blurRadius: size * .20 + shadowLift * .35,
+            offset: Offset(0, size * .10 + shadowLift * .18),
+          ),
+        ],
+      ),
+      child: Stack(
+        children: [
+          Positioned.fill(
+            child: CustomPaint(
+              painter: _DiceMotifPainter(
+                motif: style.motif,
+                accent: style.borderColor.withValues(alpha: .18),
+              ),
+            ),
+          ),
+          Positioned.fill(
+            child: CustomPaint(
+              painter: _PipDiePainter(value, color: style.pipColor),
+            ),
+          ),
+          Positioned(
+            left: size * .15,
+            top: size * .10,
+            right: size * .25,
+            height: size * .15,
+            child: DecoratedBox(
+              decoration: BoxDecoration(
+                borderRadius: BorderRadius.circular(size * .5),
+                gradient: LinearGradient(
+                  colors: [
+                    Colors.white.withValues(alpha: .40),
+                    Colors.white.withValues(alpha: 0),
+                  ],
+                ),
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
 class _DieFace extends StatefulWidget {
   const _DieFace({
     super.key,
@@ -19194,7 +19786,7 @@ class _DieFaceState extends State<_DieFace>
     super.initState();
     controller = AnimationController(
       vsync: this,
-      duration: const Duration(milliseconds: 780),
+      duration: const Duration(milliseconds: 620),
       value: 1,
     );
   }
@@ -19204,7 +19796,22 @@ class _DieFaceState extends State<_DieFace>
     super.didUpdateWidget(oldWidget);
     if (oldWidget.animationId != widget.animationId ||
         oldWidget.value != widget.value) {
-      controller.forward(from: 0);
+      final reduceMotion =
+          MediaQuery.maybeOf(context)?.disableAnimations ?? false;
+      if (reduceMotion) {
+        controller.value = 1;
+      } else {
+        controller.forward(from: 0);
+      }
+    }
+  }
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    if ((MediaQuery.maybeOf(context)?.disableAnimations ?? false) &&
+        controller.value != 1) {
+      controller.value = 1;
     }
   }
 
@@ -19219,12 +19826,12 @@ class _DieFaceState extends State<_DieFace>
     return AnimatedBuilder(
       animation: controller,
       builder: (context, _) {
-        final faceColor = widget
-            .style
-            .faceColors[widget.slotIndex % widget.style.faceColors.length];
-        final progress = controller.value;
+        final reduceMotion =
+            MediaQuery.maybeOf(context)?.disableAnimations ?? false;
+        final progress = reduceMotion ? 1.0 : controller.value;
         final spin = Curves.easeOutQuart.transform(progress);
-        final rolling = controller.isAnimating && progress < .995;
+        final rolling =
+            !reduceMotion && controller.isAnimating && progress < .995;
         final faceStep = (progress * 14).floor();
         final shown = rolling && progress < .86
             ? ((widget.value + widget.slotIndex * 2 + faceStep * 5) % 6) + 1
@@ -19257,71 +19864,12 @@ class _DieFaceState extends State<_DieFace>
             child: Transform(
               alignment: Alignment.center,
               transform: transform,
-              child: Container(
-                width: 40,
-                height: 40,
-                decoration: BoxDecoration(
-                  gradient: LinearGradient(
-                    begin: Alignment.topLeft,
-                    end: Alignment.bottomRight,
-                    colors: [
-                      Color.lerp(faceColor, Colors.white, .34)!,
-                      faceColor,
-                      Color.lerp(faceColor, PopColors.navy, .30)!,
-                    ],
-                  ),
-                  borderRadius: BorderRadius.circular(10),
-                  border: Border.all(
-                    color: widget.style.borderColor.withValues(alpha: .94),
-                    width: 2,
-                  ),
-                  boxShadow: [
-                    BoxShadow(
-                      color: widget.style.glowColor.withValues(alpha: .58),
-                      blurRadius: 8 + hop * .35,
-                      offset: Offset(0, 4 + hop * .18),
-                    ),
-                  ],
-                ),
-                child: Stack(
-                  children: [
-                    Positioned.fill(
-                      child: CustomPaint(
-                        painter: _DiceMotifPainter(
-                          motif: widget.style.motif,
-                          accent: widget.style.borderColor.withValues(
-                            alpha: .18,
-                          ),
-                        ),
-                      ),
-                    ),
-                    Positioned.fill(
-                      child: CustomPaint(
-                        painter: _PipDiePainter(
-                          shown,
-                          color: widget.style.pipColor,
-                        ),
-                      ),
-                    ),
-                    Positioned(
-                      left: 6,
-                      top: 4,
-                      right: 10,
-                      height: 6,
-                      child: DecoratedBox(
-                        decoration: BoxDecoration(
-                          borderRadius: BorderRadius.circular(20),
-                          gradient: LinearGradient(
-                            colors: [
-                              Colors.white.withValues(alpha: .40),
-                              Colors.white.withValues(alpha: 0),
-                            ],
-                          ),
-                        ),
-                      ),
-                    ),
-                  ],
-                ),
+              child: _DieSurface(
+                value: shown,
+                style: widget.style,
+                slotIndex: widget.slotIndex,
+                size: 40,
+                shadowLift: hop,
               ),
             ),
           ),

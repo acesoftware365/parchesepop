@@ -1,3 +1,5 @@
+import 'dart:math' as math;
+
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -5,6 +7,24 @@ import 'package:parchesepop/game_engine.dart';
 import 'package:parchesepop/main.dart';
 import 'package:parchesepop/wallet.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+
+class _SequenceRandom implements math.Random {
+  _SequenceRandom(this.values);
+
+  final List<int> values;
+  int position = 0;
+
+  int _next() => position < values.length ? values[position++] : 0;
+
+  @override
+  bool nextBool() => _next().isOdd;
+
+  @override
+  double nextDouble() => (_next() % 1000) / 1000;
+
+  @override
+  int nextInt(int max) => _next() % max;
+}
 
 void _useViewport(WidgetTester tester, Size size) {
   tester.view.devicePixelRatio = 1;
@@ -677,6 +697,42 @@ void main() {
     await tester.pump();
     expect(engine.rollSerial, initialRollSerial + 1);
     expect(find.byKey(const ValueKey('dice-roll-guide')), findsNothing);
+    expect(find.byKey(const ValueKey('dice-throw-overlay')), findsOneWidget);
+    expect(find.byKey(const ValueKey('dice-throw-die-0')), findsOneWidget);
+    expect(find.byKey(const ValueKey('dice-throw-die-1')), findsOneWidget);
+    expect(
+      tester
+          .widget<IgnorePointer>(
+            find.byKey(const ValueKey('dice-throw-input-lock')),
+          )
+          .ignoring,
+      isTrue,
+    );
+    expect(
+      tester
+          .widget<IgnorePointer>(
+            find.byKey(const ValueKey('game-board-interaction-lock')),
+          )
+          .ignoring,
+      isTrue,
+    );
+    expect(
+      find.byKey(const ValueKey('dice-roll-target')).hitTestable(),
+      findsNothing,
+    );
+    expect(find.byKey(const ValueKey('token-choice-guide')), findsNothing);
+    expect(
+      find.byKey(const ValueKey('board-token-choice-callout')),
+      findsNothing,
+    );
+    await tester.tap(
+      find.byKey(const ValueKey('dice-roll-target')),
+      warnIfMissed: false,
+    );
+    await tester.pump();
+    expect(engine.rollSerial, initialRollSerial + 1);
+    await tester.pump(const Duration(milliseconds: 621));
+    expect(find.byKey(const ValueKey('dice-throw-overlay')), findsNothing);
     expect(tester.takeException(), isNull);
     await tester.pumpWidget(const SizedBox.shrink());
     engine.dispose();
@@ -704,6 +760,30 @@ void main() {
       find.byKey(const ValueKey('dice-hand-art-left')),
     );
     expect(mirroredHand.transform.storage[0], lessThan(0));
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('landscape side rail runs the same one-shot dice throw', (
+    tester,
+  ) async {
+    SharedPreferences.setMockInitialValues({settingsRollGuideKey: false});
+    _useViewport(tester, const Size(844, 390));
+    final engine = GameEngine()..currentPlayer.tokens.first.progress = 0;
+    addTearDown(engine.dispose);
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: GameScreen(opponent: 'CPU • Fácil', gameEngine: engine),
+      ),
+    );
+    await tester.pump(const Duration(milliseconds: 150));
+
+    await tester.tap(find.byKey(const ValueKey('dice-roll-target')));
+    await tester.pump();
+
+    expect(find.byKey(const ValueKey('dice-throw-overlay')), findsOneWidget);
+    expect(find.byKey(const ValueKey('dice-throw-die-0')), findsOneWidget);
+    expect(find.byKey(const ValueKey('dice-throw-die-1')), findsOneWidget);
     expect(tester.takeException(), isNull);
   });
 
@@ -765,7 +845,7 @@ void main() {
       settingsDiceHandKey: DiceHandPreference.left.name,
     });
     _useViewport(tester, const Size(402, 707));
-    final engine = GameEngine();
+    final engine = GameEngine()..currentPlayer.tokens.first.progress = 0;
     addTearDown(engine.dispose);
 
     await tester.pumpWidget(
@@ -808,6 +888,46 @@ void main() {
           .opacity,
       1,
     );
+    final initialRollSerial = engine.rollSerial;
+    await tester.tap(find.byKey(const ValueKey('dice-roll-target')));
+    await tester.pump();
+    expect(engine.rollSerial, initialRollSerial + 1);
+    expect(find.byKey(const ValueKey('dice-throw-overlay')), findsNothing);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('Quick Pop resumes its unique auto-move after backgrounding', (
+    tester,
+  ) async {
+    SharedPreferences.setMockInitialValues({settingsRollGuideKey: false});
+    _useViewport(tester, const Size(402, 707));
+    final engine = GameEngine(
+      matchFormat: MatchFormat.quickPop,
+      random: _SequenceRandom([1, 4]),
+    );
+    addTearDown(engine.dispose);
+    final movingToken = engine.currentPlayer.tokens.first
+      ..progress = GameEngine.finishProgress - 2;
+    engine.currentPlayer.tokens.last.progress = GameEngine.finishProgress;
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: GameScreen(opponent: 'CPU • Fácil', gameEngine: engine),
+      ),
+    );
+    await tester.pump(const Duration(milliseconds: 150));
+
+    await tester.tap(find.byKey(const ValueKey('dice-roll-target')));
+    await tester.pump();
+    expect(engine.hasRolled, isTrue);
+    expect(movingToken.finished, isFalse);
+
+    tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.paused);
+    await tester.pump();
+    tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.resumed);
+    await tester.pump(const Duration(milliseconds: 81));
+
+    expect(movingToken.finished, isTrue);
     expect(tester.takeException(), isNull);
   });
 

@@ -798,6 +798,8 @@ const _english = <String, String>{
   'VICTORIA': 'VICTORY',
   'Lanzar': 'Roll',
   'Lanza los dados': 'Roll the dice',
+  'Lanzando los dados…': 'Rolling the dice…',
+  'Los dados están girando': 'The dice are rolling',
   'Toca los dados para lanzar.': 'Tap the dice to roll.',
   'TOCA PARA LANZAR': 'TAP TO ROLL',
   'Tu movimiento': 'Your move',

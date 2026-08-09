@@ -352,6 +352,97 @@ void main() {
     );
 
     testWidgets(
+      'a taller adaptive banner shrinks only the HUD, never the board',
+      (tester) async {
+        _configureIPhone14View(tester);
+        SharedPreferences.setMockInitialValues({});
+        Rect? regularBoard;
+        Rect? regularHud;
+
+        for (final bannerHeight in <double>[50, 100]) {
+          final controller = _FakeAdsController(
+            supported: true,
+            adsReady: true,
+            bannerHeight: bannerHeight,
+          );
+          final engine = GameEngine();
+          await tester.pumpWidget(
+            _gameScreenAdApp(controller: controller, engine: engine),
+          );
+          await tester.pump(const Duration(milliseconds: 200));
+
+          final board = tester.getRect(
+            find.byKey(const ValueKey('game-board')),
+          );
+          final hud = tester.getRect(
+            find.byKey(const ValueKey('portrait-game-hud')),
+          );
+          final banner = tester.getRect(
+            find.byKey(const ValueKey('fake-mobile-banner')),
+          );
+          expect(board.size, const Size.square(390));
+          expect(hud.bottom, lessThanOrEqualTo(banner.top));
+          expect(tester.takeException(), isNull);
+
+          if (regularBoard == null) {
+            regularBoard = board;
+            regularHud = hud;
+          } else {
+            expect(board.left, closeTo(regularBoard.left, .5));
+            expect(board.top, closeTo(regularBoard.top, .5));
+            expect(board.size, regularBoard.size);
+            expect(hud.height, lessThan(regularHud!.height));
+          }
+
+          await tester.pumpWidget(const SizedBox.shrink());
+          engine.dispose();
+          controller.dispose();
+        }
+      },
+    );
+
+    testWidgets(
+      'a short iPhone keeps the full board and essential HUD above a tall banner',
+      (tester) async {
+        _configureIPhoneSEView(tester);
+        SharedPreferences.setMockInitialValues({});
+        final controller = _FakeAdsController(
+          supported: true,
+          adsReady: true,
+          bannerHeight: 100,
+        );
+        final engine = GameEngine(mode: GameMode.chaos);
+        addTearDown(engine.dispose);
+        addTearDown(controller.dispose);
+
+        await tester.pumpWidget(
+          _gameScreenAdApp(controller: controller, engine: engine),
+        );
+        await tester.pump(const Duration(milliseconds: 250));
+
+        final board = tester.getRect(find.byKey(const ValueKey('game-board')));
+        final hud = tester.getRect(
+          find.byKey(const ValueKey('portrait-game-hud')),
+        );
+        final banner = tester.getRect(
+          find.byKey(const ValueKey('fake-mobile-banner')),
+        );
+        final dice = find.byKey(const ValueKey('dice-roll-target'));
+        final minimap = find.byKey(const ValueKey('mobile-board-navigator'));
+
+        expect(board.size, const Size.square(375));
+        expect(hud.bottom, lessThanOrEqualTo(banner.top));
+        expect(dice.hitTestable(), findsOneWidget);
+        expect(minimap.hitTestable(), findsOneWidget);
+        expect(tester.getRect(dice).bottom, lessThanOrEqualTo(hud.bottom));
+        expect(tester.getRect(minimap).bottom, lessThanOrEqualTo(hud.bottom));
+        expect(tester.takeException(), isNull);
+
+        await tester.pumpWidget(const SizedBox.shrink());
+      },
+    );
+
+    testWidgets(
       'removes the iPhone bottom inset from content when the banner owns it',
       (tester) async {
         _configureIPhone14View(tester);
@@ -1332,6 +1423,16 @@ void _configureIPhone14View(WidgetTester tester) {
   tester.view.physicalSize = const Size(390, 844);
   tester.view.padding = const FakeViewPadding(top: 47, bottom: 34);
   tester.view.viewPadding = const FakeViewPadding(top: 47, bottom: 34);
+  tester.binding.platformDispatcher.localeTestValue = const Locale('es');
+  addTearDown(tester.view.reset);
+  addTearDown(tester.binding.platformDispatcher.clearLocaleTestValue);
+}
+
+void _configureIPhoneSEView(WidgetTester tester) {
+  tester.view.devicePixelRatio = 1;
+  tester.view.physicalSize = const Size(375, 667);
+  tester.view.padding = const FakeViewPadding(top: 20);
+  tester.view.viewPadding = const FakeViewPadding(top: 20);
   tester.binding.platformDispatcher.localeTestValue = const Locale('es');
   addTearDown(tester.view.reset);
   addTearDown(tester.binding.platformDispatcher.clearLocaleTestValue);
