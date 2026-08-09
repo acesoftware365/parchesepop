@@ -1,6 +1,6 @@
 # Parchís Pop Privacy Policy
 
-**Effective date: August 8, 2026**
+**Effective date: August 9, 2026**
 
 This Privacy Policy explains how Parchís Pop handles information when you use
 the game on Android, iOS, macOS, or another supported platform.
@@ -10,20 +10,52 @@ the game on Android, iOS, macOS, or another supported platform.
 Parchís Pop stores game information locally on your device, including:
 
 - your optional player profile, such as display name, email, flag, and avatar;
-- coins, cosmetic purchases, equipped items, level, and game progress;
-- language, sound, music, vibration, and other preferences; and
+- coins, cosmetic purchases, equipped items, level, game progress, tutorial
+  progress, and a saved match;
+- language, sound, music, vibration, hand preference, and other settings; and
 - local account credentials when the prototype email account option is used.
 
 Raw passwords are not stored. The local prototype stores a salted password
-digest. You may play against the CPU without creating a profile.
+digest. You may play against the CPU without creating a profile. The email and
+password entered for this local profile are not sent to Firebase to start an
+online match.
+
+## Online services and multiplayer
+
+When you choose an online feature, Parchís Pop uses Google Firebase
+Authentication to create or reuse an anonymous identifier for that installation
+and Firebase Realtime Database to operate matchmaking and games. Online data
+may include:
+
+- the anonymous Firebase user identifier, display name, avatar, timestamps, and
+  equipped cosmetic information;
+- room code, public or private room status, membership, presence, opening rolls,
+  queue and matchmaking status;
+- game actions, current game state, recovery checkpoints, results, and
+  connection status; and
+- preapproved quick-chat phrases. Parchís Pop does not provide free-form
+  in-game chat.
+
+Other players in the same room can see the player information, game state, and
+preapproved messages needed to play the match. If a host marks a room public,
+the app may show a limited room listing to other players. If a real player is
+not found for Quick Pop within the displayed search period, the game may start
+with computer-controlled opponents.
+
+Parchís Pop also uses Firebase Remote Config to obtain service-availability,
+minimum-version, update-message, and update-link settings. Google Firebase SDKs
+may process technical identifiers, app-instance or installation information,
+IP address, device and operating-system information, diagnostics, and network
+activity needed to provide and secure these services.
 
 ## Analytics
 
 Anonymous analytics collection is off by default. You may enable or disable it
 at any time from **Settings > Anonymous analytics**. When enabled, Parchís Pop
 uses Google Firebase Analytics to understand how the game is used and improve
-its design. Analytics events may include whether a match was started online or
-against the CPU, the selected game mode, and CPU difficulty. The game does not
+its design. Analytics events may include match starts and completions,
+abandonment and resume events, selected modes, tutorial progress, optional-ad
+choices, currency rewards, and shop interactions. The game does not
 intentionally include your display name, email, chat messages, flag, or avatar
 in these analytics events.
 
@@ -39,12 +71,14 @@ The Android and iOS versions use Google AdMob:
   of the screen, including during gameplay, the game guide, and matchmaking.
   The banner does not cover game controls, pause the game, open a full-screen
   advertisement, or interrupt a move; and
-- a rewarded advertisement may be offered after the whole table finishes to
-  double an eligible match reward. It opens only after the player voluntarily
-  chooses it, and a reward is granted only after the advertisement is
-  completed.
+- optional rewarded advertisements may be offered in the **Shop** for the coin
+  bonus shown on the button and after the whole table finishes to double an
+  eligible match reward. A rewarded advertisement opens only after the player
+  explicitly chooses it, and the reward is granted only after the advertisement
+  is completed.
 
-Resume, Play Again, and Back to Home never trigger a full-screen or rewarded
+Rewarded advertisements are always voluntary. Resume, Play Again, Back to Home,
+rolling the dice, and moving a piece never trigger a full-screen or rewarded
 advertisement. The reserved bottom banner may remain visible.
 
 The macOS version does not request or display AdMob banner or rewarded
@@ -66,35 +100,43 @@ For more information about how Google handles data, see:
 - [How Google uses information from sites or apps that use its services](https://policies.google.com/technologies/partner-sites)
 - [Google Privacy Policy](https://policies.google.com/privacy)
 
-## Online play and messages
-
-Online play may use player names, flags, avatars, levels, equipped cosmetic
-items, game actions, and preapproved messages to operate and display a match.
-Free-form in-game chat is not provided. If a real player is unavailable, the
-game may continue with a computer-controlled opponent.
-
 ## Data sharing
 
-Parchís Pop does not sell personal information. Information may be processed
-by service providers used to operate the app, including Google Firebase
-Analytics and Google AdMob, subject to their own privacy terms and your
-available consent choices. Information may also be disclosed when required by
-law or to protect users, the service, or legal rights.
+Parchís Pop does not sell personal information. Information may be processed by
+Google services used to operate the app, including Firebase Authentication,
+Firebase Realtime Database, Firebase Remote Config, Firebase Analytics, AdMob,
+and the User Messaging Platform, subject to Google's terms and your available
+consent choices. Information may also be disclosed when required by law or to
+protect users, the service, or legal rights.
 
 ## Retention and deletion
 
-Local profile, preferences, progress, coins, and cosmetic data remain on the
-device until you remove them, clear the app's storage, or uninstall the app.
-Available advertising consent choices can be changed from the privacy screen.
-You may use the account and data deletion option in the app when available.
+Local profile, credentials, preferences, progress, saved matches, coins, and
+cosmetic data remain on the device until you remove them, clear the app's
+storage, or uninstall the app. **My Profile > Delete account and data** removes
+this local information, deletes the anonymous Firebase Authentication identity,
+and removes the player's online profile, active matchmaking ticket, pending
+join request, presence, and removable waiting-room membership when available.
+
+Resolved matches, immutable chat, and shared room records can contain state
+belonging to other players and may remain for service integrity, abuse
+prevention, diagnostics, or legal requirements until they are deleted or
+anonymized under the service retention process. An older online identity created
+before direct account deletion was available may also require verified backend
+cleanup. To request deletion of retained or legacy server-side data, email
+**sales@liisgo.com**. We may ask for limited information needed to locate and
+verify the relevant records; never send a password.
 
 Analytics and advertising providers retain information according to their own
-policies and legal obligations.
+policies and legal obligations. Available advertising consent choices can be
+changed from the privacy screen.
 
 ## Security
 
-Reasonable technical measures are used to protect information. However, no
-electronic storage or transmission method is completely secure.
+Reasonable technical measures are used to protect information, including
+Firebase authentication and access rules for online data. However, no
+electronic storage or transmission method is completely secure. Do not include
+sensitive personal information in a player display name.
 
 ## Children and families
 
@@ -108,7 +150,8 @@ children to send sensitive personal information through the game.
 Depending on where you live, you may have rights to access, correct, delete,
 restrict, or object to certain processing of personal information, or to
 withdraw consent. Advertising consent and opt-out choices are presented when
-required by applicable law.
+required by applicable law. Contact **sales@liisgo.com** for a privacy or data
+request.
 
 ## Changes to this policy
 
@@ -117,17 +160,17 @@ date at the top of this page identifies the latest revision.
 
 ## Contact
 
-For privacy or data requests, contact the developer through the support channel
-listed for Parchís Pop in its app-store listing or through the project's public
-repository:
+For privacy, support, or data requests:
 
-[https://github.com/acesoftware365/parchesepop](https://github.com/acesoftware365/parchesepop)
+- Email: **sales@liisgo.com**
+- Project repository:
+  [https://github.com/acesoftware365/parchesepop](https://github.com/acesoftware365/parchesepop)
 
 ---
 
 # Política de privacidad de Parchís Pop
 
-**Fecha de vigencia: 8 de agosto de 2026**
+**Fecha de vigencia: 9 de agosto de 2026**
 
 Esta Política de privacidad explica cómo Parchís Pop maneja la información
 cuando utilizas el juego en Android, iOS, macOS u otra plataforma compatible.
@@ -137,13 +180,46 @@ cuando utilizas el juego en Android, iOS, macOS u otra plataforma compatible.
 Parchís Pop guarda localmente en tu dispositivo:
 
 - tu perfil opcional, como nombre visible, correo electrónico, bandera y avatar;
-- monedas, compras cosméticas, artículos equipados, nivel y progreso;
-- idioma, sonido, música, vibración y otras preferencias; y
+- monedas, compras cosméticas, artículos equipados, nivel, progreso, avance del
+  tutorial y una partida guardada;
+- idioma, sonido, música, vibración, preferencia de mano y otros ajustes; y
 - credenciales locales cuando se utiliza la opción de cuenta por correo del
   prototipo.
 
 Las contraseñas no se guardan en texto plano. El prototipo local conserva un
-resumen cifrado con sal. Puedes jugar contra el CPU sin crear un perfil.
+resumen de contraseña con sal. Puedes jugar contra el CPU sin crear un perfil.
+El correo y la contraseña del perfil local no se envían a Firebase para iniciar
+una partida online.
+
+## Servicios online y multijugador
+
+Cuando eliges una función online, Parchís Pop utiliza Google Firebase
+Authentication para crear o reutilizar un identificador anónimo de esa
+instalación y Firebase Realtime Database para operar la búsqueda de jugadores y
+las partidas. Los datos online pueden incluir:
+
+- el identificador anónimo de Firebase, nombre visible, avatar, fechas y datos
+  de los cosméticos equipados;
+- código de sala, estado público o privado, participantes, presencia, tiradas
+  iniciales y estado de la cola o búsqueda;
+- acciones, estado actual, puntos de recuperación, resultados y estado de
+  conexión de la partida; y
+- frases preaprobadas del chat rápido. Parchís Pop no ofrece chat libre dentro
+  de la partida.
+
+Los demás jugadores de la misma sala pueden ver la información del jugador, el
+estado de la partida y los mensajes preaprobados necesarios para jugar. Si el
+anfitrión marca una sala como pública, la aplicación puede mostrar un listado
+limitado de la sala a otros jugadores. Si Quick Pop no encuentra un jugador real
+durante el período de búsqueda mostrado, la partida puede comenzar con
+oponentes controlados por computadora.
+
+Parchís Pop también utiliza Firebase Remote Config para obtener ajustes sobre
+disponibilidad del servicio, versión mínima, mensaje y enlace de actualización.
+Los SDK de Google Firebase pueden procesar identificadores técnicos, información
+de la instancia o instalación, dirección IP, datos del dispositivo y sistema
+operativo, diagnósticos y actividad de red necesarios para ofrecer y proteger
+estos servicios.
 
 ## Analíticas
 
@@ -151,9 +227,10 @@ La recopilación de analíticas anónimas está apagada por defecto. Puedes
 activarla o desactivarla en cualquier momento desde **Ajustes > Analítica
 anónima**. Cuando está activa, Parchís Pop utiliza Google Firebase Analytics
 para comprender cómo se usa el juego y mejorar su diseño. Los eventos pueden
-indicar si una partida comenzó online o contra CPU, el modo seleccionado y la
-dificultad. El juego no incluye intencionalmente tu nombre visible, correo,
-mensajes, bandera ni avatar en estos eventos de analíticas.
+incluir inicio y final de partidas, abandono y reanudación, modos elegidos,
+avance del tutorial, decisiones sobre anuncios opcionales, premios de monedas e
+interacciones con la tienda. El juego no incluye intencionalmente tu nombre
+visible, correo, mensajes, bandera ni avatar en estos eventos.
 
 Google puede procesar información técnica, como identificadores del dispositivo,
 información de la instancia de la aplicación, ubicación aproximada derivada de
@@ -168,20 +245,23 @@ Las versiones de Android e iOS utilizan Google AdMob:
   incluso durante la partida, la guía del juego y la búsqueda de jugadores. El
   banner no cubre los controles, no pausa el juego, no abre un anuncio a
   pantalla completa ni interrumpe una jugada; y
-- pueden ofrecer un anuncio recompensado después de que termine la mesa completa
-  para duplicar una recompensa elegible. Se abre únicamente cuando el jugador
-  lo elige de forma voluntaria y la recompensa se entrega solo después de
-  completar el anuncio.
+- pueden ofrecer anuncios recompensados opcionales en la **Tienda** por la
+  bonificación de monedas indicada en el botón y después de que termine la mesa
+  completa para duplicar una recompensa elegible. El anuncio recompensado se
+  abre únicamente cuando el jugador lo elige de forma explícita y la recompensa
+  se entrega solo después de completarlo.
 
-Reanudar, Jugar otra vez y Volver al inicio nunca activan un anuncio a pantalla
-completa ni recompensado. El banner inferior reservado puede permanecer visible.
+Los anuncios recompensados son siempre voluntarios. Reanudar, Jugar otra vez,
+Volver al inicio, tirar los dados y mover una ficha nunca activan un anuncio a
+pantalla completa o recompensado. El banner inferior reservado puede permanecer
+visible.
 
 La versión de macOS no solicita ni muestra banners o anuncios recompensados de
 AdMob.
 
 Actualmente, Parchís Pop no solicita permiso para rastrear actividad entre
-aplicaciones o sitios web de otras compañías ni solicita acceso al
-identificador de publicidad de Apple (IDFA).
+aplicaciones o sitios web de otras compañías ni solicita acceso al identificador
+de publicidad de Apple (IDFA).
 
 Según tu región y tus decisiones de consentimiento, Google y sus socios
 publicitarios pueden procesar identificadores del dispositivo, dirección IP,
@@ -196,38 +276,47 @@ Para conocer cómo Google maneja los datos, consulta:
 - [Cómo usa Google la información de sitios o aplicaciones que utilizan sus servicios](https://policies.google.com/technologies/partner-sites?hl=es)
 - [Política de privacidad de Google](https://policies.google.com/privacy?hl=es)
 
-## Juego online y mensajes
-
-El juego online puede utilizar nombres, banderas, avatares, niveles, cosméticos
-equipados, acciones de la partida y mensajes preaprobados para operar y mostrar
-la partida. No se ofrece chat libre. Si no hay disponible un jugador real, la
-partida puede continuar con un oponente controlado por computadora.
-
 ## Intercambio de información
 
 Parchís Pop no vende información personal. La información puede ser procesada
-por proveedores utilizados para operar la aplicación, incluidos Google Firebase
-Analytics y Google AdMob, conforme a sus condiciones y a tus opciones de
-consentimiento. También se puede divulgar información cuando la ley lo exija o
-para proteger a los usuarios, el servicio o derechos legales.
+por los servicios de Google utilizados para operar la aplicación, incluidos
+Firebase Authentication, Firebase Realtime Database, Firebase Remote Config,
+Firebase Analytics, AdMob y la plataforma de mensajería para usuarios, conforme
+a las condiciones de Google y a tus opciones de consentimiento. También se
+puede divulgar información cuando la ley lo exija o para proteger a los
+usuarios, el servicio o derechos legales.
 
 ## Retención y eliminación
 
-El perfil local, las preferencias, el progreso, las monedas y los cosméticos
-permanecen en el dispositivo hasta que los elimines, borres los datos de la
-aplicación o desinstales la aplicación. Las opciones disponibles de
-consentimiento publicitario pueden cambiarse desde la pantalla de privacidad.
-Puedes utilizar la opción de eliminación de cuenta y datos cuando esté
-disponible en la aplicación.
+El perfil, las credenciales, preferencias, progreso, partidas guardadas, monedas
+y cosméticos locales permanecen en el dispositivo hasta que los elimines, borres
+los datos de la aplicación o desinstales la aplicación. **Mi perfil > Eliminar
+cuenta y datos** elimina esa información local del dispositivo. Esa acción
+también elimina la identidad anónima de Firebase Authentication y, cuando están
+disponibles, el perfil online, la búsqueda activa, la solicitud pendiente de
+entrada, la presencia y la membresía removible de una sala en espera.
+
+Las partidas resueltas, el chat inmutable y los registros de salas compartidas
+pueden contener estado de otros jugadores y conservarse para mantener la
+integridad del servicio, prevenir abusos, realizar diagnósticos o cumplir
+obligaciones legales hasta que se eliminen o anonimicen según el proceso de
+retención. Una identidad online antigua, creada antes de que existiera el
+borrado directo, también puede requerir una limpieza verificada del servidor.
+Para solicitar la eliminación de datos retenidos o antiguos, escribe a
+**sales@liisgo.com**. Podemos pedir información limitada para localizar y
+verificar los registros; nunca envíes una contraseña.
 
 Los proveedores de analíticas y publicidad conservan información de acuerdo con
-sus propias políticas y obligaciones legales.
+sus propias políticas y obligaciones legales. Las opciones disponibles de
+consentimiento publicitario pueden cambiarse desde la pantalla de privacidad.
 
 ## Seguridad
 
-Se utilizan medidas técnicas razonables para proteger la información. Sin
+Se utilizan medidas técnicas razonables para proteger la información, incluidas
+la autenticación de Firebase y reglas de acceso para los datos online. Sin
 embargo, ningún método de almacenamiento o transmisión electrónica es
-completamente seguro.
+completamente seguro. No incluyas información personal sensible en el nombre
+visible del jugador.
 
 ## Menores y familias
 
@@ -242,7 +331,8 @@ personal sensible mediante el juego.
 Según el lugar donde vivas, puedes tener derecho a acceder, corregir, eliminar,
 restringir u oponerte a ciertos usos de información personal, o retirar el
 consentimiento. Las opciones de consentimiento y exclusión publicitaria se
-presentan cuando lo exige la ley aplicable.
+presentan cuando lo exige la ley aplicable. Escribe a **sales@liisgo.com** para
+una solicitud de privacidad o datos.
 
 ## Cambios a esta política
 
@@ -251,7 +341,8 @@ fecha al principio de esta página identifica la revisión más reciente.
 
 ## Contacto
 
-Para solicitudes de privacidad o datos, utiliza el canal de soporte indicado
-para Parchís Pop en su ficha de la tienda o el repositorio público del proyecto:
+Para solicitudes de privacidad, soporte o datos:
 
-[https://github.com/acesoftware365/parchesepop](https://github.com/acesoftware365/parchesepop)
+- Correo: **sales@liisgo.com**
+- Repositorio del proyecto:
+  [https://github.com/acesoftware365/parchesepop](https://github.com/acesoftware365/parchesepop)

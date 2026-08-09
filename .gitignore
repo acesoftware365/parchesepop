@@ -33,6 +33,9 @@ migrate_working_dir/
 .pub/
 /build/
 /coverage/
+node_modules/
+.firebase/
+/work/
 
 # Symbolication related
 app.*.symbols
@@ -44,3 +47,17 @@ app.*.map.json
 /android/app/debug
 /android/app/profile
 /android/app/release
+
+# Android release signing credentials. Keep only the documented example.
+/android/key.properties
+*.jks
+*.keystore
+!/android/key.properties.example
+
+# Environment and Apple signing credentials.
+.env
+.env.*
+*.p8
+*.p12
+*.pem
+*.mobileprovision

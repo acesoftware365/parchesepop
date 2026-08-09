@@ -19,6 +19,13 @@ enum SafeChatPhraseId {
   funGame,
 }
 
+/// Stable wire names accepted by the realtime safe-chat contract.
+///
+/// The server stores only these reviewed identifiers, never rendered text.
+final Set<String> safeChatPhraseNames = Set<String>.unmodifiable(
+  SafeChatPhraseId.values.map((phrase) => phrase.name),
+);
+
 class SafeChatPhrase {
   const SafeChatPhrase({
     required this.id,
@@ -119,15 +126,96 @@ class SafeChatMessage {
       SafeChatCatalog.phrase(phraseId).textForLanguage(languageCode);
 }
 
+/// Immutable realtime envelope for one reviewed quick message.
+///
+/// [senderUid] is always the authenticated human who submitted the record.
+/// There is deliberately no API for publishing as a CPU participant.
+class OnlineSafeChatMessage {
+  const OnlineSafeChatMessage({
+    required this.messageId,
+    required this.senderUid,
+    required this.phraseId,
+    required this.sentAtMs,
+  });
+
+  final String messageId;
+  final String senderUid;
+  final SafeChatPhraseId phraseId;
+  final int sentAtMs;
+
+  DateTime get sentAt =>
+      DateTime.fromMillisecondsSinceEpoch(sentAtMs, isUtc: true);
+
+  SafeChatMessage toSafeChatMessage() =>
+      SafeChatMessage(senderId: senderUid, phraseId: phraseId, sentAt: sentAt);
+
+  Map<String, Object?> toJson() => <String, Object?>{
+    'messageId': messageId,
+    'senderUid': senderUid,
+    'phraseId': phraseId.name,
+    'sentAt': sentAtMs,
+  };
+
+  factory OnlineSafeChatMessage.fromJson(
+    Object? raw, {
+    required String pathMessageId,
+  }) {
+    if (raw is! Map) {
+      throw const FormatException('Invalid online safe-chat message.');
+    }
+    final map = <String, Object?>{};
+    for (final entry in raw.entries) {
+      final key = entry.key;
+      if (key is! String) {
+        throw const FormatException('Invalid online safe-chat field.');
+      }
+      map[key] = entry.value;
+    }
+    const fields = <String>{'messageId', 'senderUid', 'phraseId', 'sentAt'};
+    if (map.length != fields.length || !map.keys.toSet().containsAll(fields)) {
+      throw const FormatException('Invalid online safe-chat schema.');
+    }
+
+    final messageId = map['messageId'];
+    final senderUid = map['senderUid'];
+    final phraseName = map['phraseId'];
+    final sentAt = map['sentAt'];
+    final phraseId = phraseName is String
+        ? SafeChatPhraseId.values
+              .where((candidate) => candidate.name == phraseName)
+              .firstOrNull
+        : null;
+    if (messageId is! String ||
+        messageId.isEmpty ||
+        messageId.contains('/') ||
+        messageId != pathMessageId ||
+        senderUid is! String ||
+        senderUid.trim().isEmpty ||
+        senderUid.contains('/') ||
+        phraseId == null ||
+        sentAt is! num ||
+        !sentAt.isFinite ||
+        sentAt != sentAt.roundToDouble()) {
+      throw const FormatException('Invalid online safe-chat message.');
+    }
+    return OnlineSafeChatMessage(
+      messageId: messageId,
+      senderUid: senderUid,
+      phraseId: phraseId,
+      sentAtMs: sentAt.toInt(),
+    );
+  }
+}
+
 enum SafeChatSendResult { sent, cooldownActive, invalidSender }
 
 typedef SafeChatClock = DateTime Function();
 
-/// In-memory match chat that accepts catalog identifiers only.
+/// Local cooldown/history guard that accepts catalog identifiers only.
 ///
-/// A future real-time transport should serialize [SafeChatPhraseId.name], not
-/// the rendered text. That keeps moderation and translations controlled by the
-/// clients while still allowing the server to validate every message.
+/// Online rooms serialize [SafeChatPhraseId.name], never rendered text. This
+/// keeps moderation and translations controlled by the clients while Firebase
+/// validates the same closed catalog.
 class SafeChatController {
   SafeChatController({
     this.cooldown = const Duration(seconds: 2),

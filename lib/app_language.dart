@@ -122,6 +122,31 @@ String _translateDynamic(String source) {
       (match) => 'Adding CPU players · ${match.group(1)}/${match.group(2)}',
     ),
     (
+      RegExp(r'^Entrando a la sala (.+)…$'),
+      (match) => 'Joining room ${match.group(1)}…',
+    ),
+    (
+      RegExp(r'^(.+) saldrá de la sala\.$'),
+      (match) => '${match.group(1)} will be removed from the room.',
+    ),
+    (RegExp(r'^(.+) · TÚ$'), (match) => '${match.group(1)} · YOU'),
+    (RegExp(r'^Expulsar (.+)$'), (match) => 'Remove ${match.group(1)}'),
+    (RegExp(r'^(\d+)/4 jugadores$'), (match) => '${match.group(1)}/4 players'),
+    (
+      RegExp(r'^(CAOS|CLÁSICO) · (\d+)/4 · ([A-Z0-9]+)$'),
+      (match) =>
+          '${match.group(1) == 'CAOS' ? 'CHAOS' : 'CLASSIC'} · ${match.group(2)}/4 · ${match.group(3)}',
+    ),
+    (
+      RegExp(r'^DESEMPATE · RONDA (\d+)$'),
+      (match) => 'TIEBREAK · ROUND ${match.group(1)}',
+    ),
+    (RegExp(r'^COMENZAR · (.+)$'), (match) => 'START · ${match.group(1)}'),
+    (
+      RegExp(r'^(.+) comienza\. Esperando al anfitrión…$'),
+      (match) => '${match.group(1)} starts. Waiting for the host…',
+    ),
+    (
       RegExp(r'^Parchís Pop · (Caos|Tradicional|Quick Pop)$'),
       (match) => 'Parchís Pop · ${translateForLanguage(match.group(1)!, 'en')}',
     ),
@@ -678,12 +703,147 @@ const _english = <String, String>{
 
   // Version 2: Quick Pop, contextual tutorial, and progression.
   'MESA RÁPIDA': 'QUICK TABLE',
+  'JUEGA CON AMIGOS': 'PLAY WITH FRIENDS',
+  'Crea una sala, entra con código o busca una mesa pública.':
+      'Create a room, join with a code, or find a public table.',
+  'CREAR SALA': 'CREATE ROOM',
+  'Pública o privada · 4 jugadores': 'Public or private · 4 players',
+  'ENTRAR CON CÓDIGO': 'JOIN WITH CODE',
+  'Usa el código de seis caracteres': 'Use the six-character code',
+  'SALAS PÚBLICAS': 'PUBLIC ROOMS',
+  'Encuentra una mesa disponible': 'Find an available table',
+  'PARTIDA LOCAL': 'LOCAL MATCH',
+  'Juega ahora en este dispositivo': 'Play now on this device',
+  'MODO DE JUEGO': 'GAME MODE',
+  'QUIÉN PUEDE ENTRAR': 'WHO CAN JOIN',
+  'PRIVADA': 'PRIVATE',
+  'PÚBLICA': 'PUBLIC',
+  'Solo entran quienes tengan tu código o invitación.':
+      'Only people with your code or invitation can join.',
+  'Tu sala aparecerá en la lista pública hasta llenarse.':
+      'Your room will appear in the public list until it is full.',
+  'CREANDO…': 'CREATING…',
+  'ESCRIBE EL CÓDIGO DE LA SALA': 'ENTER THE ROOM CODE',
+  'Lo encontrarás en la invitación de tu amigo.':
+      "You'll find it in your friend's invitation.",
+  'Usa letras y números sin I, O, 0 ni 1.':
+      'Use letters and numbers without I, O, 0, or 1.',
+  'ENTRANDO…': 'JOINING…',
+  'ENTRAR A LA SALA': 'JOIN ROOM',
+  'Actualizar': 'Refresh',
+  'ACTUALIZAR': 'REFRESH',
+  'NO PUDIMOS CARGAR LAS SALAS': 'WE COULD NOT LOAD THE ROOMS',
+  'No pudimos conectar con el servidor. Revisa tu internet e inténtalo otra vez.':
+      'We could not connect to the server. Check your internet and try again.',
+  'NO HAY SALAS ABIERTAS': 'THERE ARE NO OPEN ROOMS',
+  'Crea una sala pública o vuelve a intentarlo.':
+      'Create a public room or try again.',
+  'Sala cerrada': 'Room closed',
+  'SALA ONLINE': 'ONLINE ROOM',
+  'La sala ya no está disponible.': 'The room is no longer available.',
+  'Código copiado.': 'Code copied.',
+  '¿EXPULSAR JUGADOR?': 'REMOVE PLAYER?',
+  'EXPULSAR': 'REMOVE',
+  '¿CERRAR SALA?': 'CLOSE ROOM?',
+  'Todos los jugadores volverán al inicio.':
+      'All players will return to the home screen.',
+  'CERRAR': 'CLOSE',
+  '¿SALIR DE LA SALA?': 'LEAVE THE ROOM?',
+  'Podrás volver a entrar mientras siga abierta.':
+      'You can rejoin while the room remains open.',
+  'CANCELAR': 'CANCEL',
+  'ENTRAR': 'JOIN',
+  'Copiar código': 'Copy code',
+  'Compartir invitación': 'Share invitation',
+  'Cerrar sala': 'Close room',
+  'Salir de la sala': 'Leave room',
+  'CÓDIGO': 'CODE',
+  'ACCESO': 'ACCESS',
+  'ESPERANDO…': 'WAITING…',
+  'NO LISTO': 'NOT READY',
+  'MARCAR LISTO': 'MARK READY',
+  'INICIAR TIRADA': 'START OPENING ROLL',
+  'La partida está comenzando…': 'The match is starting…',
+  'Esperando la tirada inicial.': 'Waiting for the opening roll.',
+  'TIRADA PARA COMENZAR': 'ROLL TO START',
+  'TIRAR DESEMPATE': 'ROLL TIEBREAKER',
+  'TIRAR DADO': 'ROLL DIE',
+  'El código de sala no es válido.': 'The room code is invalid.',
+  'Ya no formas parte de esta sala.': 'You are no longer in this room.',
+  'Ya estás dentro de esta sala.': 'You are already in this room.',
+  'La sala ya está llena.': 'The room is already full.',
+  'La sala ya no acepta jugadores.': 'The room is no longer accepting players.',
+  'Ese asiento ya está ocupado.': 'That seat is already occupied.',
+  'Solo el anfitrión puede hacer esa acción.':
+      'Only the host can perform that action.',
+  'La sala cambió de estado. Inténtalo otra vez.':
+      'The room changed state. Try again.',
+  'Faltan jugadores para comenzar.': 'More players are needed to start.',
+  'Todos los jugadores deben marcarse como listos.':
+      'All players must mark themselves as ready.',
+  'Espera a que todos los jugadores se conecten.':
+      'Wait for all players to connect.',
+  'La tirada inicial todavía no está disponible.':
+      'The opening roll is not available yet.',
+  'No te corresponde tirar en esta ronda.':
+      'It is not your turn to roll in this round.',
+  'Ya tiraste el dado en esta ronda.':
+      'You already rolled the die in this round.',
+  'No pudimos reservar un código de sala. Inténtalo otra vez.':
+      'We could not reserve a room code. Try again.',
+  'El anfitrión no respondió a tiempo. Inténtalo otra vez.':
+      'The host did not respond in time. Try again.',
+  'La solicitud para entrar fue cancelada.':
+      'The request to join was canceled.',
+  'No pudimos completar la acción online. Inténtalo otra vez.':
+      'We could not complete the online action. Try again.',
+  'La invitación de sala no es válida.': 'The room invitation is invalid.',
+  'No pudimos completar la acción online. Revisa tu conexión e inténtalo otra vez.':
+      'We could not complete the online action. Check your connection and try again.',
   'Partida local con rivales CPU': 'Local match with CPU opponents',
   'ONLINE · PRÓXIMAMENTE': 'ONLINE · COMING SOON',
   '2 fichas · partida rápida': '2 pieces · quick match',
   'Partida local': 'Local match',
   'Juega contra el CPU': 'Play against CPU',
   'QUICK POP ONLINE': 'QUICK POP ONLINE',
+  'Elige cómo quieres reunir la mesa':
+      'Choose how you want to bring the table together',
+  'JUGAR CON AMIGOS ONLINE': 'PLAY WITH FRIENDS ONLINE',
+  'NO PUDIMOS ABRIR LA SALA': 'WE COULD NOT OPEN THE ROOM',
+  'Comprueba tu conexión e inténtalo otra vez.':
+      'Check your connection and try again.',
+  'INTENTAR DE NUEVO': 'TRY AGAIN',
+  'JUGAR PARTIDA LOCAL': 'PLAY A LOCAL MATCH',
+  'Abriendo la partida…': 'Opening the match…',
+  'Conectando la mesa…': 'Connecting the table…',
+  'Conectando con Parchís Pop…': 'Connecting to Parchís Pop…',
+  'Buscando un jugador online…': 'Searching for an online player…',
+  'Jugador encontrado · preparando la mesa…':
+      'Player found · preparing the table…',
+  'Luego jugarás contra CPU automáticamente':
+      'Then you will automatically play against the CPU',
+  'ONLINE · LISTO': 'ONLINE · READY',
+  'Buscaremos otro jugador durante 5 segundos. Si no aparece nadie, la partida empieza automáticamente contra el CPU.':
+      'We will search for another player for 5 seconds. If no one appears, the match starts automatically against the CPU.',
+  'JUGAR ONLINE · BUSCAR 5 S': 'PLAY ONLINE · SEARCH 5 S',
+  'JUGAR AHORA CONTRA CPU': 'PLAY NOW AGAINST CPU',
+  'VOLVER': 'BACK',
+  'El servidor no autorizó esta partida. Actualiza el juego e inténtalo otra vez.':
+      'The server did not authorize this match. Update the game and try again.',
+  'Quick Pop online necesita una actualización de configuración.':
+      'Quick Pop online needs a configuration update.',
+  'No pudimos sincronizar Quick Pop con el servidor. Inténtalo otra vez.':
+      'We could not sync Quick Pop with the server. Try again.',
+  'La búsqueda online expiró. Inténtalo otra vez.':
+      'The online search expired. Try again.',
+  'La conexión tardó demasiado. Inténtalo otra vez.':
+      'The connection took too long. Try again.',
+  'No pudimos completar el emparejamiento online.':
+      'We could not complete online matchmaking.',
+  'Encontramos jugador, pero no pudimos abrir la mesa. Inténtalo otra vez.':
+      'We found a player, but could not open the table. Try again.',
+  'No pudimos iniciar Quick Pop online. Inténtalo otra vez.':
+      'We could not start Quick Pop online. Try again.',
   'El modo online necesita conexión con un servidor seguro. Mientras lo terminamos, puedes probar Quick Pop contra el CPU.':
       'Online play requires a secure server connection. While we finish it, you can try Quick Pop against the CPU.',
   'PROBAR QUICK POP': 'TRY QUICK POP',
@@ -1190,6 +1350,7 @@ const _english = <String, String>{
   'No se pudo guardar la preferencia de analítica.':
       'The analytics preference could not be saved.',
   'Eliminar cuenta y datos': 'Delete account and data',
+  'Eliminar cuenta y datos de invitado': 'Delete guest account and data',
   'Eliminar datos': 'Delete data',
   _privacyDescription:
       'The app stores the profile, coins, cosmetic purchases, and preferences locally. If you enable anonymous analytics, Google Analytics collects match, resume, tutorial, optional-ad, currency, and shop events to improve the game. We do not send the name, email, messages, flag, or avatar.',
@@ -1199,19 +1360,34 @@ const _english = <String, String>{
       'Parchís Pop is an entertainment game. Coins in this version are for testing, have no monetary value, and do not provide competitive advantages.',
   'No se permiten nombres ofensivos, amenazas, acoso ni contenido sexual. Los mensajes durante la partida se limitarán a frases preaprobadas.':
       'Offensive names, threats, harassment, and sexual content are not allowed. In-game messages are limited to preapproved phrases.',
-  'En Android y iOS puede permanecer visible una banda publicitaria adaptable en la parte inferior. Esta banda no interrumpe ni bloquea la jugada. Los anuncios recompensados solo se abren cuando eliges voluntariamente duplicar el premio al finalizar la mesa. Las acciones normales del juego, como tirar los dados, mover una ficha, Jugar otra vez, Volver al inicio y Reanudar, nunca abren anuncios. El premio se entrega únicamente al completar el anuncio. La aplicación solicita consentimiento cuando corresponde y ofrece opciones para administrar la privacidad publicitaria. macOS no muestra banners ni anuncios recompensados.':
-      'On Android and iOS, an adaptive ad banner may remain visible at the bottom. This banner does not interrupt or block gameplay. Rewarded ads open only when you voluntarily choose to double the reward after the table finishes. Normal game actions, such as rolling the dice, moving a piece, Play Again, Back to Home, and Resume, never open ads. A reward is granted only after the ad is completed. The app requests consent when required and provides options to manage ad privacy. macOS does not show banners or rewarded ads.',
-  'Android y iOS pueden mantener una banda publicitaria inferior no interruptiva. Los anuncios recompensados son voluntarios al finalizar la mesa, y las acciones normales del juego nunca abren anuncios. Puedes administrar el consentimiento y las preferencias disponibles desde esta pantalla. La versión de macOS no muestra estos anuncios.':
-      'Android and iOS may keep a non-interruptive ad banner at the bottom. Rewarded ads are optional after the table finishes, and normal game actions never open ads. You can manage consent and available preferences from this screen. The macOS version does not show these ads.',
+  'En Android y iOS puede permanecer visible una banda publicitaria adaptable en una franja reservada en la parte inferior, incluso durante la partida, la guía y la búsqueda de jugadores. Esta banda no cubre los controles ni interrumpe una jugada. Los anuncios recompensados son siempre voluntarios: pueden ofrecerse en la tienda por la bonificación indicada y al finalizar la mesa para duplicar una recompensa elegible. Solo se abren cuando los eliges y la recompensa se entrega únicamente al completar el anuncio. Las acciones normales del juego, como tirar los dados, mover una ficha, Jugar otra vez, Volver al inicio y Reanudar, nunca abren anuncios a pantalla completa o recompensados. La aplicación solicita consentimiento cuando corresponde y ofrece opciones para administrar la privacidad publicitaria. macOS no muestra banners ni anuncios recompensados.':
+      'On Android and iOS, an adaptive ad banner may remain visible in a reserved strip at the bottom, including during gameplay, the guide, and matchmaking. This banner does not cover controls or interrupt a move. Rewarded ads are always voluntary: they may be offered in the Shop for the stated bonus and after the table finishes to double an eligible reward. They open only when you choose them, and the reward is granted only after the ad is completed. Normal game actions, such as rolling the dice, moving a piece, Play Again, Back to Home, and Resume, never open full-screen or rewarded ads. The app requests consent when required and provides options to manage ad privacy. macOS does not show banners or rewarded ads.',
+  'Android y iOS pueden mantener una banda publicitaria adaptable en una franja inferior reservada, incluso durante la partida, la guía y la búsqueda de jugadores. Los anuncios recompensados son siempre voluntarios en la tienda y al finalizar la mesa; las acciones normales del juego nunca los abren. Puedes administrar el consentimiento y las preferencias disponibles desde esta pantalla. La versión de macOS no muestra estos anuncios.':
+      'Android and iOS may keep an adaptive ad banner in a reserved bottom strip, including during gameplay, the guide, and matchmaking. Rewarded ads are always voluntary in the Shop and after the table finishes; normal game actions never open them. You can manage consent and available preferences from this screen. The macOS version does not show these ads.',
   'El perfil actual vive en el dispositivo. El flujo definitivo permitirá borrar tanto los datos locales como la cuenta online cuando el servicio de autenticación esté conectado.':
       'The current profile lives on this device. The final flow will let you delete both local data and the online account once the authentication service is connected.',
-  'El perfil y sus credenciales se guardan localmente. Desde Mi perfil puedes usar Eliminar cuenta y datos para borrar del dispositivo el perfil, la contraseña protegida, las monedas, los cosméticos y las preferencias asociadas.':
-      'The profile and credentials are stored locally. From My Profile, use Delete account and data to remove the profile, protected password, coins, cosmetics, and associated preferences from this device.',
+  'Desde Mi perfil puedes usar Eliminar cuenta y datos. Primero se eliminan la identidad anónima de Firebase y los datos online removibles; después se borran del dispositivo el perfil, las credenciales locales, las partidas guardadas, el tutorial, el progreso, las monedas, los cosméticos y las preferencias. Las partidas resueltas, el chat inmutable y otros registros compartidos pueden conservarse para proteger el estado de otros jugadores.':
+      'From My Profile, use Delete account and data. The Firebase anonymous identity and removable online data are deleted first; then the profile, local credentials, saved matches, tutorial, progress, coins, cosmetics, and preferences are removed from this device. Resolved matches, immutable chat, and other shared records may be retained to protect other players\' state.',
   'Se borrarán de este dispositivo el perfil, las credenciales locales, las monedas y los cosméticos. Esta acción no se puede deshacer.':
       'The profile, local credentials, coins, and cosmetics will be deleted from this device. This action cannot be undone.',
+  'Se borrarán la sesión online y, de este dispositivo, el perfil, las credenciales locales, las partidas guardadas, el progreso, las monedas, los cosméticos y las preferencias. Esta acción no se puede deshacer.':
+      'The online session and this device\'s profile, local credentials, saved matches, progress, coins, cosmetics, and preferences will be deleted. This action cannot be undone.',
   'Eliminar definitivamente': 'Delete permanently',
-  'No se pudo abrir la política. Visita liisgo.com.':
-      'The policy could not be opened. Visit liisgo.com.',
+  'Borrando cuenta de forma segura…': 'Deleting account securely…',
+  'No se pudo completar el borrado online. Tu cuenta local sigue intacta.':
+      'Online deletion could not be completed. Your local account is still intact.',
+  'No se completó el borrado': 'Deletion was not completed',
+  'Intentar de nuevo': 'Try again',
+  'Esta cuenta enlazada necesita verificación del servidor antes de borrarse.':
+      'This linked account requires server verification before it can be deleted.',
+  'Esta cuenta online antigua necesita una limpieza verificada. Escribe a sales@liisgo.com; nunca envíes tu contraseña.':
+      'This older online account requires verified cleanup. Email sales@liisgo.com; never send your password.',
+  'No se pudieron borrar todavía los datos online. Inténtalo de nuevo.':
+      'The online data could not be deleted yet. Try again.',
+  'Los datos online se limpiaron, pero la sesión no pudo cerrarse. Inténtalo de nuevo.':
+      'The online data was cleared, but the session could not be closed. Try again.',
+  'No se pudo abrir la política. Visita parchese-pop.web.app/privacy.html.':
+      'The policy could not be opened. Visit parchese-pop.web.app/privacy.html.',
 
   // Guide.
   'Reglas claras, ejemplos rápidos y efectos que puedes probar.':

@@ -174,7 +174,7 @@ class PlayerState {
        );
 
   final PlayerColor color;
-  final String name;
+  String name;
   final bool isHuman;
   final List<GameToken> tokens;
   bool initialStackIntact;
@@ -188,21 +188,48 @@ String _resolvedCpuName(List<String>? names, int index, String fallback) =>
     ? names[index].trim()
     : fallback;
 
+String _resolvedPlayerName({
+  required PlayerColor color,
+  required PlayerColor localViewerColor,
+  required String humanName,
+  required List<String>? cpuNames,
+  required Map<PlayerColor, String>? playerNames,
+}) {
+  final explicitName = playerNames?[color]?.trim();
+  if (explicitName != null && explicitName.isNotEmpty) return explicitName;
+  if (color == localViewerColor) return humanName;
+
+  final opponentColors = PlayerColor.values
+      .where((candidate) => candidate != localViewerColor)
+      .toList(growable: false);
+  final opponentIndex = opponentColors.indexOf(color);
+  return _resolvedCpuName(cpuNames, opponentIndex, 'CPU ${opponentIndex + 1}');
+}
+
 class GameEngine extends ChangeNotifier {
   GameEngine({
     this.cpuLevel = 'Normal',
     this.mode = GameMode.traditional,
     this.matchFormat = MatchFormat.classic,
+    this.localViewerColor = PlayerColor.red,
+    this.initialPlayerColor = PlayerColor.red,
     Random? random,
     String humanName = 'Tú',
     List<String>? cpuNames,
+    Map<PlayerColor, String>? playerNames,
   }) : _random = random ?? Random(),
        rules = MatchRules.forFormat(matchFormat),
        players = [
          PlayerState(
            PlayerColor.red,
-           humanName,
-           isHuman: true,
+           _resolvedPlayerName(
+             color: PlayerColor.red,
+             localViewerColor: localViewerColor,
+             humanName: humanName,
+             cpuNames: cpuNames,
+             playerNames: playerNames,
+           ),
+           isHuman: localViewerColor == PlayerColor.red,
            tokenCount: MatchRules.forFormat(matchFormat).tokenCount,
            initialTokenProgress: MatchRules.forFormat(
              matchFormat,
@@ -213,7 +240,14 @@ class GameEngine extends ChangeNotifier {
          ),
          PlayerState(
            PlayerColor.green,
-           _resolvedCpuName(cpuNames, 0, 'CPU 1'),
+           _resolvedPlayerName(
+             color: PlayerColor.green,
+             localViewerColor: localViewerColor,
+             humanName: humanName,
+             cpuNames: cpuNames,
+             playerNames: playerNames,
+           ),
+           isHuman: localViewerColor == PlayerColor.green,
            tokenCount: MatchRules.forFormat(matchFormat).tokenCount,
            initialTokenProgress: MatchRules.forFormat(
              matchFormat,
@@ -224,7 +258,14 @@ class GameEngine extends ChangeNotifier {
          ),
          PlayerState(
            PlayerColor.yellow,
-           _resolvedCpuName(cpuNames, 1, 'CPU 2'),
+           _resolvedPlayerName(
+             color: PlayerColor.yellow,
+             localViewerColor: localViewerColor,
+             humanName: humanName,
+             cpuNames: cpuNames,
+             playerNames: playerNames,
+           ),
+           isHuman: localViewerColor == PlayerColor.yellow,
            tokenCount: MatchRules.forFormat(matchFormat).tokenCount,
            initialTokenProgress: MatchRules.forFormat(
              matchFormat,
@@ -235,7 +276,14 @@ class GameEngine extends ChangeNotifier {
          ),
          PlayerState(
            PlayerColor.blue,
-           _resolvedCpuName(cpuNames, 2, 'CPU 3'),
+           _resolvedPlayerName(
+             color: PlayerColor.blue,
+             localViewerColor: localViewerColor,
+             humanName: humanName,
+             cpuNames: cpuNames,
+             playerNames: playerNames,
+           ),
+           isHuman: localViewerColor == PlayerColor.blue,
            tokenCount: MatchRules.forFormat(matchFormat).tokenCount,
            initialTokenProgress: MatchRules.forFormat(
              matchFormat,
@@ -245,6 +293,10 @@ class GameEngine extends ChangeNotifier {
            ).initialStackFormsBarrier,
          ),
        ] {
+    currentPlayerIndex = initialPlayerColor.index;
+    message = currentPlayer.isHuman
+        ? '¡Tu turno! Lanza los dados.'
+        : 'Turno de ${currentPlayer.name}.';
     if (isChaos) {
       for (final side in PlayerColor.values) {
         _spawnItemForSide(side);
@@ -264,20 +316,27 @@ class GameEngine extends ChangeNotifier {
   /// Restores an interrupted local match from the lifecycle checkpoint.
   /// Effects are intentionally not resumed half-way through an animation; the
   /// board resumes in the exact stable state immediately before backgrounding.
-  factory GameEngine.fromCheckpoint(Map<String, dynamic> checkpoint) {
+  factory GameEngine.fromCheckpoint(
+    Map<String, dynamic> checkpoint, {
+    PlayerColor localViewerColor = PlayerColor.red,
+  }) {
     final rawPlayers = (checkpoint['players'] as List<dynamic>? ?? const [])
         .whereType<Map>()
         .toList(growable: false);
-    final red = rawPlayers.cast<Map?>().firstWhere(
-      (player) => player?['color'] == PlayerColor.red.name,
-      orElse: () => null,
-    );
     String playerName(PlayerColor color, String fallback) {
       final entry = rawPlayers.cast<Map?>().firstWhere(
         (player) => player?['color'] == color.name,
         orElse: () => null,
       );
       return entry?['name'] as String? ?? fallback;
+    }
+
+    String fallbackPlayerName(PlayerColor color) {
+      if (color == localViewerColor) return 'Tú';
+      final opponents = PlayerColor.values
+          .where((candidate) => candidate != localViewerColor)
+          .toList(growable: false);
+      return 'CPU ${opponents.indexOf(color) + 1}';
     }
 
     final formatName = checkpoint['matchFormat'] as String?;
@@ -299,18 +358,24 @@ class GameEngine extends ChangeNotifier {
     }
 
     final modeName = checkpoint['mode'] as String?;
+    final initialPlayerName = checkpoint['initialPlayer'] as String?;
+    final initialPlayerColor = PlayerColor.values.firstWhere(
+      (color) => color.name == initialPlayerName,
+      orElse: () => PlayerColor.red,
+    );
     final engine = GameEngine(
       cpuLevel: checkpoint['cpuLevel'] as String? ?? 'Normal',
       mode: modeName == GameMode.chaos.name
           ? GameMode.chaos
           : GameMode.traditional,
       matchFormat: matchFormat,
-      humanName: red?['name'] as String? ?? 'Tú',
-      cpuNames: [
-        playerName(PlayerColor.green, 'CPU 1'),
-        playerName(PlayerColor.yellow, 'CPU 2'),
-        playerName(PlayerColor.blue, 'CPU 3'),
-      ],
+      localViewerColor: localViewerColor,
+      initialPlayerColor: initialPlayerColor,
+      humanName: playerName(localViewerColor, 'Tú'),
+      playerNames: <PlayerColor, String>{
+        for (final color in PlayerColor.values)
+          color: playerName(color, fallbackPlayerName(color)),
+      },
     );
     for (final player in engine.players) {
       final saved = rawPlayers.cast<Map?>().firstWhere(
@@ -464,6 +529,8 @@ class GameEngine extends ChangeNotifier {
   final String cpuLevel;
   final GameMode mode;
   final MatchFormat matchFormat;
+  final PlayerColor localViewerColor;
+  PlayerColor initialPlayerColor;
   final MatchRules rules;
   final List<PlayerState> players;
   final Random _random;
@@ -471,7 +538,7 @@ class GameEngine extends ChangeNotifier {
   final Set<int> _itemLoopIndices = <int>{};
   int _chaosItemsPerSide = 1;
   final List<GameEvent> _eventHistory = <GameEvent>[];
-  final OnlineStandingsTracker<PlayerColor> _standings =
+  OnlineStandingsTracker<PlayerColor> _standings =
       OnlineStandingsTracker<PlayerColor>(competitors: PlayerColor.values);
   final Map<PlayerColor, int> _lastTrapEffectTurn = <PlayerColor, int>{};
   late final Set<int> itemLoopIndices = UnmodifiableSetView(_itemLoopIndices);
@@ -517,6 +584,7 @@ class GameEngine extends ChangeNotifier {
   Map<String, Object> get checkpointRuleMetadata => <String, Object>{
     'matchFormat': matchFormat.name,
     'rulesVersion': rules.rulesVersion,
+    'initialPlayer': initialPlayerColor.name,
     'initialStackIntact': <String, bool>{
       for (final player in players)
         player.color.name: player.initialStackIntact,
@@ -531,8 +599,364 @@ class GameEngine extends ChangeNotifier {
         entry.key.name: entry.value,
     },
   };
-  PlayerColor get localViewerColor =>
-      players.firstWhere((player) => player.isHuman).color;
+
+  /// Complete, JSON-compatible engine state for persistence or an
+  /// authoritative transport adapter.
+  ///
+  /// This trusted checkpoint includes held powers and hidden traps. A network
+  /// service must redact information that the receiving viewer is not allowed
+  /// to see before distributing it to an untrusted client.
+  Map<String, Object?> createCheckpoint() => <String, Object?>{
+    ...checkpointRuleMetadata,
+    'mode': mode.name,
+    'cpuLevel': cpuLevel,
+    'turn': turnNumber,
+    'currentPlayer': currentPlayer.color.name,
+    'dice': List<int>.of(dice),
+    'remainingDice': List<int>.of(remainingDice),
+    'hasRolled': hasRolled,
+    'rollSerial': rollSerial,
+    'gameOver': gameOver,
+    'winner': winner?.color.name,
+    'message': message,
+    'pendingTrapPlacement': pendingTrapPlacement,
+    'chaosItemsPerSide': _chaosItemsPerSide,
+    'players': <Map<String, Object?>>[
+      for (final player in players)
+        <String, Object?>{
+          'color': player.color.name,
+          'name': player.name,
+          'tokens': <int>[for (final token in player.tokens) token.progress],
+          'inventory': player.inventory?.name,
+          'shielded': player.shielded,
+          'skippedTurns': player.skippedTurns,
+        },
+    ],
+    'traps': <Map<String, Object>>[
+      for (final trap in traps)
+        <String, Object>{
+          'owner': trap.owner.name,
+          'type': trap.type.name,
+          'loopIndex': trap.loopIndex,
+        },
+    ],
+    'items': _itemLoopIndices.toList(growable: false)..sort(),
+    'effectSerial': effectSerial,
+    'effectLoopIndex': effectLoopIndex,
+    'effectBoardCell': effectBoardCell == null
+        ? null
+        : <String, double>{
+            'dx': effectBoardCell!.dx,
+            'dy': effectBoardCell!.dy,
+          },
+    'effectPowerUp': effectPowerUp?.name,
+    'effectKind': effectKind?.name,
+    'effectToken': _checkpointTokenReference(effectToken),
+    'effectOwner': effectOwner?.name,
+    'effectResolving': effectResolving,
+    'lastCapturedToken': _checkpointTokenReference(_lastCapturedToken),
+    'events': <Map<String, Object?>>[
+      for (final event in _eventHistory)
+        <String, Object?>{
+          'sequence': event.sequence,
+          'turn': event.turn,
+          'type': event.type.name,
+          'playerName': event.playerName,
+          'playerColor': event.playerColor.name,
+          'description': event.description,
+          'dice': event.dice == null
+              ? null
+              : <int>[event.dice!.$1, event.dice!.$2],
+          'tokenId': event.tokenId,
+          'fromProgress': event.fromProgress,
+          'toProgress': event.toProgress,
+          'targetName': event.targetName,
+          'targetColor': event.targetColor?.name,
+        },
+    ],
+    'nextEventSequence': _nextEventSequence,
+  };
+
+  Map<String, Object>? _checkpointTokenReference(GameToken? token) =>
+      token == null
+      ? null
+      : <String, Object>{'owner': token.owner.name, 'id': token.id};
+
+  /// Replaces this engine's state with a complete authoritative checkpoint.
+  ///
+  /// No local transition timer is recreated: a network replica must wait for
+  /// the authority to publish the next revision instead of advancing itself.
+  /// The update is parsed into a temporary engine first, so an invalid payload
+  /// cannot leave this instance half-mutated.
+  void applyRemoteCheckpoint(Map<String, dynamic> checkpoint) {
+    _validateRemoteCheckpoint(checkpoint);
+    final incoming = GameEngine.fromCheckpoint(
+      checkpoint,
+      localViewerColor: localViewerColor,
+    );
+    try {
+      incoming._turnTimer?.cancel();
+      incoming._turnTimer = null;
+      incoming._effectResolutionTimer?.cancel();
+      incoming._effectResolutionTimer = null;
+      incoming._restoreRemotePresentation(checkpoint);
+      _copyRemoteStateFrom(incoming);
+    } finally {
+      incoming.dispose();
+    }
+    notifyListeners();
+  }
+
+  void _validateRemoteCheckpoint(Map<String, dynamic> checkpoint) {
+    if (checkpoint['matchFormat'] != matchFormat.name) {
+      throw const FormatException(
+        'Remote checkpoint uses a different match format.',
+      );
+    }
+    if (checkpoint['rulesVersion'] != rules.rulesVersion) {
+      throw const FormatException(
+        'Remote checkpoint uses a different rules version.',
+      );
+    }
+    if (checkpoint['mode'] != mode.name) {
+      throw const FormatException('Remote checkpoint uses a different mode.');
+    }
+    final rawRemainingDice = checkpoint['remainingDice'];
+    if (checkpoint['currentPlayer'] is! String ||
+        checkpoint['turn'] is! int ||
+        checkpoint['dice'] is! List ||
+        (rawRemainingDice != null && rawRemainingDice is! List) ||
+        checkpoint['hasRolled'] is! bool) {
+      throw const FormatException(
+        'Remote checkpoint is missing required turn state.',
+      );
+    }
+
+    final rawPlayers = checkpoint['players'];
+    if (rawPlayers is! List || rawPlayers.length != players.length) {
+      throw const FormatException(
+        'Remote checkpoint must contain all four players.',
+      );
+    }
+    final seenColors = <PlayerColor>{};
+    for (final raw in rawPlayers) {
+      if (raw is! Map) {
+        throw const FormatException('Remote checkpoint has an invalid player.');
+      }
+      final color = _enumByName(PlayerColor.values, raw['color']);
+      if (color == null || !seenColors.add(color)) {
+        throw const FormatException(
+          'Remote checkpoint has invalid player colors.',
+        );
+      }
+      final tokens = raw['tokens'];
+      if (tokens is! List ||
+          tokens.length != players[color.index].tokens.length ||
+          tokens.any((progress) => progress is! int)) {
+        throw const FormatException(
+          'Remote checkpoint has invalid token progress.',
+        );
+      }
+    }
+    if (seenColors.length != PlayerColor.values.length ||
+        _enumByName(PlayerColor.values, checkpoint['currentPlayer']) == null) {
+      throw const FormatException(
+        'Remote checkpoint does not describe a complete board.',
+      );
+    }
+  }
+
+  void _restoreRemotePresentation(Map<String, dynamic> checkpoint) {
+    rollSerial = checkpoint['rollSerial'] as int? ?? rollSerial;
+    gameOver = checkpoint['gameOver'] as bool? ?? false;
+    message = checkpoint['message'] as String? ?? message;
+    pendingTrapPlacement = checkpoint['pendingTrapPlacement'] as bool? ?? false;
+    final savedItemsPerSide = checkpoint['chaosItemsPerSide'];
+    if (savedItemsPerSide is int && savedItemsPerSide > 0) {
+      _chaosItemsPerSide = savedItemsPerSide;
+    }
+
+    final winnerColor = _enumByName(PlayerColor.values, checkpoint['winner']);
+    winner = winnerColor == null ? null : players[winnerColor.index];
+
+    effectSerial = checkpoint['effectSerial'] as int? ?? 0;
+    effectLoopIndex = checkpoint['effectLoopIndex'] as int?;
+    final rawBoardCell = checkpoint['effectBoardCell'];
+    effectBoardCell =
+        rawBoardCell is Map &&
+            rawBoardCell['dx'] is num &&
+            rawBoardCell['dy'] is num
+        ? Offset(
+            (rawBoardCell['dx'] as num).toDouble(),
+            (rawBoardCell['dy'] as num).toDouble(),
+          )
+        : null;
+    effectPowerUp = _enumByName(PowerUp.values, checkpoint['effectPowerUp']);
+    effectKind = _enumByName(PowerEffectKind.values, checkpoint['effectKind']);
+    effectToken = _tokenFromCheckpointReference(checkpoint['effectToken']);
+    effectOwner = _enumByName(PlayerColor.values, checkpoint['effectOwner']);
+    effectResolving = checkpoint['effectResolving'] as bool? ?? false;
+    _lastCapturedToken = _tokenFromCheckpointReference(
+      checkpoint['lastCapturedToken'],
+    );
+
+    _eventHistory.clear();
+    final rawEvents = checkpoint['events'];
+    if (rawEvents is List) {
+      for (final raw in rawEvents) {
+        if (raw is! Map) {
+          throw const FormatException(
+            'Remote checkpoint has an invalid event.',
+          );
+        }
+        final type = _enumByName(GameEventType.values, raw['type']);
+        final playerColor = _enumByName(PlayerColor.values, raw['playerColor']);
+        final sequence = raw['sequence'];
+        final turn = raw['turn'];
+        final playerName = raw['playerName'];
+        final description = raw['description'];
+        if (type == null ||
+            playerColor == null ||
+            sequence is! int ||
+            turn is! int ||
+            playerName is! String ||
+            description is! String) {
+          throw const FormatException(
+            'Remote checkpoint has incomplete event data.',
+          );
+        }
+        final rawDice = raw['dice'];
+        final eventDice =
+            rawDice is List &&
+                rawDice.length == 2 &&
+                rawDice[0] is int &&
+                rawDice[1] is int
+            ? (rawDice[0] as int, rawDice[1] as int)
+            : null;
+        _eventHistory.add(
+          GameEvent(
+            sequence: sequence,
+            turn: turn,
+            type: type,
+            playerName: playerName,
+            playerColor: playerColor,
+            description: description,
+            dice: eventDice,
+            tokenId: raw['tokenId'] as int?,
+            fromProgress: raw['fromProgress'] as int?,
+            toProgress: raw['toProgress'] as int?,
+            targetName: raw['targetName'] as String?,
+            targetColor: _enumByName(PlayerColor.values, raw['targetColor']),
+          ),
+        );
+      }
+    }
+    final greatestEventSequence = _eventHistory.fold<int>(
+      0,
+      (greatest, event) =>
+          event.sequence > greatest ? event.sequence : greatest,
+    );
+    final savedNextSequence = checkpoint['nextEventSequence'];
+    _nextEventSequence =
+        savedNextSequence is int && savedNextSequence > greatestEventSequence
+        ? savedNextSequence
+        : greatestEventSequence + 1;
+  }
+
+  void _copyRemoteStateFrom(GameEngine source) {
+    if (source.mode != mode ||
+        source.matchFormat != matchFormat ||
+        source.rules.rulesVersion != rules.rulesVersion) {
+      throw const FormatException(
+        'Remote checkpoint is incompatible with this engine.',
+      );
+    }
+    _turnTimer?.cancel();
+    _turnTimer = null;
+    _effectResolutionTimer?.cancel();
+    _effectResolutionTimer = null;
+
+    initialPlayerColor = source.initialPlayerColor;
+    for (final color in PlayerColor.values) {
+      final target = players[color.index];
+      final incoming = source.players[color.index];
+      target
+        ..name = incoming.name
+        ..initialStackIntact = incoming.initialStackIntact
+        ..inventory = incoming.inventory
+        ..shielded = incoming.shielded
+        ..skippedTurns = incoming.skippedTurns;
+      for (var index = 0; index < target.tokens.length; index++) {
+        target.tokens[index].progress = incoming.tokens[index].progress;
+      }
+    }
+
+    traps
+      ..clear()
+      ..addAll(source.traps);
+    _itemLoopIndices
+      ..clear()
+      ..addAll(source._itemLoopIndices);
+    _chaosItemsPerSide = source._chaosItemsPerSide;
+    _lastTrapEffectTurn
+      ..clear()
+      ..addAll(source._lastTrapEffectTurn);
+    _standings = OnlineStandingsTracker<PlayerColor>(
+      competitors: PlayerColor.values,
+    );
+    for (final color in source.finishOrder) {
+      _standings.recordFinish(color);
+    }
+
+    currentPlayerIndex = source.currentPlayerIndex;
+    turnNumber = source.turnNumber;
+    dice = List<int>.of(source.dice);
+    rollSerial = source.rollSerial;
+    remainingDice
+      ..clear()
+      ..addAll(source.remainingDice);
+    hasRolled = source.hasRolled;
+    gameOver = source.gameOver;
+    spectatorContinuationActive = source.spectatorContinuationActive;
+    consecutiveDoubles = source.consecutiveDoubles;
+    message = source.message;
+    winner = source.winner == null ? null : players[source.winner!.color.index];
+    pendingTrapPlacement = source.pendingTrapPlacement;
+    effectSerial = source.effectSerial;
+    effectLoopIndex = source.effectLoopIndex;
+    effectBoardCell = source.effectBoardCell;
+    effectPowerUp = source.effectPowerUp;
+    effectKind = source.effectKind;
+    effectToken = _localTokenFor(source.effectToken);
+    effectOwner = source.effectOwner;
+    effectResolving = source.effectResolving;
+    _lastCapturedToken = _localTokenFor(source._lastCapturedToken);
+    _eventHistory
+      ..clear()
+      ..addAll(source._eventHistory);
+    _nextEventSequence = source._nextEventSequence;
+  }
+
+  GameToken? _localTokenFor(GameToken? sourceToken) => sourceToken == null
+      ? null
+      : players[sourceToken.owner.index].tokens[sourceToken.id];
+
+  GameToken? _tokenFromCheckpointReference(Object? raw) {
+    if (raw is! Map) return null;
+    final owner = _enumByName(PlayerColor.values, raw['owner']);
+    final id = raw['id'];
+    if (owner == null || id is! int || id < 0) return null;
+    final tokens = players[owner.index].tokens;
+    return id < tokens.length ? tokens[id] : null;
+  }
+
+  static T? _enumByName<T extends Enum>(Iterable<T> values, Object? raw) {
+    if (raw is! String) return null;
+    for (final value in values) {
+      if (value.name == raw) return value;
+    }
+    return null;
+  }
 
   bool get canContinueAfterWinner =>
       gameOver && winner != null && _standings.hasRemainingPlayers;

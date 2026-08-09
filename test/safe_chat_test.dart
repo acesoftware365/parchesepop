@@ -2,6 +2,71 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:parchesepop/safe_chat.dart';
 
 void main() {
+  test('realtime wire catalog contains exactly the reviewed phrases', () {
+    expect(safeChatPhraseNames, <String>{
+      'hello',
+      'goodLuck',
+      'goodGame',
+      'greatMove',
+      'wellPlayed',
+      'wow',
+      'yourTurn',
+      'thanks',
+      'almost',
+      'oops',
+      'rematch',
+      'funGame',
+    });
+  });
+
+  test('realtime message round-trips without rendered free text', () {
+    const message = OnlineSafeChatMessage(
+      messageId: 'm_123_456',
+      senderUid: 'guest_green',
+      phraseId: SafeChatPhraseId.wellPlayed,
+      sentAtMs: 1775689984000,
+    );
+
+    expect(message.toJson(), <String, Object?>{
+      'messageId': 'm_123_456',
+      'senderUid': 'guest_green',
+      'phraseId': 'wellPlayed',
+      'sentAt': 1775689984000,
+    });
+    final decoded = OnlineSafeChatMessage.fromJson(
+      message.toJson(),
+      pathMessageId: message.messageId,
+    );
+    expect(decoded.messageId, message.messageId);
+    expect(decoded.senderUid, message.senderUid);
+    expect(decoded.phraseId, message.phraseId);
+    expect(decoded.sentAtMs, message.sentAtMs);
+    expect(decoded.toSafeChatMessage().textForLanguage('es'), '¡Bien jugado!');
+  });
+
+  test('realtime message parser rejects spoofable or unreviewed records', () {
+    Map<String, Object?> valid() => <String, Object?>{
+      'messageId': 'm_valid',
+      'senderUid': 'guest_green',
+      'phraseId': 'hello',
+      'sentAt': 1775689984000,
+    };
+
+    final badRecords = <Map<String, Object?>>[
+      {...valid(), 'messageId': 'm_other'},
+      {...valid(), 'senderUid': 'bad/sender'},
+      {...valid(), 'phraseId': 'custom free text'},
+      {...valid(), 'sentAt': 1.5},
+      {...valid(), 'renderedText': 'not allowed'},
+    ];
+    for (final record in badRecords) {
+      expect(
+        () => OnlineSafeChatMessage.fromJson(record, pathMessageId: 'm_valid'),
+        throwsFormatException,
+      );
+    }
+  });
+
   test('every approved phrase has Spanish and English copy', () {
     expect(SafeChatCatalog.phrases, hasLength(SafeChatPhraseId.values.length));
     expect(

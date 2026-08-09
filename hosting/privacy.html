@@ -1,0 +1,633 @@
+<!doctype html>
+<html lang="es">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="theme-color" content="#0b2d68" />
+    <meta
+      name="description"
+      content="Política de privacidad oficial de Parchís Pop en español e inglés."
+    />
+    <link rel="canonical" href="https://parchese-pop.web.app/privacy.html" />
+    <title>Privacidad | Parchís Pop</title>
+    <style>
+      :root {
+        color-scheme: light;
+        --navy: #14284f;
+        --deep: #071b40;
+        --blue: #2474e5;
+        --yellow: #ffc83d;
+        --red: #f64f63;
+        --green: #31b977;
+        --ink: #263653;
+        --muted: #5f6f8c;
+        --line: #dce4f2;
+        --paper: #ffffff;
+        --canvas: #f4f7fc;
+        font-family: Inter, ui-rounded, "SF Pro Rounded", -apple-system,
+          BlinkMacSystemFont, "Segoe UI", sans-serif;
+      }
+
+      * { box-sizing: border-box; }
+      html { scroll-behavior: smooth; }
+      body {
+        margin: 0;
+        color: var(--ink);
+        background:
+          radial-gradient(circle at 6% 4%, rgb(36 116 229 / 0.13), transparent 28rem),
+          radial-gradient(circle at 96% 18%, rgb(114 87 233 / 0.12), transparent 26rem),
+          var(--canvas);
+        line-height: 1.65;
+      }
+
+      a { color: #145fc1; text-underline-offset: 3px; }
+      a:hover { color: #0a448d; }
+      header {
+        position: relative;
+        overflow: hidden;
+        color: #fff;
+        background:
+          linear-gradient(135deg, rgb(36 116 229 / 0.82), transparent 48%),
+          linear-gradient(145deg, var(--deep), #0b2d68 58%, #3a2d84);
+      }
+      header::before,
+      header::after {
+        position: absolute;
+        width: 260px;
+        height: 260px;
+        border: 2px solid rgb(255 255 255 / 0.09);
+        border-radius: 52px;
+        content: "";
+        transform: rotate(34deg);
+      }
+      header::before { top: -150px; right: 2%; }
+      header::after { bottom: -220px; left: 3%; }
+      .hero {
+        position: relative;
+        z-index: 1;
+        width: min(1040px, calc(100% - 36px));
+        margin: 0 auto;
+        padding: 46px 0 42px;
+      }
+      .brand {
+        display: flex;
+        gap: 13px;
+        align-items: center;
+        margin-bottom: 32px;
+        font-size: 19px;
+        font-weight: 900;
+        letter-spacing: 0.2px;
+      }
+      .mark {
+        display: grid;
+        width: 48px;
+        height: 48px;
+        place-items: center;
+        color: var(--navy);
+        background: var(--yellow);
+        border: 3px solid #fff;
+        border-radius: 14px;
+        box-shadow: 0 8px 20px rgb(0 0 0 / 0.24);
+        font-size: 26px;
+        transform: rotate(-4deg);
+      }
+      .eyebrow {
+        margin: 0 0 8px;
+        color: #cbd8fb;
+        font-size: 13px;
+        font-weight: 900;
+        letter-spacing: 1.4px;
+        text-transform: uppercase;
+      }
+      h1 {
+        max-width: 780px;
+        margin: 0;
+        font-size: clamp(38px, 8vw, 68px);
+        line-height: 0.98;
+        letter-spacing: -2.3px;
+      }
+      .intro {
+        max-width: 720px;
+        margin: 20px 0 0;
+        color: #e4ebff;
+        font-size: clamp(17px, 2.8vw, 20px);
+        font-weight: 650;
+      }
+      .updated {
+        display: inline-flex;
+        align-items: center;
+        min-height: 34px;
+        margin-top: 22px;
+        padding: 6px 12px;
+        color: var(--navy);
+        background: var(--yellow);
+        border-radius: 999px;
+        font-size: 13px;
+        font-weight: 900;
+      }
+
+      .language-nav {
+        position: sticky;
+        z-index: 5;
+        top: 0;
+        border-bottom: 1px solid var(--line);
+        background: rgb(255 255 255 / 0.93);
+        box-shadow: 0 8px 24px rgb(20 40 79 / 0.08);
+        backdrop-filter: blur(12px);
+      }
+      .language-nav div {
+        display: flex;
+        width: min(1040px, calc(100% - 36px));
+        min-height: 58px;
+        margin: 0 auto;
+        gap: 10px;
+        align-items: center;
+      }
+      .language-nav a {
+        display: inline-flex;
+        min-height: 38px;
+        align-items: center;
+        padding: 7px 14px;
+        color: var(--navy);
+        background: #edf3ff;
+        border-radius: 999px;
+        font-size: 14px;
+        font-weight: 850;
+        text-decoration: none;
+      }
+
+      main {
+        width: min(1040px, calc(100% - 36px));
+        margin: 32px auto 64px;
+      }
+      .summary {
+        display: grid;
+        grid-template-columns: repeat(3, 1fr);
+        margin-bottom: 28px;
+        gap: 14px;
+      }
+      .summary article {
+        padding: 20px;
+        background: var(--paper);
+        border: 1px solid var(--line);
+        border-radius: 22px;
+        box-shadow: 0 12px 28px rgb(20 40 79 / 0.07);
+      }
+      .summary strong {
+        display: block;
+        margin-bottom: 5px;
+        color: var(--navy);
+        font-size: 16px;
+      }
+      .summary p { margin: 0; color: var(--muted); font-size: 14px; }
+      .dot {
+        display: inline-block;
+        width: 11px;
+        height: 11px;
+        margin-right: 7px;
+        background: var(--blue);
+        border-radius: 50%;
+      }
+      .summary article:nth-child(2) .dot { background: var(--green); }
+      .summary article:nth-child(3) .dot { background: var(--red); }
+
+      .policy {
+        margin-top: 28px;
+        padding: clamp(24px, 5vw, 48px);
+        background: var(--paper);
+        border: 1px solid var(--line);
+        border-radius: 28px;
+        box-shadow: 0 16px 44px rgb(20 40 79 / 0.09);
+        scroll-margin-top: 76px;
+      }
+      .policy-head {
+        margin-bottom: 30px;
+        padding-bottom: 24px;
+        border-bottom: 3px solid var(--yellow);
+      }
+      .language-label {
+        color: var(--blue);
+        font-size: 12px;
+        font-weight: 900;
+        letter-spacing: 1.3px;
+        text-transform: uppercase;
+      }
+      h2 {
+        margin: 6px 0 7px;
+        color: var(--navy);
+        font-size: clamp(28px, 5vw, 40px);
+        line-height: 1.1;
+        letter-spacing: -0.8px;
+      }
+      h3 {
+        margin: 30px 0 8px;
+        color: var(--navy);
+        font-size: 21px;
+        line-height: 1.25;
+      }
+      p { margin: 8px 0 14px; }
+      ul { margin: 8px 0 18px; padding-left: 24px; }
+      li { margin: 6px 0; }
+      .notice {
+        margin: 22px 0;
+        padding: 16px 18px;
+        background: #fff7db;
+        border: 1px solid #f5ce57;
+        border-left: 6px solid var(--yellow);
+        border-radius: 14px;
+      }
+      .contact {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 9px 18px;
+        padding: 18px;
+        background: #edf3ff;
+        border-radius: 16px;
+        font-weight: 800;
+      }
+      footer {
+        padding: 28px 18px 42px;
+        color: var(--muted);
+        text-align: center;
+        font-size: 13px;
+      }
+
+      @media (max-width: 720px) {
+        .hero { padding-top: 30px; }
+        .brand { margin-bottom: 24px; }
+        .summary { grid-template-columns: 1fr; }
+        .policy { border-radius: 22px; }
+        .language-nav div { justify-content: center; }
+      }
+      @media (prefers-reduced-motion: reduce) {
+        html { scroll-behavior: auto; }
+      }
+    </style>
+  </head>
+  <body>
+    <header>
+      <div class="hero">
+        <div class="brand"><span class="mark" aria-hidden="true">⚄</span>PARCHÍS POP!</div>
+        <p class="eyebrow">Privacidad clara · Clear privacy</p>
+        <h1>Tu partida, tus decisiones.</h1>
+        <p class="intro">
+          Aquí explicamos qué datos usa Parchís Pop, para qué se usan y cómo
+          puedes controlar la analítica, los anuncios y la eliminación de datos.
+        </p>
+        <span class="updated">Actualizada · August 9, 2026</span>
+      </div>
+    </header>
+
+    <nav class="language-nav" aria-label="Seleccionar idioma">
+      <div>
+        <a href="#es">Español</a>
+        <a href="#en" lang="en">English</a>
+      </div>
+    </nav>
+
+    <main>
+      <section class="summary" aria-label="Resumen de privacidad">
+        <article>
+          <strong><span class="dot"></span>Perfil local</strong>
+          <p>Tu correo y contraseña local no se envían para iniciar partidas online.</p>
+        </article>
+        <article>
+          <strong><span class="dot"></span>Analítica opcional</strong>
+          <p>Está apagada por defecto y puedes cambiarla desde Ajustes.</p>
+        </article>
+        <article>
+          <strong><span class="dot"></span>Anuncios voluntarios</strong>
+          <p>Los anuncios recompensados solo se abren cuando tú los eliges.</p>
+        </article>
+      </section>
+
+      <article class="policy" id="es">
+        <div class="policy-head">
+          <span class="language-label">Español</span>
+          <h2>Política de privacidad</h2>
+          <strong>Fecha de vigencia: 9 de agosto de 2026</strong>
+        </div>
+
+        <p>
+          Esta Política de privacidad explica cómo Parchís Pop maneja la
+          información cuando utilizas el juego en Android, iOS, macOS u otra
+          plataforma compatible.
+        </p>
+
+        <h3>1. Información guardada en tu dispositivo</h3>
+        <p>Parchís Pop puede guardar localmente:</p>
+        <ul>
+          <li>tu perfil opcional: nombre visible, correo, bandera y avatar;</li>
+          <li>monedas, cosméticos, artículos equipados, nivel, progreso, tutorial y una partida guardada;</li>
+          <li>idioma, sonido, música, vibración, preferencia de mano y otros ajustes; y</li>
+          <li>credenciales locales si usas la opción de cuenta por correo del prototipo.</li>
+        </ul>
+        <p>
+          La contraseña no se guarda en texto plano: se conserva localmente un
+          resumen con sal. Puedes jugar contra el CPU sin crear un perfil. El
+          correo y la contraseña del perfil local no se envían a Firebase para
+          iniciar una partida online.
+        </p>
+
+        <h3>2. Servicios online y multijugador</h3>
+        <p>
+          Cuando eliges una función online, Parchís Pop usa Google Firebase
+          Authentication para crear o reutilizar un identificador anónimo de la
+          instalación y Firebase Realtime Database para operar la búsqueda de
+          jugadores y las partidas. Los datos online pueden incluir:
+        </p>
+        <ul>
+          <li>identificador anónimo de Firebase, nombre visible, avatar, fechas y cosméticos equipados;</li>
+          <li>código de sala, estado público o privado, participantes, presencia, tiradas iniciales y cola;</li>
+          <li>acciones, estado, puntos de recuperación, resultados y conexión de la partida; y</li>
+          <li>frases preaprobadas del chat rápido. No hay chat libre dentro de la partida.</li>
+        </ul>
+        <p>
+          Los jugadores de una misma sala ven la información y el estado
+          necesarios para jugar. Una sala pública puede aparecer como un listado
+          limitado para otros jugadores. Si Quick Pop no encuentra una persona
+          durante el período mostrado, puede iniciar con oponentes controlados
+          por computadora.
+        </p>
+        <p>
+          Firebase Remote Config obtiene ajustes de disponibilidad, versión
+          mínima, mensaje y enlace de actualización. Los SDK de Firebase pueden
+          procesar identificadores técnicos, información de instancia o
+          instalación, dirección IP, dispositivo, sistema operativo,
+          diagnósticos y actividad de red para ofrecer y proteger el servicio.
+        </p>
+
+        <h3>3. Analíticas</h3>
+        <p>
+          Firebase Analytics está <strong>apagado por defecto</strong>. Puedes
+          activarlo o desactivarlo desde <strong>Ajustes &gt; Analítica anónima</strong>.
+          Cuando está activo, los eventos pueden incluir inicio, final, abandono
+          y reanudación de partidas; modo elegido; tutorial; decisiones sobre
+          anuncios opcionales; monedas y tienda. No incluimos intencionalmente tu
+          nombre, correo, mensajes, bandera o avatar en esos eventos.
+        </p>
+
+        <h3>4. Publicidad</h3>
+        <p>Las versiones de Android e iOS usan Google AdMob:</p>
+        <ul>
+          <li>
+            Un banner adaptable puede aparecer en una franja reservada al pie de
+            la pantalla, incluso durante la partida, la guía y la búsqueda de
+            jugadores. No cubre los controles ni interrumpe una jugada.
+          </li>
+          <li>
+            Los anuncios recompensados pueden ofrecerse voluntariamente en la
+            <strong>Tienda</strong> por la bonificación indicada y al finalizar
+            la mesa para duplicar una recompensa elegible. Solo se abren tras tu
+            selección explícita y el premio se entrega al completarlos.
+          </li>
+        </ul>
+        <div class="notice">
+          <strong>Los anuncios recompensados son siempre voluntarios.</strong>
+          Reanudar, Jugar otra vez, Volver al inicio, tirar los dados o mover una
+          ficha nunca abre automáticamente un anuncio a pantalla completa o
+          recompensado. El banner inferior reservado puede permanecer visible.
+        </div>
+        <p>
+          macOS no muestra anuncios de AdMob. Parchís Pop no solicita actualmente
+          permiso para rastrear actividad entre aplicaciones o sitios de otras
+          compañías ni acceso al identificador publicitario de Apple (IDFA).
+          Según región y consentimiento, Google y sus socios pueden procesar
+          identificadores, IP, diagnósticos e interacciones publicitarias.
+          Usamos Google User Messaging Platform para presentar opciones cuando
+          corresponde. Puedes administrarlas desde
+          <strong>Ajustes &gt; Privacidad y políticas</strong>.
+        </p>
+
+        <h3>5. Proveedores e intercambio de información</h3>
+        <p>
+          Parchís Pop no vende información personal. Google puede procesar datos
+          mediante Firebase Authentication, Firebase Realtime Database,
+          Firebase Remote Config, Firebase Analytics, AdMob y User Messaging
+          Platform, sujeto a sus condiciones y a tus opciones. También podemos
+          divulgar información si la ley lo exige o para proteger usuarios, el
+          servicio o derechos legales.
+        </p>
+        <p>
+          Consulta
+          <a href="https://policies.google.com/technologies/partner-sites?hl=es">cómo usa Google la información de aplicaciones que utilizan sus servicios</a>
+          y la <a href="https://policies.google.com/privacy?hl=es">Política de privacidad de Google</a>.
+        </p>
+
+        <h3>6. Retención y eliminación</h3>
+        <p>
+          El perfil, credenciales, preferencias, progreso, partidas guardadas,
+          monedas y cosméticos locales permanecen hasta que los elimines, borres
+          los datos de la aplicación o desinstales la app.
+          <strong>Mi perfil &gt; Eliminar cuenta y datos</strong> elimina esa
+          información local, elimina la identidad anónima de Firebase
+          Authentication y, cuando están disponibles, el perfil online, la
+          búsqueda activa, la solicitud pendiente de entrada, la presencia y
+          la membresía removible de una sala en espera.
+        </p>
+        <p>
+          Las partidas resueltas, el chat inmutable y los registros de salas
+          compartidas pueden contener estado de otros jugadores y conservarse
+          para mantener la integridad del servicio, prevenir abusos, diagnosticar
+          problemas o cumplir obligaciones legales hasta su eliminación o
+          anonimización. Una identidad online antigua, creada antes de que
+          existiera el borrado directo, también puede requerir una limpieza
+          verificada del servidor. Para solicitar la eliminación de datos
+          retenidos o antiguos, escribe a
+          <a href="mailto:sales@liisgo.com">sales@liisgo.com</a>.
+          Podemos pedir información limitada para localizar y verificar los
+          registros; nunca envíes una contraseña.
+        </p>
+
+        <h3>7. Seguridad, menores y derechos</h3>
+        <p>
+          Usamos medidas técnicas razonables, incluida autenticación y reglas de
+          acceso de Firebase, pero ningún sistema es completamente seguro. No
+          incluyas información personal sensible en el nombre visible.
+        </p>
+        <p>
+          Parchís Pop es un juego de audiencia general. Quien no tenga edad para
+          dar consentimiento válido debe usarlo con permiso y supervisión de un
+          padre, madre o tutor. No pedimos deliberadamente a menores información
+          personal sensible.
+        </p>
+        <p>
+          Según tu ubicación, puedes tener derechos de acceso, corrección,
+          eliminación, restricción, oposición o retiro del consentimiento.
+          Escríbenos para ejercer un derecho o hacer una consulta.
+        </p>
+
+        <h3>8. Cambios y contacto</h3>
+        <p>
+          Podemos actualizar esta política cuando cambien el juego o sus
+          servicios. La fecha superior identifica la revisión más reciente.
+        </p>
+        <div class="contact">
+          <a href="mailto:sales@liisgo.com">sales@liisgo.com</a>
+          <a href="https://github.com/acesoftware365/parchesepop">Repositorio del proyecto</a>
+        </div>
+      </article>
+
+      <article class="policy" id="en" lang="en">
+        <div class="policy-head">
+          <span class="language-label">English</span>
+          <h2>Privacy Policy</h2>
+          <strong>Effective date: August 9, 2026</strong>
+        </div>
+
+        <p>
+          This Privacy Policy explains how Parchís Pop handles information when
+          you use the game on Android, iOS, macOS, or another supported platform.
+        </p>
+
+        <h3>1. Information stored on your device</h3>
+        <p>Parchís Pop may store locally:</p>
+        <ul>
+          <li>your optional profile: display name, email, flag, and avatar;</li>
+          <li>coins, cosmetics, equipped items, level, progress, tutorial state, and a saved match;</li>
+          <li>language, sound, music, vibration, hand preference, and other settings; and</li>
+          <li>local credentials if you use the prototype email account option.</li>
+        </ul>
+        <p>
+          A raw password is not stored; a salted digest is kept locally. You can
+          play against the CPU without a profile. The local profile email and
+          password are not sent to Firebase to start an online match.
+        </p>
+
+        <h3>2. Online services and multiplayer</h3>
+        <p>
+          When you choose an online feature, Parchís Pop uses Google Firebase
+          Authentication to create or reuse an anonymous installation identifier
+          and Firebase Realtime Database to operate matchmaking and games. Online
+          data may include:
+        </p>
+        <ul>
+          <li>anonymous Firebase identifier, display name, avatar, timestamps, and equipped cosmetics;</li>
+          <li>room code, public/private state, members, presence, opening rolls, and queue status;</li>
+          <li>game actions, state, recovery checkpoints, results, and connection status; and</li>
+          <li>preapproved quick-chat phrases. Free-form in-game chat is not provided.</li>
+        </ul>
+        <p>
+          Players in a room see the information and game state needed to play. A
+          public room may appear as a limited listing to other players. If Quick
+          Pop does not find a person during the displayed search period, it may
+          start with computer-controlled opponents.
+        </p>
+        <p>
+          Firebase Remote Config obtains service availability, minimum-version,
+          update-message, and update-link settings. Firebase SDKs may process
+          technical identifiers, app-instance or installation information, IP
+          address, device, operating system, diagnostics, and network activity
+          needed to provide and secure these services.
+        </p>
+
+        <h3>3. Analytics</h3>
+        <p>
+          Firebase Analytics is <strong>off by default</strong>. You can enable
+          or disable it from <strong>Settings &gt; Anonymous analytics</strong>.
+          When enabled, events may include match starts, completions, abandonment
+          and resume; mode; tutorial progress; optional-ad choices; coins; and
+          shop interactions. We do not intentionally include your name, email,
+          messages, flag, or avatar in those events.
+        </p>
+
+        <h3>4. Advertising</h3>
+        <p>The Android and iOS versions use Google AdMob:</p>
+        <ul>
+          <li>
+            An adaptive banner may appear in a reserved strip at the bottom,
+            including during gameplay, the guide, and matchmaking. It does not
+            cover controls or interrupt a move.
+          </li>
+          <li>
+            Rewarded ads may be offered voluntarily in the <strong>Shop</strong>
+            for the stated bonus and after the table finishes to double an
+            eligible reward. They open only after your explicit choice, and the
+            reward is granted only after completion.
+          </li>
+        </ul>
+        <div class="notice">
+          <strong>Rewarded ads are always voluntary.</strong> Resume, Play Again,
+          Back to Home, rolling the dice, or moving a piece never automatically
+          opens a full-screen or rewarded ad. The reserved bottom banner may
+          remain visible.
+        </div>
+        <p>
+          macOS does not display AdMob ads. Parchís Pop currently does not ask to
+          track activity across other companies' apps or websites or request
+          Apple's IDFA. Depending on region and consent, Google and its partners
+          may process identifiers, IP address, diagnostics, and ad interactions.
+          We use Google User Messaging Platform to present choices when required.
+          Manage available choices from
+          <strong>Settings &gt; Privacy and policies</strong>.
+        </p>
+
+        <h3>5. Providers and data sharing</h3>
+        <p>
+          Parchís Pop does not sell personal information. Google may process data
+          through Firebase Authentication, Firebase Realtime Database, Firebase
+          Remote Config, Firebase Analytics, AdMob, and User Messaging Platform,
+          subject to its terms and your choices. We may also disclose information
+          when required by law or to protect users, the service, or legal rights.
+        </p>
+        <p>
+          Read
+          <a href="https://policies.google.com/technologies/partner-sites">how Google uses information from apps that use its services</a>
+          and the <a href="https://policies.google.com/privacy">Google Privacy Policy</a>.
+        </p>
+
+        <h3>6. Retention and deletion</h3>
+        <p>
+          Local profile, credentials, preferences, progress, saved matches,
+          coins, and cosmetics remain until you delete them, clear app storage,
+          or uninstall the app. <strong>My Profile &gt; Delete account and data</strong>
+          removes this local information, deletes the anonymous Firebase
+          Authentication identity, and, when available, removes the online
+          profile, active matchmaking ticket, pending join request, presence,
+          and removable waiting-room membership.
+        </p>
+        <p>
+          Resolved matches, immutable chat, and shared room records can contain
+          state belonging to other players and may remain for service integrity,
+          abuse prevention, diagnostics, or legal requirements until they are
+          deleted or anonymized. An older online identity created before direct
+          deletion was available may also require verified backend cleanup. To
+          request deletion of retained or legacy online data, email
+          <a href="mailto:sales@liisgo.com">sales@liisgo.com</a>. We may ask for
+          limited information needed to locate and verify records; never send a
+          password.
+        </p>
+
+        <h3>7. Security, children, and rights</h3>
+        <p>
+          We use reasonable technical measures, including Firebase authentication
+          and access rules, but no system is completely secure. Do not include
+          sensitive personal information in a display name.
+        </p>
+        <p>
+          Parchís Pop is a general-audience game. Anyone not old enough to provide
+          valid consent should use it only with a parent or guardian's permission
+          and supervision. We do not knowingly ask children for sensitive
+          personal information.
+        </p>
+        <p>
+          Depending on your location, you may have rights to access, correct,
+          delete, restrict, or object to certain processing, or withdraw consent.
+          Contact us to exercise a right or ask a question.
+        </p>
+
+        <h3>8. Changes and contact</h3>
+        <p>
+          We may update this policy when the game or its services change. The
+          date above identifies the latest revision.
+        </p>
+        <div class="contact">
+          <a href="mailto:sales@liisgo.com">sales@liisgo.com</a>
+          <a href="https://github.com/acesoftware365/parchesepop">Project repository</a>
+        </div>
+      </article>
+    </main>
+
+    <footer>© 2026 Parchís Pop · Privacy policy / Política de privacidad</footer>
+  </body>
+</html>

@@ -1022,6 +1022,70 @@ void main() {
     );
 
     testWidgets(
+      'CPU first place still offers the voluntary playing bonus immediately',
+      (tester) async {
+        _configureIPhone14View(tester);
+        SharedPreferences.setMockInitialValues({});
+        final engine = _cpuFirstWinnerMatch();
+        final wallet = await WalletController.create();
+        final progression = await PlayerProgressionController.create();
+        final ads = _FakeAdsController(
+          supported: true,
+          adsReady: true,
+          rewardedReady: true,
+          rewardedResult: RewardedAdResult.earned,
+        );
+        addTearDown(engine.dispose);
+        addTearDown(wallet.dispose);
+        addTearDown(progression.dispose);
+        addTearDown(ads.dispose);
+
+        await tester.pumpWidget(
+          MobileAdsScope(
+            controller: ads,
+            child: MaterialApp(
+              builder: (context, child) => MobileAdShell(
+                controller: ads,
+                child: child ?? const SizedBox.shrink(),
+              ),
+              home: GameScreen(
+                opponent: 'CPU • Fácil',
+                gameEngine: engine,
+                wallet: wallet,
+                progression: progression,
+                analyticsMatchRef: 'cpu_first_reward_match',
+              ),
+            ),
+          ),
+        );
+        await tester.pump(const Duration(milliseconds: 1900));
+
+        expect(engine.placementFor(PlayerColor.red), isNull);
+        expect(wallet.balance, 330);
+        expect(find.text('+80 MONEDAS'), findsOneWidget);
+        expect(find.text('+30 EXTRA'), findsOneWidget);
+        final rewarded = find.byKey(
+          const ValueKey('victory-early-rewarded-ad'),
+        );
+        expect(rewarded.hitTestable(), findsOneWidget);
+
+        await tester.tap(rewarded);
+        await tester.pump(const Duration(milliseconds: 120));
+
+        expect(ads.rewardedShowCount, 1);
+        expect(wallet.balance, 360);
+        expect(
+          progression.rewardedDoubleClaimed('cpu_first_reward_match'),
+          isTrue,
+        );
+        expect(find.text('+30 MONEDAS'), findsOneWidget);
+        expect(find.text('EXTRA RECIBIDAS'), findsOneWidget);
+
+        await tester.pumpWidget(const SizedBox.shrink());
+      },
+    );
+
+    testWidgets(
       'restored completed match never reoffers an already claimed reward',
       (tester) async {
         _configureIPhone14View(tester);
@@ -1667,6 +1731,14 @@ GameEngine _finishedVictoryEngine() {
 
 GameEngine _firstWinnerMatch() {
   final engine = GameEngine();
+  _putCurrentPlayerOneMoveFromFinishing(engine);
+  expect(engine.moveToken(engine.currentPlayer.tokens.last, die: 1), isTrue);
+  expect(engine.canContinueAfterWinner, isTrue);
+  return engine;
+}
+
+GameEngine _cpuFirstWinnerMatch() {
+  final engine = GameEngine()..currentPlayerIndex = 1;
   _putCurrentPlayerOneMoveFromFinishing(engine);
   expect(engine.moveToken(engine.currentPlayer.tokens.last, die: 1), isTrue);
   expect(engine.canContinueAfterWinner, isTrue);

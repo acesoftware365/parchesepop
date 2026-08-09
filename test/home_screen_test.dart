@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:parchesepop/firebase_online_transport.dart';
 import 'package:parchesepop/game_analytics.dart';
 import 'package:parchesepop/main.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -348,10 +349,10 @@ void main() {
     expect(find.byKey(const ValueKey('home-mode-cpu')), findsOneWidget);
     expect(find.byKey(const ValueKey('home-quick-pop')), findsNothing);
     expect(find.text('QUICK POP'), findsOneWidget);
-    expect(find.text('ONLINE · PRÓXIMAMENTE'), findsOneWidget);
+    expect(find.text('ONLINE · CPU EN 5 S'), findsOneWidget);
     expect(find.text('2 fichas · partida rápida'), findsOneWidget);
     expect(find.text('MESA RÁPIDA'), findsOneWidget);
-    expect(find.text('Partida local'), findsOneWidget);
+    expect(find.text('Amigos online o partida local'), findsOneWidget);
     expect(find.text('CONTRA CPU'), findsOneWidget);
     expect(find.text('Juega contra el CPU'), findsOneWidget);
     expect(tester.takeException(), isNull);
@@ -437,7 +438,12 @@ void main() {
         'private-test-marker': 'must be removed',
       });
 
-      await tester.pumpWidget(ParchesePopApp(analytics: analytics));
+      await tester.pumpWidget(
+        ParchesePopApp(
+          analytics: analytics,
+          onlineAccountDeletion: () async {},
+        ),
+      );
       for (var attempt = 0; attempt < 30; attempt++) {
         await tester.pump(const Duration(milliseconds: 100));
         if (find.byType(HomeScreen).evaluate().isNotEmpty) break;
@@ -553,4 +559,111 @@ void main() {
     expect(find.text('MESA RÁPIDA').hitTestable(), findsOneWidget);
     expect(tester.takeException(), isNull);
   });
+
+  testWidgets(
+    'account deletion keeps local data on online failure and retries safely',
+    (tester) async {
+      _useSpanish();
+      _useViewport(tester, const Size(390, 844));
+      SharedPreferences.setMockInitialValues({
+        'profile_name': 'JuanPop',
+        'profile_email': 'juan@example.com',
+        'profile_flag': '🇩🇴',
+      });
+      var attempts = 0;
+      await tester.pumpWidget(
+        ParchesePopApp(
+          onlineAccountDeletion: () async {
+            attempts++;
+            if (attempts == 1) {
+              throw const OnlineAccountDeletionException(
+                OnlineAccountDeletionErrorCode.cleanupFailed,
+                'Fallo recuperable de prueba.',
+              );
+            }
+          },
+        ),
+      );
+      for (var attempt = 0; attempt < 30; attempt++) {
+        await tester.pump(const Duration(milliseconds: 100));
+        if (find.byType(HomeScreen).evaluate().isNotEmpty) break;
+      }
+
+      await tester.tap(find.byKey(const ValueKey('home-profile-button')));
+      await _expectProfileDialog(tester);
+      await tester.ensureVisible(
+        find.byKey(const ValueKey('home-profile-delete')),
+      );
+      await tester.tap(find.byKey(const ValueKey('home-profile-delete')));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const ValueKey('account-deletion-confirm')));
+      await tester.pumpAndSettle();
+
+      expect(
+        find.byKey(const ValueKey('account-deletion-retry')),
+        findsOneWidget,
+      );
+      expect(
+        (await SharedPreferences.getInstance()).getString('profile_name'),
+        'JuanPop',
+      );
+
+      await tester.tap(
+        find.byKey(const ValueKey('account-deletion-retry-button')),
+      );
+      await tester.pumpAndSettle();
+
+      expect(attempts, 2);
+      expect(
+        (await SharedPreferences.getInstance()).getString('profile_name'),
+        isNull,
+      );
+      expect(
+        find.byKey(const ValueKey('account-deletion-retry')),
+        findsNothing,
+      );
+      expect(tester.takeException(), isNull);
+    },
+  );
+
+  testWidgets(
+    'guest can delete anonymous online account without registering first',
+    (tester) async {
+      _useSpanish();
+      _useViewport(tester, const Size(390, 844));
+      SharedPreferences.setMockInitialValues({
+        'private-test-marker': 'guest data',
+      });
+      var onlineDeletionCalls = 0;
+
+      await tester.pumpWidget(
+        ParchesePopApp(
+          onlineAccountDeletion: () async => onlineDeletionCalls++,
+        ),
+      );
+      for (var attempt = 0; attempt < 30; attempt++) {
+        await tester.pump(const Duration(milliseconds: 100));
+        if (find.byType(HomeScreen).evaluate().isNotEmpty) break;
+      }
+
+      await tester.tap(find.byKey(const ValueKey('home-profile-button')));
+      await tester.pumpAndSettle();
+      final deleteButton = find.byKey(
+        const ValueKey('guest-profile-delete-account'),
+      );
+      await tester.ensureVisible(deleteButton);
+      await tester.tap(deleteButton);
+      await tester.pumpAndSettle();
+      expect(find.text('Eliminar definitivamente'), findsOneWidget);
+
+      await tester.tap(find.byKey(const ValueKey('account-deletion-confirm')));
+      await tester.pumpAndSettle();
+
+      expect(onlineDeletionCalls, 1);
+      expect((await SharedPreferences.getInstance()).getKeys(), isEmpty);
+      expect(find.byType(HomeScreen), findsOneWidget);
+      expect(find.byKey(const ValueKey('profile-email-submit')), findsNothing);
+      expect(tester.takeException(), isNull);
+    },
+  );
 }

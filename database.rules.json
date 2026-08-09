@@ -1,0 +1,295 @@
+{
+  "rules": {
+    ".read": false,
+    ".write": false,
+    "onlineV2": {
+      "profiles": {
+        ".read": "auth != null",
+        "$uid": {
+          ".write": "auth != null && auth.uid === $uid",
+          ".validate": "newData.hasChildren(['uid', 'displayName', 'createdAt', 'updatedAt']) && newData.child('uid').val() === $uid && newData.child('displayName').isString() && newData.child('displayName').val().length > 0 && newData.child('displayName').val().length <= 24 && (!newData.hasChild('avatarId') || (newData.child('avatarId').isString() && newData.child('avatarId').val().length > 0 && newData.child('avatarId').val().length <= 64)) && newData.child('createdAt').isNumber() && newData.child('updatedAt').isNumber() && newData.child('updatedAt').val() >= newData.child('createdAt').val() && (!data.exists() || newData.child('createdAt').val() === data.child('createdAt').val())",
+          "uid": { ".validate": "newData.isString() && newData.val() === $uid" },
+          "displayName": { ".validate": "newData.isString() && newData.val().length > 0 && newData.val().length <= 24" },
+          "avatarId": { ".validate": "newData.isString() && newData.val().length > 0 && newData.val().length <= 64" },
+          "createdAt": { ".validate": "newData.isNumber()" },
+          "updatedAt": { ".validate": "newData.isNumber()" },
+          "$other": { ".validate": false }
+        }
+      },
+      "accountResources": {
+        "$uid": {
+          ".read": "auth != null && auth.uid === $uid",
+          ".write": "auth != null && auth.uid === $uid",
+          ".validate": "newData.hasChildren(['schemaVersion', 'updatedAt', 'requiresBackendCleanup']) && newData.child('schemaVersion').val() === 1 && newData.child('updatedAt').isNumber() && newData.child('requiresBackendCleanup').isBoolean() && (data.child('requiresBackendCleanup').val() !== true || newData.child('requiresBackendCleanup').val() === true)",
+          "schemaVersion": { ".validate": "newData.val() === 1" },
+          "updatedAt": { ".validate": "newData.isNumber()" },
+          "requiresBackendCleanup": { ".validate": "newData.isBoolean() && (data.val() !== true || newData.val() === true)" },
+          "rooms": {
+            "$roomId": {
+              ".validate": "newData.hasChildren(['roomId', 'role', 'indexedAt']) && newData.child('roomId').val() === $roomId && (newData.child('role').val() === 'host' || newData.child('role').val() === 'member') && newData.child('indexedAt').isNumber()",
+              "roomId": { ".validate": "newData.isString() && newData.val() === $roomId" },
+              "role": { ".validate": "newData.val() === 'host' || newData.val() === 'member'" },
+              "indexedAt": { ".validate": "newData.isNumber()" },
+              "$other": { ".validate": false }
+            }
+          },
+          "presence": {
+            "$roomId": {
+              ".validate": "newData.hasChildren(['roomId', 'indexedAt']) && newData.child('roomId').val() === $roomId && newData.child('indexedAt').isNumber()",
+              "roomId": { ".validate": "newData.isString() && newData.val() === $roomId" },
+              "indexedAt": { ".validate": "newData.isNumber()" },
+              "$other": { ".validate": false }
+            }
+          },
+          "hostedRooms": {
+            "$roomId": {
+              ".validate": "newData.hasChildren(['roomId', 'indexedAt']) && newData.child('roomId').val() === $roomId && newData.child('indexedAt').isNumber()",
+              "roomId": { ".validate": "newData.isString() && newData.val() === $roomId" },
+              "indexedAt": { ".validate": "newData.isNumber()" },
+              "$other": { ".validate": false }
+            }
+          },
+          "joinRequests": {
+            "$roomId": {
+              ".validate": "newData.hasChildren(['roomId', 'roomCode', 'uid', 'displayName', 'requestedAt']) && newData.child('roomId').val() === $roomId && newData.child('roomCode').isString() && newData.child('roomCode').val().length === 6 && newData.child('uid').val() === $uid && newData.child('displayName').isString() && newData.child('displayName').val().length > 0 && newData.child('displayName').val().length <= 24 && newData.child('requestedAt').isNumber()",
+              "roomId": { ".validate": "newData.isString() && newData.val() === $roomId" },
+              "roomCode": { ".validate": "newData.isString() && newData.val().length === 6" },
+              "uid": { ".validate": "newData.isString() && newData.val() === $uid" },
+              "displayName": { ".validate": "newData.isString() && newData.val().length > 0 && newData.val().length <= 24" },
+              "requestedAt": { ".validate": "newData.isNumber()" },
+              "$other": { ".validate": false }
+            }
+          },
+          "quickQueues": {
+            "$queueKey": {
+              ".validate": "newData.hasChildren(['queueKey', 'ticketId', 'indexedAt']) && newData.child('queueKey').val() === $queueKey && newData.child('ticketId').isString() && newData.child('ticketId').val().length > 2 && newData.child('ticketId').val().length <= 64 && newData.child('indexedAt').isNumber()",
+              "queueKey": { ".validate": "newData.isString() && newData.val() === $queueKey" },
+              "ticketId": { ".validate": "newData.isString() && newData.val().length > 2 && newData.val().length <= 64" },
+              "indexedAt": { ".validate": "newData.isNumber()" },
+              "$other": { ".validate": false }
+            }
+          },
+          "$other": { ".validate": false }
+        }
+      },
+      "quickQueues": {
+        "$queueKey": {
+          ".read": "auth != null",
+          ".indexOn": ["joinedAt"],
+          "$uid": {
+            ".write": "auth != null && auth.uid === $uid",
+            ".validate": "newData.hasChildren(['ticketId', 'uid', 'displayName', 'queueKey', 'joinedAt', 'deadlineAt', 'state']) && newData.child('uid').val() === $uid && newData.child('queueKey').val() === $queueKey && newData.child('ticketId').isString() && newData.child('ticketId').val().length > 2 && newData.child('ticketId').val().length <= 64 && newData.child('displayName').isString() && newData.child('displayName').val().length > 0 && newData.child('displayName').val().length <= 24 && newData.child('joinedAt').isNumber() && newData.child('deadlineAt').isNumber() && newData.child('deadlineAt').val() === newData.child('joinedAt').val() + 5000 && ((newData.child('state').val() === 'waiting' && !newData.hasChild('roomId') && !newData.hasChild('opponentUid') && ((!data.exists() || data.child('state').val() !== 'waiting' || data.child('deadlineAt').val() <= now) ? (!newData.hasChild('claimId') && newData.child('joinedAt').val() <= now + 10000) : (newData.child('ticketId').val() === data.child('ticketId').val() && newData.child('uid').val() === data.child('uid').val() && newData.child('displayName').val() === data.child('displayName').val() && newData.child('queueKey').val() === data.child('queueKey').val() && newData.child('joinedAt').val() === data.child('joinedAt').val() && newData.child('deadlineAt').val() === data.child('deadlineAt').val() && ((!data.hasChild('claimId') && newData.child('claimId').isString() && newData.child('claimId').val().length > 0 && newData.child('claimId').val().length <= 64) || (data.hasChild('claimId') && newData.child('claimId').val() === data.child('claimId').val()))))) || (data.exists() && data.child('state').val() === 'waiting' && newData.child('ticketId').val() === data.child('ticketId').val() && newData.child('uid').val() === data.child('uid').val() && newData.child('displayName').val() === data.child('displayName').val() && newData.child('queueKey').val() === data.child('queueKey').val() && newData.child('joinedAt').val() === data.child('joinedAt').val() && newData.child('deadlineAt').val() === data.child('deadlineAt').val() && ((!data.hasChild('claimId') && !newData.hasChild('claimId')) || newData.child('claimId').val() === data.child('claimId').val()) && ((newData.child('state').val() === 'cancelled' && !newData.hasChild('roomId') && !newData.hasChild('opponentUid')) || (newData.child('state').val() === 'cpuFallback' && now >= data.child('deadlineAt').val() && (!data.hasChild('claimId') || !root.child('onlineV2').child('quickClaims').child($queueKey).child(data.child('claimId').val()).child('resolution').exists()) && newData.child('roomId').isString() && newData.child('roomId').val().length > 0 && newData.child('roomId').val().length <= 64 && !newData.hasChild('opponentUid')) || (newData.child('state').val() === 'matched' && data.hasChild('claimId') && newData.child('roomId').isString() && newData.child('opponentUid').isString() && root.child('onlineV2').child('quickClaims').child($queueKey).child(data.child('claimId').val()).child('resolution').child('kind').val() === 'human' && root.child('onlineV2').child('quickClaims').child($queueKey).child(data.child('claimId').val()).child('resolution').child('roomId').val() === newData.child('roomId').val() && ((root.child('onlineV2').child('quickClaims').child($queueKey).child(data.child('claimId').val()).child('resolution').child('firstUid').val() === $uid && root.child('onlineV2').child('quickClaims').child($queueKey).child(data.child('claimId').val()).child('resolution').child('secondUid').val() === newData.child('opponentUid').val()) || (root.child('onlineV2').child('quickClaims').child($queueKey).child(data.child('claimId').val()).child('resolution').child('secondUid').val() === $uid && root.child('onlineV2').child('quickClaims').child($queueKey).child(data.child('claimId').val()).child('resolution').child('firstUid').val() === newData.child('opponentUid').val()))))))",
+            "ticketId": { ".validate": "newData.isString()" },
+            "uid": { ".validate": "newData.isString() && newData.val() === $uid" },
+            "displayName": { ".validate": "newData.isString()" },
+            "queueKey": { ".validate": "newData.isString() && newData.val() === $queueKey" },
+            "joinedAt": { ".validate": "newData.isNumber()" },
+            "deadlineAt": { ".validate": "newData.isNumber()" },
+            "state": { ".validate": "newData.val() === 'waiting' || newData.val() === 'matched' || newData.val() === 'cpuFallback' || newData.val() === 'cancelled'" },
+            "claimId": { ".validate": "newData.isString()" },
+            "roomId": { ".validate": "newData.isString()" },
+            "opponentUid": { ".validate": "newData.isString()" },
+            "$other": { ".validate": false }
+          }
+        }
+      },
+      "quickClaims": {
+        "$queueKey": {
+          ".read": "auth != null",
+          "$claimId": {
+            ".write": "auth != null && !data.exists() && newData.child('leaderUid').val() === auth.uid && newData.child('firstUid').val() === auth.uid",
+            ".validate": "newData.hasChildren(['claimId', 'queueKey', 'leaderUid', 'firstUid', 'firstTicketId', 'secondUid', 'secondTicketId', 'createdAt']) && newData.child('claimId').val() === $claimId && newData.child('queueKey').val() === $queueKey && newData.child('leaderUid').val() === newData.child('firstUid').val() && newData.child('firstUid').isString() && newData.child('secondUid').isString() && newData.child('firstUid').val() !== newData.child('secondUid').val() && newData.child('firstTicketId').isString() && newData.child('secondTicketId').isString() && newData.child('createdAt').isNumber() && ((!data.exists() && !newData.hasChild('acceptances') && !newData.hasChild('resolution') && root.child('onlineV2').child('quickQueues').child($queueKey).child(newData.child('firstUid').val()).child('ticketId').val() === newData.child('firstTicketId').val() && root.child('onlineV2').child('quickQueues').child($queueKey).child(newData.child('firstUid').val()).child('state').val() === 'waiting' && root.child('onlineV2').child('quickQueues').child($queueKey).child(newData.child('firstUid').val()).child('claimId').val() === $claimId && root.child('onlineV2').child('quickQueues').child($queueKey).child(newData.child('secondUid').val()).child('ticketId').val() === newData.child('secondTicketId').val() && root.child('onlineV2').child('quickQueues').child($queueKey).child(newData.child('secondUid').val()).child('state').val() === 'waiting' && root.child('onlineV2').child('quickQueues').child($queueKey).child(newData.child('firstUid').val()).child('joinedAt').val() <= root.child('onlineV2').child('quickQueues').child($queueKey).child(newData.child('secondUid').val()).child('joinedAt').val()) || (data.exists() && newData.child('claimId').val() === data.child('claimId').val() && newData.child('queueKey').val() === data.child('queueKey').val() && newData.child('leaderUid').val() === data.child('leaderUid').val() && newData.child('firstUid').val() === data.child('firstUid').val() && newData.child('firstTicketId').val() === data.child('firstTicketId').val() && newData.child('secondUid').val() === data.child('secondUid').val() && newData.child('secondTicketId').val() === data.child('secondTicketId').val() && newData.child('createdAt').val() === data.child('createdAt').val()))",
+            "claimId": { ".validate": "newData.isString() && newData.val() === $claimId" },
+            "queueKey": { ".validate": "newData.isString() && newData.val() === $queueKey" },
+            "leaderUid": { ".validate": "newData.isString()" },
+            "firstUid": { ".validate": "newData.isString()" },
+            "firstTicketId": { ".validate": "newData.isString()" },
+            "secondUid": { ".validate": "newData.isString()" },
+            "secondTicketId": { ".validate": "newData.isString()" },
+            "createdAt": { ".validate": "newData.isNumber()" },
+            "acceptances": {
+              "$uid": {
+                ".write": "auth != null && auth.uid === $uid && data.parent().parent().child('firstUid').val() !== null && ($uid === data.parent().parent().child('firstUid').val() || $uid === data.parent().parent().child('secondUid').val())",
+                ".validate": "newData.hasChildren(['uid', 'ticketId', 'opponentUid', 'opponentTicketId', 'acceptedAt']) && newData.child('uid').val() === $uid && newData.child('acceptedAt').isNumber() && newData.child('acceptedAt').val() <= now + 10000 && (($uid === newData.parent().parent().child('firstUid').val() && newData.child('ticketId').val() === newData.parent().parent().child('firstTicketId').val() && newData.child('opponentUid').val() === newData.parent().parent().child('secondUid').val() && newData.child('opponentTicketId').val() === newData.parent().parent().child('secondTicketId').val()) || ($uid === newData.parent().parent().child('secondUid').val() && newData.child('ticketId').val() === newData.parent().parent().child('secondTicketId').val() && newData.child('opponentUid').val() === newData.parent().parent().child('firstUid').val() && newData.child('opponentTicketId').val() === newData.parent().parent().child('firstTicketId').val())) && root.child('onlineV2').child('quickQueues').child($queueKey).child($uid).child('ticketId').val() === newData.child('ticketId').val() && root.child('onlineV2').child('quickQueues').child($queueKey).child($uid).child('claimId').val() === $claimId && root.child('onlineV2').child('quickQueues').child($queueKey).child($uid).child('state').val() === 'waiting' && (!data.exists() || newData.child('acceptedAt').val() >= data.child('acceptedAt').val())",
+                "uid": { ".validate": "newData.isString() && newData.val() === $uid" },
+                "ticketId": { ".validate": "newData.isString()" },
+                "opponentUid": { ".validate": "newData.isString()" },
+                "opponentTicketId": { ".validate": "newData.isString()" },
+                "acceptedAt": { ".validate": "newData.isNumber()" },
+                "$other": { ".validate": false }
+              }
+            },
+            "resolution": {
+              ".write": "auth != null && !data.exists() && (auth.uid === data.parent().child('firstUid').val() || auth.uid === data.parent().child('secondUid').val())",
+              ".validate": "newData.hasChildren(['kind', 'roomId', 'resolvedAt', 'firstUid', 'secondUid']) && newData.child('kind').val() === 'human' && newData.child('roomId').isString() && newData.child('roomId').val().length > 0 && newData.child('roomId').val().length <= 64 && newData.child('resolvedAt').isNumber() && newData.child('resolvedAt').val() >= newData.parent().child('createdAt').val() && newData.child('resolvedAt').val() <= now + 10000 && newData.child('firstUid').val() === newData.parent().child('firstUid').val() && newData.child('secondUid').val() === newData.parent().child('secondUid').val() && newData.parent().child('acceptances').child(newData.parent().child('firstUid').val()).child('ticketId').val() === newData.parent().child('firstTicketId').val() && newData.parent().child('acceptances').child(newData.parent().child('firstUid').val()).child('opponentUid').val() === newData.parent().child('secondUid').val() && newData.parent().child('acceptances').child(newData.parent().child('firstUid').val()).child('opponentTicketId').val() === newData.parent().child('secondTicketId').val() && newData.parent().child('acceptances').child(newData.parent().child('secondUid').val()).child('ticketId').val() === newData.parent().child('secondTicketId').val() && newData.parent().child('acceptances').child(newData.parent().child('secondUid').val()).child('opponentUid').val() === newData.parent().child('firstUid').val() && newData.parent().child('acceptances').child(newData.parent().child('secondUid').val()).child('opponentTicketId').val() === newData.parent().child('firstTicketId').val() && root.child('onlineV2').child('quickQueues').child($queueKey).child(newData.child('firstUid').val()).child('state').val() === 'waiting' && root.child('onlineV2').child('quickQueues').child($queueKey).child(newData.child('firstUid').val()).child('claimId').val() === $claimId && root.child('onlineV2').child('quickQueues').child($queueKey).child(newData.child('secondUid').val()).child('state').val() === 'waiting' && root.child('onlineV2').child('quickQueues').child($queueKey).child(newData.child('secondUid').val()).child('claimId').val() === $claimId",
+              "kind": { ".validate": "newData.val() === 'human'" },
+              "roomId": { ".validate": "newData.isString()" },
+              "resolvedAt": { ".validate": "newData.isNumber()" },
+              "firstUid": { ".validate": "newData.isString()" },
+              "secondUid": { ".validate": "newData.isString()" },
+              "$other": { ".validate": false }
+            },
+            "$other": { ".validate": false }
+          }
+        }
+      },
+      "roomCodes": {
+        "$code": {
+          ".read": "auth != null",
+          ".write": "auth != null && ((!data.exists() && newData.child('hostUid').val() === auth.uid) || (data.exists() && data.child('hostUid').val() === auth.uid) || (data.child('state').val() === 'reserved' && data.child('expiresAt').val() <= now && newData.child('hostUid').val() === auth.uid))",
+          ".validate": "newData.hasChildren(['roomId', 'hostUid', 'reservationId', 'state', 'reservedAt', 'expiresAt']) && newData.child('roomId').isString() && newData.child('hostUid').isString() && newData.child('reservationId').isString() && (newData.child('state').val() === 'reserved' || newData.child('state').val() === 'active') && newData.child('reservedAt').isNumber() && newData.child('expiresAt').isNumber() && (!data.exists() || data.child('hostUid').val() !== newData.child('hostUid').val() || (newData.child('roomId').val() === data.child('roomId').val() && newData.child('reservationId').val() === data.child('reservationId').val()))"
+        }
+      },
+      "publicRooms": {
+        ".read": "auth != null",
+        "$roomId": {
+          ".write": "auth != null && ((!newData.exists() && (data.child('hostUid').val() === auth.uid || root.child('onlineV2').child('rooms').child($roomId).child('hostUid').val() === auth.uid)) || (newData.exists() && newData.child('hostUid').val() === auth.uid && root.child('onlineV2').child('rooms').child($roomId).child('hostUid').val() === auth.uid))",
+          ".validate": "newData.hasChildren(['roomId', 'code', 'hostUid', 'hostDisplayName', 'mode', 'matchFormat', 'occupiedSeats', 'updatedAt']) && newData.child('roomId').val() === $roomId && newData.child('hostUid').isString() && newData.child('hostDisplayName').isString() && newData.child('hostDisplayName').val().length > 0 && newData.child('hostDisplayName').val().length <= 24 && newData.child('mode').isString() && newData.child('matchFormat').isString() && newData.child('occupiedSeats').isNumber() && newData.child('occupiedSeats').val() > 0 && newData.child('occupiedSeats').val() < 4 && newData.child('updatedAt').isNumber() && root.child('onlineV2').child('rooms').child($roomId).child('visibility').val() === 'public' && root.child('onlineV2').child('rooms').child($roomId).child('status').val() === 'waiting'"
+        }
+      },
+      "joinRequests": {
+        "$roomId": {
+          ".read": "auth != null && root.child('onlineV2').child('rooms').child($roomId).child('hostUid').val() === auth.uid",
+          "$uid": {
+            ".read": "auth != null && (auth.uid === $uid || root.child('onlineV2').child('rooms').child($roomId).child('hostUid').val() === auth.uid)",
+            ".write": "auth != null && (auth.uid === $uid || (!newData.exists() && root.child('onlineV2').child('rooms').child($roomId).child('hostUid').val() === auth.uid))",
+            ".validate": "newData.hasChildren(['roomId', 'roomCode', 'uid', 'displayName', 'requestedAt']) && newData.child('roomId').val() === $roomId && newData.child('uid').val() === $uid && newData.child('roomCode').val() === root.child('onlineV2').child('rooms').child($roomId).child('code').val() && newData.child('displayName').isString() && newData.child('displayName').val().length > 0 && newData.child('displayName').val().length <= 24 && newData.child('requestedAt').isNumber() && newData.child('requestedAt').val() <= now + 10000 && root.child('onlineV2').child('rooms').child($roomId).child('status').val() === 'waiting' && !root.child('onlineV2').child('rooms').child($roomId).child('members').child($uid).exists()",
+            "roomId": { ".validate": "newData.isString() && newData.val() === $roomId" },
+            "roomCode": { ".validate": "newData.isString()" },
+            "uid": { ".validate": "newData.isString() && newData.val() === $uid" },
+            "displayName": { ".validate": "newData.isString()" },
+            "requestedAt": { ".validate": "newData.isNumber()" },
+            "$other": { ".validate": false }
+          }
+        }
+      },
+      "rooms": {
+        "$roomId": {
+          ".read": "auth != null && (!data.exists() || data.child('status').val() === 'waiting' || data.child('members').child(auth.uid).exists())",
+          ".write": "auth != null && ((!data.exists() && newData.child('hostUid').val() === auth.uid && newData.child('id').val() === $roomId) || (data.exists() && newData.exists() && data.child('hostUid').val() === auth.uid && newData.child('hostUid').val() === auth.uid && data.child('status').val() !== 'inGame' && newData.child('chat').val() === data.child('chat').val()))",
+          ".validate": "newData.hasChildren(['id', 'code', 'hostUid', 'visibility', 'status', 'mode', 'matchFormat', 'members', 'presence', 'revision', 'createdAt', 'updatedAt']) && newData.child('id').val() === $roomId && newData.child('code').isString() && newData.child('code').val().length === 6 && newData.child('hostUid').isString() && newData.child('members').child(newData.child('hostUid').val()).child('seat').val() === 'red' && (newData.child('visibility').val() === 'public' || newData.child('visibility').val() === 'private') && (newData.child('status').val() === 'waiting' || newData.child('status').val() === 'openingRoll' || newData.child('status').val() === 'starting' || newData.child('status').val() === 'inGame' || newData.child('status').val() === 'closed') && newData.child('mode').isString() && newData.child('matchFormat').isString() && newData.child('revision').isNumber() && newData.child('revision').val() >= 0 && newData.child('createdAt').isNumber() && newData.child('updatedAt').isNumber() && newData.child('updatedAt').val() >= newData.child('createdAt').val() && (!data.exists() || (newData.child('code').val() === data.child('code').val() && newData.child('hostUid').val() === data.child('hostUid').val() && newData.child('mode').val() === data.child('mode').val() && newData.child('matchFormat').val() === data.child('matchFormat').val() && newData.child('createdAt').val() === data.child('createdAt').val() && newData.child('revision').val() >= data.child('revision').val() && (newData.child('visibility').val() === data.child('visibility').val() || (data.child('status').val() === 'waiting' && newData.child('status').val() === 'waiting')) && (newData.child('status').val() === data.child('status').val() || (data.child('status').val() === 'waiting' && (newData.child('status').val() === 'openingRoll' || newData.child('status').val() === 'closed')) || (data.child('status').val() === 'openingRoll' && (newData.child('status').val() === 'starting' || newData.child('status').val() === 'closed')) || (data.child('status').val() === 'starting' && (newData.child('status').val() === 'inGame' || newData.child('status').val() === 'closed')))))",
+          "id": { ".validate": "newData.isString() && newData.val() === $roomId" },
+          "code": { ".validate": "newData.isString() && newData.val().length === 6" },
+          "hostUid": { ".validate": "newData.isString()" },
+          "visibility": {
+            ".write": "auth != null && data.parent().child('hostUid').val() === auth.uid && data.parent().child('status').val() === 'waiting' && newData.exists()",
+            ".validate": "newData.val() === 'public' || newData.val() === 'private'"
+          },
+          "status": {
+            ".write": "auth != null && data.parent().child('hostUid').val() === auth.uid && newData.exists() && ((data.val() === 'waiting' && (newData.val() === 'openingRoll' || newData.val() === 'closed')) || (data.val() === 'openingRoll' && (newData.val() === 'starting' || newData.val() === 'closed')) || (data.val() === 'starting' && (newData.val() === 'inGame' || newData.val() === 'closed')))",
+            ".validate": "newData.val() === 'waiting' || newData.val() === 'openingRoll' || newData.val() === 'starting' || newData.val() === 'inGame' || newData.val() === 'closed'"
+          },
+          "mode": { ".validate": "newData.isString()" },
+          "matchFormat": { ".validate": "newData.isString()" },
+          "revision": {
+            ".write": "auth != null && data.parent().child('hostUid').val() === auth.uid && data.parent().child('status').val() !== 'inGame' && newData.isNumber() && newData.val() > data.val()",
+            ".validate": "newData.isNumber()"
+          },
+          "createdAt": { ".validate": "newData.isNumber()" },
+          "updatedAt": {
+            ".write": "auth != null && data.parent().child('hostUid').val() === auth.uid && data.parent().child('status').val() !== 'inGame' && newData.isNumber() && newData.val() >= data.val()",
+            ".validate": "newData.isNumber()"
+          },
+          "members": {
+            "$uid": {
+              ".write": "auth != null && data.parent().parent().child('status').val() === 'waiting' && ((auth.uid === $uid && data.exists()) || data.parent().parent().child('hostUid').val() === auth.uid)",
+              ".validate": "newData.hasChildren(['uid', 'displayName', 'seat', 'ready', 'joinedAt']) && newData.child('uid').val() === $uid && newData.child('displayName').isString() && newData.child('displayName').val().length > 0 && newData.child('displayName').val().length <= 24 && (newData.child('seat').val() === 'red' || newData.child('seat').val() === 'green' || newData.child('seat').val() === 'yellow' || newData.child('seat').val() === 'blue') && newData.child('ready').isBoolean() && newData.child('joinedAt').isNumber() && (($uid === newData.parent().parent().child('hostUid').val() && newData.child('seat').val() === 'red') || ($uid !== newData.parent().parent().child('hostUid').val() && newData.child('seat').val() !== 'red')) && (data.exists() ? (newData.child('uid').val() === data.child('uid').val() && newData.child('displayName').val() === data.child('displayName').val() && newData.child('seat').val() === data.child('seat').val() && newData.child('joinedAt').val() === data.child('joinedAt').val() && (auth.uid === $uid || newData.child('ready').val() === data.child('ready').val())) : (($uid === newData.parent().parent().child('hostUid').val() && auth.uid === $uid) || (!data.parent().parent().exists() && auth.uid === newData.parent().parent().child('hostUid').val() && newData.parent().parent().child('matchFormat').val() === 'quickPop' && newData.parent().parent().child('status').val() === 'inGame' && newData.child('ready').val() === true && ((newData.child('seat').val() === 'green' && newData.child('displayName').val() !== 'CPU Rayo' && newData.child('displayName').val() !== 'CPU Pop') || (newData.child('seat').val() === 'yellow' && newData.child('displayName').val() === 'CPU Rayo') || (newData.child('seat').val() === 'blue' && newData.child('displayName').val() === 'CPU Pop'))) || (newData.parent().parent().child('status').val() === 'waiting' && newData.child('seat').val() !== 'red' && newData.child('ready').val() === false && root.child('onlineV2').child('joinRequests').child($roomId).child($uid).child('uid').val() === $uid && root.child('onlineV2').child('joinRequests').child($roomId).child($uid).child('roomId').val() === $roomId && root.child('onlineV2').child('joinRequests').child($roomId).child($uid).child('roomCode').val() === newData.parent().parent().child('code').val() && root.child('onlineV2').child('joinRequests').child($roomId).child($uid).child('displayName').val() === newData.child('displayName').val() && root.child('onlineV2').child('joinRequests').child($roomId).child($uid).child('requestedAt').val() === newData.child('joinedAt').val())))",
+              "uid": { ".validate": "newData.isString() && newData.val() === $uid" },
+              "displayName": { ".validate": "newData.isString()" },
+              "seat": { ".validate": "newData.val() === 'red' || newData.val() === 'green' || newData.val() === 'yellow' || newData.val() === 'blue'" },
+              "ready": { ".validate": "newData.isBoolean()" },
+              "joinedAt": { ".validate": "newData.isNumber()" },
+              "$other": { ".validate": false }
+            }
+          },
+          "presence": {
+            "$uid": {
+              ".write": "auth != null && auth.uid === $uid && data.parent().parent().child('members').child($uid).exists()",
+              ".validate": "newData.hasChildren(['uid', 'state', 'changedAt', 'connectionId']) && newData.child('uid').val() === $uid && (newData.child('state').val() === 'connected' || newData.child('state').val() === 'disconnected') && newData.child('changedAt').isNumber() && newData.child('connectionId').isString() && newData.child('connectionId').val().length > 0 && newData.child('connectionId').val().length <= 96 && newData.parent().parent().child('members').child($uid).exists() && ((!data.exists() && (auth.uid === $uid || (!data.parent().parent().exists() && auth.uid === newData.parent().parent().child('hostUid').val() && newData.parent().parent().child('matchFormat').val() === 'quickPop'))) || (data.exists() && (newData.child('uid').val() === data.child('uid').val() && newData.child('state').val() === data.child('state').val() && newData.child('changedAt').val() === data.child('changedAt').val() && newData.child('connectionId').val() === data.child('connectionId').val() || auth.uid === $uid)))",
+              "uid": { ".validate": "newData.isString() && newData.val() === $uid" },
+              "state": { ".validate": "newData.val() === 'connected' || newData.val() === 'disconnected'" },
+              "changedAt": { ".validate": "newData.isNumber()" },
+              "connectionId": { ".validate": "newData.isString()" },
+              "$other": { ".validate": false }
+            }
+          },
+          "lobbyState": {
+            ".write": "auth != null && newData.exists() && data.parent().child('hostUid').val() === auth.uid",
+            ".validate": "newData.hasChildren(['schemaVersion', 'roomId', 'roomCode', 'hostParticipantId', 'visibility', 'status', 'revision', 'participants']) && newData.child('schemaVersion').val() === 1 && newData.child('roomId').val() === $roomId && newData.child('roomCode').val() === newData.parent().child('code').val() && newData.child('hostParticipantId').val() === newData.parent().child('hostUid').val() && (newData.child('visibility').val() === 'public' || newData.child('visibility').val() === 'private') && (newData.child('status').val() === 'waiting' || newData.child('status').val() === 'openingRoll' || newData.child('status').val() === 'starting' || newData.child('status').val() === 'inGame' || newData.child('status').val() === 'closed') && newData.child('revision').isNumber() && newData.child('participants').hasChildren()",
+            "schemaVersion": { ".validate": "newData.val() === 1" },
+            "roomId": { ".validate": "newData.isString() && newData.val() === $roomId" },
+            "roomCode": { ".validate": "newData.isString()" },
+            "hostParticipantId": { ".validate": "newData.isString()" },
+            "visibility": { ".validate": "newData.val() === 'public' || newData.val() === 'private'" },
+            "status": { ".validate": "newData.val() === 'waiting' || newData.val() === 'openingRoll' || newData.val() === 'starting' || newData.val() === 'inGame' || newData.val() === 'closed'" },
+            "revision": { ".validate": "newData.isNumber()" },
+            "participants": { ".validate": "newData.hasChildren()" },
+            "openingRoll": {},
+            "$other": { ".validate": false }
+          },
+          "openingRollRequests": {
+            ".read": "auth != null && data.parent().child('hostUid').val() === auth.uid",
+            "$uid": {
+              ".write": "auth != null && ((auth.uid === $uid && data.parent().parent().child('members').child($uid).exists()) || (!newData.exists() && data.parent().parent().child('hostUid').val() === auth.uid))",
+              ".validate": "newData.hasChildren(['uid', 'round', 'requestedAt']) && newData.child('uid').val() === $uid && newData.child('round').isNumber() && newData.child('round').val() > 0 && newData.child('requestedAt').isNumber() && newData.child('requestedAt').val() <= now + 10000 && newData.parent().parent().child('status').val() === 'openingRoll' && newData.parent().parent().child('lobbyState').child('status').val() === 'openingRoll' && newData.child('round').val() === newData.parent().parent().child('lobbyState').child('openingRoll').child('round').val() && !newData.parent().parent().child('lobbyState').child('openingRoll').child('currentRolls').child($uid).exists()",
+              "uid": { ".validate": "newData.isString() && newData.val() === $uid" },
+              "round": { ".validate": "newData.isNumber()" },
+              "requestedAt": { ".validate": "newData.isNumber()" },
+              "$other": { ".validate": false }
+            }
+          },
+          "commands": {
+            ".read": "auth != null && data.parent().child('members').child(auth.uid).exists()",
+            "$uid": {
+              "$commandId": {
+                ".write": "auth != null && !data.exists() && newData.exists() && data.parent().parent().parent().child('status').val() === 'inGame' && data.parent().parent().parent().child('members').child($uid).exists() && (auth.uid === $uid || data.parent().parent().parent().child('hostUid').val() === auth.uid)",
+                ".validate": "!data.exists() && newData.hasChildren(['kind', 'matchId', 'participantId', 'submittedById', 'actionId', 'expectedRevision', 'submittedAt']) && newData.child('participantId').val() === $uid && newData.child('submittedById').val() === auth.uid && newData.child('actionId').val() === $commandId && newData.child('matchId').val() === newData.parent().parent().parent().child('match').child('matchId').val() && newData.child('expectedRevision').isNumber() && newData.child('expectedRevision').val() >= 0 && newData.child('submittedAt').isNumber() && newData.child('submittedAt').val() <= now + 10000 && (((newData.child('kind').val() === 'roll' || newData.child('kind').val() === 'powerUp') && !newData.hasChild('tokenId') && !newData.hasChild('die')) || (newData.child('kind').val() === 'move' && newData.child('tokenId').isNumber() && newData.child('die').isNumber() && newData.child('die').val() >= 1 && newData.child('die').val() <= 6) || (newData.child('kind').val() === 'moveAll' && newData.child('tokenId').isNumber() && !newData.hasChild('die'))) ",
+                "kind": { ".validate": "newData.val() === 'roll' || newData.val() === 'move' || newData.val() === 'moveAll' || newData.val() === 'powerUp'" },
+                "matchId": { ".validate": "newData.isString()" },
+                "participantId": { ".validate": "newData.isString() && newData.val() === $uid" },
+                "submittedById": { ".validate": "newData.isString() && newData.val() === auth.uid" },
+                "actionId": { ".validate": "newData.isString() && newData.val() === $commandId" },
+                "expectedRevision": { ".validate": "newData.isNumber()" },
+                "submittedAt": { ".validate": "newData.isNumber()" },
+                "tokenId": { ".validate": "newData.isNumber()" },
+                "die": { ".validate": "newData.isNumber() && newData.val() >= 1 && newData.val() <= 6" },
+                "$other": { ".validate": false }
+              }
+            }
+          },
+          "match": {
+            ".write": "auth != null && data.parent().child('hostUid').val() === auth.uid && newData.child('hostUid').val() === auth.uid",
+            ".validate": "newData.hasChildren(['schemaVersion', 'authorityModel', 'roomId', 'matchId', 'hostUid', 'hostLocalColor', 'authorityRevision', 'stateRevision', 'checkpoint', 'authorityCheckpoint', 'createdAt', 'updatedAt']) && newData.child('schemaVersion').val() === 1 && newData.child('authorityModel').val() === 'activeHostV1' && newData.child('roomId').val() === $roomId && newData.child('matchId').isString() && newData.child('hostUid').val() === newData.parent().child('hostUid').val() && newData.child('hostLocalColor').val() === 'red' && newData.child('authorityRevision').isNumber() && newData.child('authorityRevision').val() >= 0 && newData.child('stateRevision').isNumber() && newData.child('stateRevision').val() >= 0 && newData.child('checkpoint').hasChildren() && newData.child('authorityCheckpoint').hasChildren() && newData.child('createdAt').isNumber() && newData.child('updatedAt').isNumber() && newData.child('updatedAt').val() >= newData.child('createdAt').val() && (!data.exists() || (newData.child('schemaVersion').val() === data.child('schemaVersion').val() && newData.child('authorityModel').val() === data.child('authorityModel').val() && newData.child('roomId').val() === data.child('roomId').val() && newData.child('matchId').val() === data.child('matchId').val() && newData.child('hostUid').val() === data.child('hostUid').val() && newData.child('hostLocalColor').val() === data.child('hostLocalColor').val() && newData.child('createdAt').val() === data.child('createdAt').val() && newData.child('authorityRevision').val() >= data.child('authorityRevision').val() && newData.child('stateRevision').val() >= data.child('stateRevision').val() && newData.child('updatedAt').val() >= data.child('updatedAt').val()))",
+            "schemaVersion": { ".validate": "newData.val() === 1" },
+            "authorityModel": { ".validate": "newData.val() === 'activeHostV1'" },
+            "roomId": { ".validate": "newData.isString() && newData.val() === $roomId" },
+            "matchId": { ".validate": "newData.isString()" },
+            "hostUid": { ".validate": "newData.isString()" },
+            "hostLocalColor": { ".validate": "newData.val() === 'red'" },
+            "authorityRevision": { ".validate": "newData.isNumber()" },
+            "stateRevision": { ".validate": "newData.isNumber()" },
+            "checkpoint": { ".validate": "newData.hasChildren()" },
+            "authorityCheckpoint": { ".validate": "newData.hasChildren()" },
+            "results": {},
+            "createdAt": { ".validate": "newData.isNumber()" },
+            "updatedAt": { ".validate": "newData.isNumber()" },
+            "$other": { ".validate": false }
+          },
+          "chat": {
+            ".read": "auth != null && data.parent().child('members').child(auth.uid).exists()",
+            "$messageId": {
+              ".write": "auth != null && !data.exists() && newData.exists() && data.parent().parent().child('status').val() === 'inGame' && data.parent().parent().child('members').child(auth.uid).exists() && newData.child('senderUid').val() === auth.uid",
+              ".validate": "!data.exists() && newData.hasChildren(['messageId', 'senderUid', 'phraseId', 'sentAt']) && newData.child('messageId').val() === $messageId && newData.child('senderUid').val() === auth.uid && (newData.child('phraseId').val() === 'hello' || newData.child('phraseId').val() === 'goodLuck' || newData.child('phraseId').val() === 'goodGame' || newData.child('phraseId').val() === 'greatMove' || newData.child('phraseId').val() === 'wellPlayed' || newData.child('phraseId').val() === 'wow' || newData.child('phraseId').val() === 'yourTurn' || newData.child('phraseId').val() === 'thanks' || newData.child('phraseId').val() === 'almost' || newData.child('phraseId').val() === 'oops' || newData.child('phraseId').val() === 'rematch' || newData.child('phraseId').val() === 'funGame') && newData.child('sentAt').isNumber() && newData.child('sentAt').val() >= now - 10000 && newData.child('sentAt').val() <= now + 10000",
+              "messageId": { ".validate": "newData.isString() && newData.val() === $messageId && newData.val().length > 0 && newData.val().length <= 96" },
+              "senderUid": { ".validate": "newData.isString() && newData.val() === auth.uid" },
+              "phraseId": { ".validate": "newData.isString() && (newData.val() === 'hello' || newData.val() === 'goodLuck' || newData.val() === 'goodGame' || newData.val() === 'greatMove' || newData.val() === 'wellPlayed' || newData.val() === 'wow' || newData.val() === 'yourTurn' || newData.val() === 'thanks' || newData.val() === 'almost' || newData.val() === 'oops' || newData.val() === 'rematch' || newData.val() === 'funGame')" },
+              "sentAt": { ".validate": "newData.isNumber() && newData.val() >= now - 10000 && newData.val() <= now + 10000" },
+              "$other": { ".validate": false }
+            }
+          },
+          "$other": { ".validate": false }
+        }
+      }
+    }
+  }
+}

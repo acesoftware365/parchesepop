@@ -413,7 +413,7 @@ void main() {
     expect(progression.balance, balanceBeforeAd + 55);
   });
 
-  test('rewarded x2 waits for both completion and placement', () async {
+  test('rewarded x2 pays completion before a late placement arrives', () async {
     final progression = await PlayerProgressionController.create(
       clock: () => DateTime(2026, 8, 8, 10),
     );
@@ -424,21 +424,78 @@ void main() {
       RewardedDoubleStatus.notEligible,
     );
     await progression.recordMatchCompleted(matchId: 'pending_placement');
+    final claim = await progression.claimRewardedDouble(
+      matchId: 'pending_placement',
+    );
+    expect(claim.status, RewardedDoubleStatus.awarded);
+    expect(claim.coinsAwarded, 30);
+    expect(progression.rewardedDoubleClaimed('pending_placement'), isTrue);
+
+    final placement = await progression.recordPlacement(
+      matchId: 'pending_placement',
+      placement: 4,
+    );
+    expect(placement.coinsAwarded, 10);
+    expect(
+      placement.transactions.map((transaction) => transaction.source),
+      <ProgressionTransactionSource>[
+        ProgressionTransactionSource.placement,
+        ProgressionTransactionSource.rewardedDouble,
+      ],
+    );
+    expect(placement.transactions.last.amount, 5);
+    expect(progression.matchPayout('pending_placement'), 35);
     expect(
       (await progression.claimRewardedDouble(
         matchId: 'pending_placement',
       )).status,
-      RewardedDoubleStatus.notEligible,
+      RewardedDoubleStatus.alreadyClaimed,
     );
-    await progression.recordPlacement(
-      matchId: 'pending_placement',
-      placement: 4,
-    );
+  });
+
+  test('late rewarded placement is idempotent across reloads', () async {
+    final clock = _MutableClock(DateTime(2026, 8, 8, 10));
+    final first = await PlayerProgressionController.create(clock: clock.call);
+
+    await first.recordMatchCompleted(matchId: 'staged_ad_match');
     expect(
-      (await progression.claimRewardedDouble(
-        matchId: 'pending_placement',
+      (await first.claimRewardedDouble(
+        matchId: 'staged_ad_match',
       )).coinsAwarded,
-      35,
+      30,
+    );
+    first.dispose();
+
+    final restored = await PlayerProgressionController.create(
+      clock: clock.call,
+    );
+    addTearDown(restored.dispose);
+    final placement = await restored.recordPlacement(
+      matchId: 'staged_ad_match',
+      placement: 2,
+    );
+    expect(placement.coinsAwarded, 50);
+    expect(
+      placement.transactions.last.source,
+      ProgressionTransactionSource.rewardedDouble,
+    );
+    expect(placement.transactions.last.amount, 25);
+
+    final duplicate = await restored.recordPlacement(
+      matchId: 'staged_ad_match',
+      placement: 2,
+    );
+    expect(duplicate, same(ProgressionUpdate.none));
+    expect(
+      restored.transactions
+          .where(
+            (transaction) =>
+                transaction.source ==
+                    ProgressionTransactionSource.rewardedDouble &&
+                transaction.matchId == 'staged_ad_match',
+          )
+          .map((transaction) => transaction.amount),
+      <int>[30, 25],
     );
   });
 

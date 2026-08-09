@@ -1,0 +1,6 @@
+# Copy this file to android/key.properties. Never commit the copied file.
+# Keep the upload keystore outside the repository and use its absolute path.
+storeFile=/absolute/path/to/parchese-pop-upload-key.jks
+storePassword=REPLACE_WITH_UPLOAD_KEYSTORE_PASSWORD
+keyAlias=REPLACE_WITH_UPLOAD_KEY_ALIAS
+keyPassword=REPLACE_WITH_UPLOAD_KEY_PASSWORD

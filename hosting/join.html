@@ -1,0 +1,79 @@
+<!doctype html>
+<html lang="es">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="theme-color" content="#0b2d68" />
+    <title>Únete a Parchís Pop</title>
+    <meta name="description" content="Abre Parchís Pop y entra a la sala compartida." />
+    <style>
+      :root { color-scheme: light; font-family: Arial, Helvetica, sans-serif; }
+      * { box-sizing: border-box; }
+      body {
+        margin: 0; min-height: 100vh; display: grid; place-items: center; padding: 20px;
+        color: #fff; background:
+          radial-gradient(circle at 8% 14%, rgb(36 116 229 / .8), transparent 38%),
+          radial-gradient(circle at 92% 86%, rgb(114 87 233 / .8), transparent 40%),
+          linear-gradient(145deg, #071b40, #0b2d68 55%, #3a2d84);
+      }
+      main {
+        width: min(470px, 100%); text-align: center; padding: 30px 24px 24px;
+        border: 2px solid rgb(255 255 255 / .36); border-radius: 32px;
+        background: rgb(7 27 64 / .88); box-shadow: 0 24px 60px rgb(0 0 0 / .34);
+      }
+      .mark {
+        width: 70px; height: 70px; display: grid; place-items: center;
+        margin: 0 auto 14px; border-radius: 21px; background: #ffc83d;
+        color: #17284d; font-size: 39px; border: 4px solid #fff; transform: rotate(-4deg);
+      }
+      h1 { margin: 0; font-size: clamp(30px, 9vw, 46px); line-height: .92; letter-spacing: -1.4px; }
+      .eyebrow { margin: 18px 0 5px; color: #cbd8fb; font-size: 13px; font-weight: 900; letter-spacing: 1.1px; }
+      .code {
+        margin: 0 auto 20px; padding: 13px 16px; width: min(300px, 100%);
+        border-radius: 18px; background: #fff; color: #17284d; border: 4px solid #ffc83d;
+        font-size: clamp(30px, 9vw, 44px); font-weight: 900; letter-spacing: 5px;
+      }
+      .actions { display: grid; gap: 11px; }
+      a, button {
+        min-height: 54px; border: 0; border-radius: 17px; padding: 14px 18px;
+        font: inherit; font-weight: 900; font-size: 16px; cursor: pointer;
+      }
+      a { display: grid; place-items: center; text-decoration: none; color: #fff; background: #2474e5; box-shadow: 0 8px 18px rgb(36 116 229 / .35); }
+      button { color: #17284d; background: #ffc83d; }
+      p { margin: 18px auto 0; max-width: 36ch; color: #dce6ff; line-height: 1.45; font-weight: 700; }
+      #invalid { display: none; color: #ffd8dc; }
+    </style>
+  </head>
+  <body>
+    <main>
+      <div class="mark" aria-hidden="true">⚄</div>
+      <h1>ÚNETE A<br />PARCHÍS POP!</h1>
+      <div id="valid">
+        <div class="eyebrow">CÓDIGO DE SALA</div>
+        <div class="code" id="code">------</div>
+        <div class="actions">
+          <a id="open" href="#">ABRIR EN LA APP</a>
+          <button id="copy" type="button">COPIAR CÓDIGO</button>
+        </div>
+        <p>Si la app no se abre, entra a “Mesa Rápida”, toca “Entrar con código” y escribe este código.</p>
+      </div>
+      <p id="invalid">Este enlace de sala no es válido o está incompleto.</p>
+    </main>
+    <script>
+      const alphabet = /^[ABCDEFGHJKLMNPQRSTUVWXYZ23456789]{6}$/;
+      const parts = location.pathname.split('/').filter(Boolean);
+      const code = (parts[0] === 'join' && parts[1] ? parts[1] : '').toUpperCase();
+      const valid = alphabet.test(code);
+      document.getElementById('valid').style.display = valid ? 'block' : 'none';
+      document.getElementById('invalid').style.display = valid ? 'none' : 'block';
+      if (valid) {
+        document.getElementById('code').textContent = code;
+        document.getElementById('open').href = `parchesepop://room/${code}`;
+        document.getElementById('copy').addEventListener('click', async (event) => {
+          await navigator.clipboard.writeText(code);
+          event.currentTarget.textContent = 'CÓDIGO COPIADO';
+        });
+      }
+    </script>
+  </body>
+</html>

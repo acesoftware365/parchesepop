@@ -39,34 +39,36 @@ OnlineParticipant _participant({
   loadout: const CosmeticLoadout(),
 );
 
-OnlineMatchSession _session({String matchId = 'match_authority_001'}) =>
-    OnlineMatchSession(
-      matchId: matchId,
-      seed: 4182,
-      mode: GameMode.traditional,
-      participants: <OnlineParticipant>[
-        _participant(
-          id: 'player_red',
-          color: PlayerColor.red,
-          kind: ParticipantKind.local,
-        ),
-        _participant(
-          id: 'player_green',
-          color: PlayerColor.green,
-          kind: ParticipantKind.remoteHuman,
-        ),
-        _participant(
-          id: 'player_yellow',
-          color: PlayerColor.yellow,
-          kind: ParticipantKind.remoteHuman,
-        ),
-        _participant(
-          id: 'player_blue',
-          color: PlayerColor.blue,
-          kind: ParticipantKind.remoteHuman,
-        ),
-      ],
-    );
+OnlineMatchSession _session({
+  String matchId = 'match_authority_001',
+  GameMode mode = GameMode.traditional,
+}) => OnlineMatchSession(
+  matchId: matchId,
+  seed: 4182,
+  mode: mode,
+  participants: <OnlineParticipant>[
+    _participant(
+      id: 'player_red',
+      color: PlayerColor.red,
+      kind: ParticipantKind.local,
+    ),
+    _participant(
+      id: 'player_green',
+      color: PlayerColor.green,
+      kind: ParticipantKind.remoteHuman,
+    ),
+    _participant(
+      id: 'player_yellow',
+      color: PlayerColor.yellow,
+      kind: ParticipantKind.remoteHuman,
+    ),
+    _participant(
+      id: 'player_blue',
+      color: PlayerColor.blue,
+      kind: ParticipantKind.remoteHuman,
+    ),
+  ],
+);
 
 OnlineRollCommand _roll({
   String matchId = 'match_authority_001',
@@ -348,6 +350,7 @@ void main() {
       final restored = OnlineMatchAuthority.fromCheckpoint(
         session: _session(),
         checkpoint: jsonDecode(encoded) as Map<String, dynamic>,
+        localViewerColor: PlayerColor.green,
       );
       addTearDown(restored.dispose);
 
@@ -355,6 +358,7 @@ void main() {
       expect(snapshot.revision, 2);
       expect(snapshot.dice, const <int>[5, 2]);
       expect(snapshot.hasRolled, isTrue);
+      expect(restored.engine.localViewerColor, PlayerColor.green);
       expect(
         snapshot.connectionFor('player_green').presence,
         OnlineParticipantPresence.reconnecting,
@@ -368,6 +372,44 @@ void main() {
       expect(duplicate.status, OnlineCommandStatus.duplicate);
       expect(restored.revision, 2);
       expect(restored.engine.rollSerial, 0);
+    });
+
+    test('power-up outcome is resolved only by the authority engine', () {
+      final engine = GameEngine(mode: GameMode.chaos, random: Random(7));
+      addTearDown(engine.dispose);
+      engine.currentPlayer.tokens.first.progress = 0;
+      engine.currentPlayer.inventory = PowerUp.boost;
+      final authority = OnlineMatchAuthority(
+        session: _session(mode: GameMode.chaos),
+        engine: engine,
+      );
+
+      const command = OnlineUsePowerUpCommand(
+        matchId: 'match_authority_001',
+        participantId: 'player_red',
+        actionId: 'power_up_0001',
+        expectedRevision: 0,
+      );
+      final result = authority.submit(command);
+
+      expect(result.status, OnlineCommandStatus.accepted);
+      expect(authority.revision, 1);
+      expect(engine.currentPlayer.tokens.first.progress, 3);
+      expect(engine.currentPlayer.inventory, isNot(PowerUp.boost));
+      expect(authority.submit(command).status, OnlineCommandStatus.duplicate);
+      expect(engine.currentPlayer.tokens.first.progress, 3);
+
+      engine.currentPlayer.inventory = null;
+      final unavailable = authority.submit(
+        const OnlineUsePowerUpCommand(
+          matchId: 'match_authority_001',
+          participantId: 'player_red',
+          actionId: 'power_up_0002',
+          expectedRevision: 1,
+        ),
+      );
+      expect(unavailable.rejection, OnlineCommandRejection.powerUpUnavailable);
+      expect(authority.revision, 1);
     });
   });
 

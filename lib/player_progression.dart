@@ -360,6 +360,15 @@ class PlayerProgressionController extends ChangeNotifier {
           changed = true;
           awarded.add(placementTransaction);
         }
+        final rewardedPlacementTransaction = _recordRewardedPlacementUnlocked(
+          matchId: matchId,
+          placement: placement,
+          now: now,
+        );
+        if (rewardedPlacementTransaction != null) {
+          changed = true;
+          awarded.add(rewardedPlacementTransaction);
+        }
       }
 
       if (changed) await _commit();
@@ -388,16 +397,29 @@ class PlayerProgressionController extends ChangeNotifier {
           'Match $matchId already has placement $knownPlacement.',
         );
       }
-      final transaction = _recordPlacementUnlocked(
+      final awarded = <ProgressionTransaction>[];
+      final placementTransaction = _recordPlacementUnlocked(
         matchId: matchId,
         placement: placement,
         now: now,
       );
-      if (transaction != null) changed = true;
+      if (placementTransaction != null) {
+        changed = true;
+        awarded.add(placementTransaction);
+      }
+      final rewardedPlacementTransaction = _recordRewardedPlacementUnlocked(
+        matchId: matchId,
+        placement: placement,
+        now: now,
+      );
+      if (rewardedPlacementTransaction != null) {
+        changed = true;
+        awarded.add(rewardedPlacementTransaction);
+      }
       if (changed) await _commit();
-      return transaction == null
+      return awarded.isEmpty
           ? ProgressionUpdate.none
-          : ProgressionUpdate(<ProgressionTransaction>[transaction]);
+          : ProgressionUpdate(List.unmodifiable(awarded));
     });
   }
 
@@ -469,8 +491,9 @@ class PlayerProgressionController extends ChangeNotifier {
   /// the reward was earned.
   ///
   /// Only the completion and placement transactions are duplicated. Daily and
-  /// weekly rewards are deliberately excluded. A confirmed placement is
-  /// required so a late result cannot make the multiplier ambiguous.
+  /// weekly rewards are deliberately excluded. If placement is still pending,
+  /// completion is doubled immediately and the placement reward is doubled
+  /// automatically when the authoritative result arrives.
   Future<RewardedDoubleResult> claimRewardedDouble({required String matchId}) {
     _validateExternalId(matchId, 'matchId');
     return _enqueue<RewardedDoubleResult>(() async {
@@ -484,8 +507,7 @@ class PlayerProgressionController extends ChangeNotifier {
           status: RewardedDoubleStatus.alreadyClaimed,
         );
       }
-      if (!_hasTransaction(_matchCompletionTransactionId(matchId)) ||
-          !_hasTransaction(_matchPlacementTransactionId(matchId))) {
+      if (!_hasTransaction(_matchCompletionTransactionId(matchId))) {
         if (periodsChanged) await _commit();
         return const RewardedDoubleResult(
           status: RewardedDoubleStatus.notEligible,
@@ -717,6 +739,27 @@ class PlayerProgressionController extends ChangeNotifier {
     return transaction;
   }
 
+  ProgressionTransaction? _recordRewardedPlacementUnlocked({
+    required String matchId,
+    required int placement,
+    required DateTime now,
+  }) {
+    final originalReward = _transactionById(
+      _rewardedDoubleTransactionId(matchId),
+    );
+    if (originalReward == null || originalReward.placement != null) {
+      return null;
+    }
+    return _applyTransaction(
+      id: _rewardedDoublePlacementTransactionId(matchId),
+      source: ProgressionTransactionSource.rewardedDouble,
+      amount: policy.coinsForPlacement(placement),
+      now: now,
+      matchId: matchId,
+      placement: placement,
+    );
+  }
+
   ProgressionTransaction? _maybeCompleteWeeklyMission(DateTime now) {
     if (_weeklyMatchesCompleted < policy.weeklyMatchesTarget) return null;
     return _applyTransaction(
@@ -753,6 +796,13 @@ class PlayerProgressionController extends ChangeNotifier {
   }
 
   bool _hasTransaction(String id) => _transactionIds.contains(id);
+
+  ProgressionTransaction? _transactionById(String id) {
+    for (final transaction in _transactions) {
+      if (transaction.id == id) return transaction;
+    }
+    return null;
+  }
 
   Future<void> _commit() async {
     await _persist();
@@ -812,6 +862,8 @@ class PlayerProgressionController extends ChangeNotifier {
       'weekly:$weekKey:finish_7';
   static String _rewardedDoubleTransactionId(String matchId) =>
       'ad:$matchId:double_match_payout';
+  static String _rewardedDoublePlacementTransactionId(String matchId) =>
+      'ad:$matchId:double_placement_payout';
 
   static void _validatePlacement(int placement) {
     if (placement < 1 || placement > 4) {

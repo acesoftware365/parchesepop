@@ -12,12 +12,32 @@ void main() {
   test('Version 2 static and dynamic copy has complete English coverage', () {
     const staticCopy = <String, String>{
       'MESA RÁPIDA': 'QUICK TABLE',
+      'JUEGA CON AMIGOS': 'PLAY WITH FRIENDS',
+      'CREAR SALA': 'CREATE ROOM',
+      'ENTRAR CON CÓDIGO': 'JOIN WITH CODE',
+      'SALAS PÚBLICAS': 'PUBLIC ROOMS',
+      'PARTIDA LOCAL': 'LOCAL MATCH',
+      'QUIÉN PUEDE ENTRAR': 'WHO CAN JOIN',
+      'PRIVADA': 'PRIVATE',
+      'PÚBLICA': 'PUBLIC',
+      'ESCRIBE EL CÓDIGO DE LA SALA': 'ENTER THE ROOM CODE',
+      'ENTRAR A LA SALA': 'JOIN ROOM',
+      'SALA ONLINE': 'ONLINE ROOM',
+      'MARCAR LISTO': 'MARK READY',
+      'INICIAR TIRADA': 'START OPENING ROLL',
+      'TIRADA PARA COMENZAR': 'ROLL TO START',
       'Partida local con rivales CPU': 'Local match with CPU opponents',
       'ONLINE · PRÓXIMAMENTE': 'ONLINE · COMING SOON',
       '2 fichas · partida rápida': '2 pieces · quick match',
       'Partida local': 'Local match',
       'Juega contra el CPU': 'Play against CPU',
       'QUICK POP ONLINE': 'QUICK POP ONLINE',
+      'JUGAR CON AMIGOS ONLINE': 'PLAY WITH FRIENDS ONLINE',
+      'Buscando un jugador online…': 'Searching for an online player…',
+      'Luego jugarás contra CPU automáticamente':
+          'Then you will automatically play against the CPU',
+      'JUGAR ONLINE · BUSCAR 5 S': 'PLAY ONLINE · SEARCH 5 S',
+      'JUGAR AHORA CONTRA CPU': 'PLAY NOW AGAINST CPU',
       'El modo online necesita conexión con un servidor seguro. Mientras lo terminamos, puedes probar Quick Pop contra el CPU.':
           'Online play requires a secure server connection. While we finish it, you can try Quick Pop against the CPU.',
       'PROBAR QUICK POP': 'TRY QUICK POP',
@@ -50,6 +70,9 @@ void main() {
       'POR JUGAR': 'FOR PLAYING',
       'VER ANUNCIO': 'WATCH AD',
       'EXTRA RECIBIDAS': 'EXTRA RECEIVED',
+      'Borrando cuenta de forma segura…': 'Deleting account securely…',
+      'No se completó el borrado': 'Deletion was not completed',
+      'Intentar de nuevo': 'Try again',
     };
 
     for (final entry in staticCopy.entries) {
@@ -63,6 +86,16 @@ void main() {
     const dynamicCopy = <String, String>{
       'Preparando partida local · 4s': 'Preparing local match · 4s',
       'Añadiendo CPU · 2/3': 'Adding CPU players · 2/3',
+      'Entrando a la sala ABC234…': 'Joining room ABC234…',
+      'Maria saldrá de la sala.': 'Maria will be removed from the room.',
+      'Maria · TÚ': 'Maria · YOU',
+      'Expulsar Maria': 'Remove Maria',
+      '2/4 jugadores': '2/4 players',
+      'CLÁSICO · 2/4 · ABC234': 'CLASSIC · 2/4 · ABC234',
+      'DESEMPATE · RONDA 2': 'TIEBREAK · ROUND 2',
+      'COMENZAR · Maria': 'START · Maria',
+      'Maria comienza. Esperando al anfitrión…':
+          'Maria starts. Waiting for the host…',
       'Parchís Pop · Caos': 'Parchís Pop · Chaos',
       'Tutorial • CPU Fácil': 'Tutorial • CPU Easy',
       'Nivel 3 · CPU temporal': 'Level 3 · Temporary CPU',
@@ -91,13 +124,13 @@ void main() {
 
   test('Version 2 advertising copy describes the persistent safe banner', () {
     const detailedSpanish =
-        'En Android y iOS puede permanecer visible una banda publicitaria adaptable en la parte inferior. Esta banda no interrumpe ni bloquea la jugada. Los anuncios recompensados solo se abren cuando eliges voluntariamente duplicar el premio al finalizar la mesa. Las acciones normales del juego, como tirar los dados, mover una ficha, Jugar otra vez, Volver al inicio y Reanudar, nunca abren anuncios. El premio se entrega únicamente al completar el anuncio. La aplicación solicita consentimiento cuando corresponde y ofrece opciones para administrar la privacidad publicitaria. macOS no muestra banners ni anuncios recompensados.';
+        'En Android y iOS puede permanecer visible una banda publicitaria adaptable en una franja reservada en la parte inferior, incluso durante la partida, la guía y la búsqueda de jugadores. Esta banda no cubre los controles ni interrumpe una jugada. Los anuncios recompensados son siempre voluntarios: pueden ofrecerse en la tienda por la bonificación indicada y al finalizar la mesa para duplicar una recompensa elegible. Solo se abren cuando los eliges y la recompensa se entrega únicamente al completar el anuncio. Las acciones normales del juego, como tirar los dados, mover una ficha, Jugar otra vez, Volver al inicio y Reanudar, nunca abren anuncios a pantalla completa o recompensados. La aplicación solicita consentimiento cuando corresponde y ofrece opciones para administrar la privacidad publicitaria. macOS no muestra banners ni anuncios recompensados.';
     const detailedEnglish =
-        'On Android and iOS, an adaptive ad banner may remain visible at the bottom. This banner does not interrupt or block gameplay. Rewarded ads open only when you voluntarily choose to double the reward after the table finishes. Normal game actions, such as rolling the dice, moving a piece, Play Again, Back to Home, and Resume, never open ads. A reward is granted only after the ad is completed. The app requests consent when required and provides options to manage ad privacy. macOS does not show banners or rewarded ads.';
+        'On Android and iOS, an adaptive ad banner may remain visible in a reserved strip at the bottom, including during gameplay, the guide, and matchmaking. This banner does not cover controls or interrupt a move. Rewarded ads are always voluntary: they may be offered in the Shop for the stated bonus and after the table finishes to double an eligible reward. They open only when you choose them, and the reward is granted only after the ad is completed. Normal game actions, such as rolling the dice, moving a piece, Play Again, Back to Home, and Resume, never open full-screen or rewarded ads. The app requests consent when required and provides options to manage ad privacy. macOS does not show banners or rewarded ads.';
     const summarySpanish =
-        'Android y iOS pueden mantener una banda publicitaria inferior no interruptiva. Los anuncios recompensados son voluntarios al finalizar la mesa, y las acciones normales del juego nunca abren anuncios. Puedes administrar el consentimiento y las preferencias disponibles desde esta pantalla. La versión de macOS no muestra estos anuncios.';
+        'Android y iOS pueden mantener una banda publicitaria adaptable en una franja inferior reservada, incluso durante la partida, la guía y la búsqueda de jugadores. Los anuncios recompensados son siempre voluntarios en la tienda y al finalizar la mesa; las acciones normales del juego nunca los abren. Puedes administrar el consentimiento y las preferencias disponibles desde esta pantalla. La versión de macOS no muestra estos anuncios.';
     const summaryEnglish =
-        'Android and iOS may keep a non-interruptive ad banner at the bottom. Rewarded ads are optional after the table finishes, and normal game actions never open ads. You can manage consent and available preferences from this screen. The macOS version does not show these ads.';
+        'Android and iOS may keep an adaptive ad banner in a reserved bottom strip, including during gameplay, the guide, and matchmaking. Rewarded ads are always voluntary in the Shop and after the table finishes; normal game actions never open them. You can manage consent and available preferences from this screen. The macOS version does not show these ads.';
 
     expect(translateForLanguage(detailedSpanish, 'en'), detailedEnglish);
     expect(translateForLanguage(summarySpanish, 'en'), summaryEnglish);

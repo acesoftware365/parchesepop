@@ -146,6 +146,13 @@ void main() {
     await tester.tap(find.text('MESA RÁPIDA'));
     await tester.pump();
     await tester.pump(const Duration(milliseconds: 450));
+    expect(
+      find.byKey(const ValueKey('quick-table-entry-dialog')),
+      findsOneWidget,
+    );
+    await tester.tap(find.byKey(const ValueKey('quick-table-local')));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 450));
 
     expect(find.byKey(const ValueKey('online-mode-step')), findsOneWidget);
     expect(
@@ -184,6 +191,9 @@ void main() {
     await tester.tap(find.text('MESA RÁPIDA'));
     await tester.pump();
     await tester.pump(const Duration(milliseconds: 450));
+    await tester.tap(find.byKey(const ValueKey('quick-table-local')));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 450));
 
     expect(find.byKey(const ValueKey('online-mode-step')), findsOneWidget);
     expect(find.text('Tradicional'), findsOneWidget);
@@ -208,6 +218,9 @@ void main() {
         await tester.pumpWidget(const ParchesePopApp());
         await tester.pumpAndSettle();
         await tester.tap(find.text('MESA RÁPIDA'));
+        await tester.pump();
+        await tester.pump(const Duration(milliseconds: 450));
+        await tester.tap(find.byKey(const ValueKey('quick-table-local')));
         await tester.pump();
         await tester.pump(const Duration(milliseconds: 450));
         await tester.tap(

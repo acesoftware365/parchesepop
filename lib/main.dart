@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:math' as math;
 
+import 'package:firebase_core/firebase_core.dart' show FirebaseException;
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/semantics.dart';
@@ -22,7 +23,17 @@ import 'game_feedback.dart';
 import 'game_guide.dart';
 import 'game_interaction_state.dart';
 import 'mobile_ads.dart';
+import 'firebase_online_transport.dart';
+import 'online_game_sync.dart';
+import 'online_deep_link.dart';
+import 'online_invite.dart';
+import 'online_lobby.dart';
 import 'online_match.dart';
+import 'online_quick_pop.dart';
+import 'online_quick_table.dart';
+import 'online_room_ui.dart';
+import 'online_transport.dart';
+import 'online_transport_models.dart';
 import 'orientation_policy.dart';
 import 'player_auth.dart';
 import 'player_progression.dart';
@@ -31,6 +42,7 @@ import 'safe_chat.dart';
 import 'tutorial_controller.dart';
 import 'tutorial_scenario.dart';
 import 'wallet.dart';
+import 'realtime_online_room_controller.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -45,6 +57,10 @@ Future<void> main() async {
       availability: availability,
     ),
   );
+}
+
+Future<void> _deleteCurrentOnlineAccountData() async {
+  await FirebaseOnlineConnection.deleteCurrentOnlineAccountData();
 }
 
 class PopColors {
@@ -84,10 +100,12 @@ const String diceRollGuideHandAsset = 'assets/images/dice_hand_grip_empty.png';
 const String diceRollGuideReleaseAsset =
     'assets/images/dice_hand_release_empty.png';
 const Duration diceThrowAnimationDuration = Duration(milliseconds: 1500);
-const AppFeatureRollout appFeatureRollout = AppFeatureRollout.safeDefaults;
-// Retained only in debug/test builds for the existing ad diagnostics. Release
-// builds use the single post-match "double reward" offer.
-const bool shopRewardedCoinsEnabled = !kReleaseMode;
+const AppFeatureRollout appFeatureRollout = AppFeatureRollout(
+  quickPopOnline: true,
+);
+// Rewarded ads are always voluntary, but the shop coin offer remains
+// available in every build and every game mode.
+const bool shopRewardedCoinsEnabled = true;
 
 String _newAnalyticsReference(String prefix) {
   final timestamp = DateTime.now().microsecondsSinceEpoch.toRadixString(36);
@@ -779,12 +797,14 @@ class ParchesePopApp extends StatefulWidget {
     this.adsController,
     this.audioController,
     this.availability = AppAvailability.available,
+    this.onlineAccountDeletion = _deleteCurrentOnlineAccountData,
   });
 
   final GameAnalytics analytics;
   final AppAdsController? adsController;
   final GameAudioController? audioController;
   final AppAvailability availability;
+  final Future<void> Function() onlineAccountDeletion;
 
   @override
   State<ParchesePopApp> createState() => _ParchesePopAppState();
@@ -792,6 +812,7 @@ class ParchesePopApp extends StatefulWidget {
 
 class _ParchesePopAppState extends State<ParchesePopApp>
     with WidgetsBindingObserver {
+  final GlobalKey<NavigatorState> navigatorKey = GlobalKey<NavigatorState>();
   final WalletController wallet = WalletController();
   final PlayerProgressionController progression = PlayerProgressionController();
   final AppLanguageController language = AppLanguageController();
@@ -808,6 +829,10 @@ class _ParchesePopAppState extends State<ParchesePopApp>
   Duration interruptedMatchElapsed = Duration.zero;
   bool loading = true;
   bool restoringSavedMatch = false;
+  late final OnlineDeepLinkService onlineDeepLinks;
+  StreamSubscription<RoomInvite>? onlineInviteSubscription;
+  RoomInvite? pendingOnlineInvite;
+  bool onlineInviteRouteOpen = false;
 
   GameAudioController get audioController =>
       widget.audioController ?? gameAudio;
@@ -816,6 +841,11 @@ class _ParchesePopAppState extends State<ParchesePopApp>
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
+    onlineDeepLinks = OnlineDeepLinkService();
+    onlineInviteSubscription = onlineDeepLinks.roomInvites.listen(
+      _receiveOnlineInvite,
+    );
+    unawaited(onlineDeepLinks.start().catchError((Object _) {}));
     adsController = widget.adsController ?? NoopAppAdsController();
     unawaited(adsController.initialize());
     _loadProfile();
@@ -893,8 +923,12 @@ class _ParchesePopAppState extends State<ParchesePopApp>
     if (savedMatch != null) {
       try {
         final checkpoint = jsonDecode(savedMatch) as Map<String, dynamic>;
-        interruptedMatch = GameEngine.fromCheckpoint(checkpoint);
         interruptedOnlineSession = _restoreOnlineSession(checkpoint);
+        interruptedMatch = GameEngine.fromCheckpoint(
+          checkpoint,
+          localViewerColor:
+              interruptedOnlineSession?.localColor ?? PlayerColor.red,
+        );
         interruptedAnalyticsMatchRef =
             checkpoint['analyticsMatchRef'] as String? ??
             _newAnalyticsReference('restored_match');
@@ -911,7 +945,81 @@ class _ParchesePopAppState extends State<ParchesePopApp>
         await store.remove('active_match_checkpoint');
       }
     }
-    if (mounted) setState(() => loading = false);
+    if (mounted) {
+      setState(() => loading = false);
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        unawaited(_openPendingOnlineInvite());
+      });
+    }
+  }
+
+  void _receiveOnlineInvite(RoomInvite invite) {
+    pendingOnlineInvite = invite;
+    if (!loading) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        unawaited(_openPendingOnlineInvite());
+      });
+    }
+  }
+
+  Future<void> _openPendingOnlineInvite() async {
+    if (!mounted ||
+        loading ||
+        onlineInviteRouteOpen ||
+        !widget.availability.isAvailable) {
+      return;
+    }
+    final invite = pendingOnlineInvite;
+    final navigator = navigatorKey.currentState;
+    if (invite == null || navigator == null) return;
+    pendingOnlineInvite = null;
+    onlineInviteRouteOpen = true;
+    try {
+      await navigator.push<void>(
+        MaterialPageRoute(
+          builder: (_) => _QuickTableOnlineShell(
+            profile: profile ?? PlayerProfile.guest,
+            wallet: wallet,
+            progression: appFeatureRollout.retentionRewards
+                ? progression
+                : null,
+            tutorial: tutorial,
+            analytics: widget.analytics,
+            initialRoomCode: invite.roomCode,
+            onPlayLocal: () => unawaited(_startLocalTableFromInvite()),
+          ),
+        ),
+      );
+    } finally {
+      onlineInviteRouteOpen = false;
+      if (pendingOnlineInvite != null && mounted) {
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          unawaited(_openPendingOnlineInvite());
+        });
+      }
+    }
+  }
+
+  Future<void> _startLocalTableFromInvite() async {
+    final navigator = navigatorKey.currentState;
+    if (navigator == null || !mounted) return;
+    final mode = await showDialog<GameMode>(
+      context: navigator.context,
+      builder: (_) => const _OnlineModeDialog(),
+    );
+    if (!mounted || mode == null) return;
+    navigator.push(
+      MaterialPageRoute<void>(
+        builder: (_) => MatchmakingScreen(
+          profile: profile ?? PlayerProfile.guest,
+          mode: mode,
+          wallet: wallet,
+          progression: appFeatureRollout.retentionRewards ? progression : null,
+          tutorial: tutorial,
+          analytics: widget.analytics,
+        ),
+      ),
+    );
   }
 
   @override
@@ -921,6 +1029,8 @@ class _ParchesePopAppState extends State<ParchesePopApp>
     progression.dispose();
     tutorial?.dispose();
     language.dispose();
+    unawaited(onlineInviteSubscription?.cancel());
+    unawaited(onlineDeepLinks.dispose());
     adsController.dispose();
     authGateway?.dispose();
     super.dispose();
@@ -960,6 +1070,7 @@ class _ParchesePopAppState extends State<ParchesePopApp>
         child: AnimatedBuilder(
           animation: language,
           builder: (context, _) => MaterialApp(
+            navigatorKey: navigatorKey,
             debugShowCheckedModeBanner: false,
             title: 'Parchís Pop',
             locale: language.localeOverride,
@@ -1034,6 +1145,7 @@ class _ParchesePopAppState extends State<ParchesePopApp>
       tutorial: tutorial,
       authGateway: authGateway!,
       analytics: widget.analytics,
+      onlineAccountDeletion: widget.onlineAccountDeletion,
       onResumeMatch: interruptedMatch == null ? null : _resumeSavedMatch,
       onLocalDataDeleted: _discardDeletedLocalData,
     );
@@ -1195,10 +1307,12 @@ class ProfileSetupScreen extends StatefulWidget {
     required this.onSaved,
     this.initial,
     this.authGateway,
+    this.onDeleteAccountAndData,
   });
   final ValueChanged<PlayerProfile> onSaved;
   final PlayerProfile? initial;
   final PlayerAuthGateway? authGateway;
+  final Future<void> Function(BuildContext context)? onDeleteAccountAndData;
 
   @override
   State<ProfileSetupScreen> createState() => _ProfileSetupScreenState();
@@ -1651,6 +1765,29 @@ class _ProfileSetupScreenState extends State<ProfileSetupScreen> {
                               color: Color(0xFF667085),
                             ),
                           ),
+                          if (widget.onDeleteAccountAndData != null) ...[
+                            const SizedBox(height: 14),
+                            OutlinedButton.icon(
+                              key: const ValueKey(
+                                'guest-profile-delete-account',
+                              ),
+                              style: OutlinedButton.styleFrom(
+                                foregroundColor: PopColors.red,
+                                side: const BorderSide(
+                                  color: PopColors.red,
+                                  width: 1.5,
+                                ),
+                              ),
+                              onPressed: submitting
+                                  ? null
+                                  : () =>
+                                        widget.onDeleteAccountAndData!(context),
+                              icon: const Icon(Icons.delete_forever_rounded),
+                              label: const PopText(
+                                'Eliminar cuenta y datos de invitado',
+                              ),
+                            ),
+                          ],
                         ],
                       ),
                     ),
@@ -1675,6 +1812,7 @@ class HomeScreen extends StatefulWidget {
     this.progression,
     this.tutorial,
     this.analytics = const NoopGameAnalytics(),
+    this.onlineAccountDeletion = _deleteCurrentOnlineAccountData,
     this.onResumeMatch,
     this.onLocalDataDeleted,
   });
@@ -1685,6 +1823,7 @@ class HomeScreen extends StatefulWidget {
   final TutorialController? tutorial;
   final PlayerAuthGateway authGateway;
   final GameAnalytics analytics;
+  final Future<void> Function() onlineAccountDeletion;
   final void Function(BuildContext context)? onResumeMatch;
   final Future<void> Function()? onLocalDataDeleted;
 
@@ -1742,6 +1881,7 @@ class _HomeScreenState extends State<HomeScreen>
             tutorial: widget.tutorial,
             authGateway: widget.authGateway,
             analytics: widget.analytics,
+            onlineAccountDeletion: widget.onlineAccountDeletion,
             onResumeMatch: widget.onResumeMatch,
             onLocalDataDeleted: widget.onLocalDataDeleted,
           ),
@@ -2077,6 +2217,7 @@ class PlayHome extends StatelessWidget {
     this.progression,
     this.tutorial,
     this.analytics = const NoopGameAnalytics(),
+    this.onlineAccountDeletion = _deleteCurrentOnlineAccountData,
     this.onResumeMatch,
     this.onLocalDataDeleted,
   });
@@ -2087,6 +2228,7 @@ class PlayHome extends StatelessWidget {
   final TutorialController? tutorial;
   final PlayerAuthGateway authGateway;
   final GameAnalytics analytics;
+  final Future<void> Function() onlineAccountDeletion;
   final void Function(BuildContext context)? onResumeMatch;
   final Future<void> Function()? onLocalDataDeleted;
 
@@ -2122,7 +2264,7 @@ class PlayHome extends StatelessWidget {
                   icon: Icons.speed_rounded,
                   title: 'QUICK POP',
                   subtitle: '2 fichas · partida rápida',
-                  badge: 'ONLINE · PRÓXIMAMENTE',
+                  badge: 'ONLINE · CPU EN 5 S',
                   featured: true,
                   dense: densePortrait,
                   expanded: horizontalModes && !compactLandscape,
@@ -2133,7 +2275,7 @@ class PlayHome extends StatelessWidget {
                   color: PopColors.blue,
                   icon: Icons.bolt_rounded,
                   title: 'MESA RÁPIDA',
-                  subtitle: 'Partida local',
+                  subtitle: 'Amigos online o partida local',
                   tile: narrow && !compactLandscape,
                   dense: densePortrait,
                   expanded: horizontalModes && !compactLandscape,
@@ -2342,6 +2484,17 @@ class PlayHome extends StatelessWidget {
           builder: (_) => ProfileSetupScreen(
             onSaved: onProfileChanged,
             authGateway: authGateway,
+            onDeleteAccountAndData: (profileContext) => _HomeProfileDialog(
+              profile: profile,
+              wallet: wallet,
+              progression: progression,
+              tutorial: tutorial,
+              authGateway: authGateway,
+              analytics: analytics,
+              onlineAccountDeletion: onlineAccountDeletion,
+              onLocalDataDeleted: onLocalDataDeleted,
+              onProfileChanged: onProfileChanged,
+            )._deleteAccountAndData(profileContext),
           ),
         ),
       );
@@ -2358,6 +2511,7 @@ class PlayHome extends StatelessWidget {
         tutorial: tutorial,
         authGateway: authGateway,
         analytics: analytics,
+        onlineAccountDeletion: onlineAccountDeletion,
         onLocalDataDeleted: onLocalDataDeleted,
         onProfileChanged: onProfileChanged,
       ),
@@ -2387,6 +2541,33 @@ class PlayHome extends StatelessWidget {
   }
 
   Future<void> _startOnline(BuildContext context) async {
+    final choice = await showDialog<_QuickTableEntryChoice>(
+      context: context,
+      builder: (_) => const _QuickTableEntryDialog(),
+    );
+    if (!context.mounted || choice == null) return;
+    if (choice == _QuickTableEntryChoice.local) {
+      await _startLocalTable(context);
+      return;
+    }
+    await Navigator.push<void>(
+      context,
+      MaterialPageRoute(
+        builder: (_) => _QuickTableOnlineShell(
+          profile: profile,
+          wallet: wallet,
+          progression: appFeatureRollout.retentionRewards ? progression : null,
+          tutorial: tutorial,
+          analytics: analytics,
+          onPlayLocal: () {
+            unawaited(_startLocalTable(context));
+          },
+        ),
+      ),
+    );
+  }
+
+  Future<void> _startLocalTable(BuildContext context) async {
     final mode = await showDialog<GameMode>(
       context: context,
       builder: (_) => const _OnlineModeDialog(),
@@ -2430,12 +2611,32 @@ class PlayHome extends StatelessWidget {
   }
 
   Future<void> _showQuickPopEntry(BuildContext context) async {
-    final playLocal = await showDialog<bool>(
+    final choice = await showDialog<_QuickPopEntryChoice>(
       context: context,
       builder: (_) => const _QuickPopEntryDialog(),
     );
-    if (!context.mounted || playLocal != true) return;
-    _startQuickPop(context);
+    if (!context.mounted || choice == null) return;
+    switch (choice) {
+      case _QuickPopEntryChoice.online:
+        await Navigator.push<void>(
+          context,
+          MaterialPageRoute(
+            builder: (_) => _QuickPopOnlineSearchScreen(
+              profile: profile,
+              wallet: wallet,
+              progression: appFeatureRollout.retentionRewards
+                  ? progression
+                  : null,
+              tutorial: tutorial,
+              analytics: analytics,
+            ),
+          ),
+        );
+        return;
+      case _QuickPopEntryChoice.cpu:
+        _startQuickPop(context);
+        return;
+    }
   }
 
   void _startQuickPop(BuildContext context) {
@@ -2549,6 +2750,825 @@ class PlayHome extends StatelessWidget {
   }
 }
 
+enum _QuickTableEntryChoice { online, local }
+
+class _QuickTableEntryDialog extends StatelessWidget {
+  const _QuickTableEntryDialog();
+
+  @override
+  Widget build(BuildContext context) => Dialog(
+    key: const ValueKey('quick-table-entry-dialog'),
+    insetPadding: const EdgeInsets.all(18),
+    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(28)),
+    child: ConstrainedBox(
+      constraints: const BoxConstraints(maxWidth: 520),
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(20, 20, 20, 18),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Row(
+              children: [
+                Container(
+                  width: 50,
+                  height: 50,
+                  decoration: BoxDecoration(
+                    color: PopColors.blue,
+                    borderRadius: BorderRadius.circular(16),
+                  ),
+                  child: const Icon(
+                    Icons.groups_rounded,
+                    color: Colors.white,
+                    size: 30,
+                  ),
+                ),
+                const SizedBox(width: 12),
+                const Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      PopText(
+                        'MESA RÁPIDA',
+                        style: TextStyle(
+                          color: PopColors.navy,
+                          fontSize: 22,
+                          fontWeight: FontWeight.w900,
+                        ),
+                      ),
+                      PopText(
+                        'Elige cómo quieres reunir la mesa',
+                        style: TextStyle(
+                          color: Color(0xFF667085),
+                          fontWeight: FontWeight.w700,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                IconButton(
+                  tooltip: appTranslate(context, 'Cerrar'),
+                  onPressed: () => Navigator.pop(context),
+                  icon: const Icon(Icons.close_rounded),
+                ),
+              ],
+            ),
+            const SizedBox(height: 18),
+            FilledButton.icon(
+              key: const ValueKey('quick-table-online'),
+              onPressed: () =>
+                  Navigator.pop(context, _QuickTableEntryChoice.online),
+              icon: const Icon(Icons.public_rounded),
+              label: const PopText('JUGAR CON AMIGOS ONLINE'),
+              style: FilledButton.styleFrom(
+                minimumSize: const Size.fromHeight(56),
+                backgroundColor: PopColors.blue,
+              ),
+            ),
+            const SizedBox(height: 10),
+            OutlinedButton.icon(
+              key: const ValueKey('quick-table-local'),
+              onPressed: () =>
+                  Navigator.pop(context, _QuickTableEntryChoice.local),
+              icon: const Icon(Icons.phone_iphone_rounded),
+              label: const PopText('PARTIDA LOCAL'),
+              style: OutlinedButton.styleFrom(
+                minimumSize: const Size.fromHeight(54),
+                foregroundColor: PopColors.navy,
+                side: const BorderSide(color: PopColors.blue, width: 2),
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(18),
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
+    ),
+  );
+}
+
+class _QuickTableOnlineShell extends StatefulWidget {
+  const _QuickTableOnlineShell({
+    required this.profile,
+    required this.wallet,
+    required this.progression,
+    required this.tutorial,
+    required this.analytics,
+    required this.onPlayLocal,
+    this.initialRoomCode,
+  });
+
+  final PlayerProfile profile;
+  final WalletController wallet;
+  final PlayerProgressionController? progression;
+  final TutorialController? tutorial;
+  final GameAnalytics analytics;
+  final VoidCallback onPlayLocal;
+  final RoomCode? initialRoomCode;
+
+  @override
+  State<_QuickTableOnlineShell> createState() => _QuickTableOnlineShellState();
+}
+
+class _QuickTableOnlineShellState extends State<_QuickTableOnlineShell> {
+  FirebaseOnlineConnection? connection;
+  RealtimeOnlineRoomController? controller;
+  StreamSubscription<OnlineLobby>? gameReadySubscription;
+  Object? error;
+  bool joiningInvite = false;
+  bool joinedFromInvite = false;
+  bool launchingGame = false;
+
+  @override
+  void initState() {
+    super.initState();
+    unawaited(_connect());
+  }
+
+  Future<void> _connect() async {
+    await gameReadySubscription?.cancel();
+    gameReadySubscription = null;
+    controller?.dispose();
+    controller = null;
+    if (mounted) {
+      setState(() {
+        error = null;
+        joiningInvite = widget.initialRoomCode != null;
+      });
+    }
+    try {
+      final online = await FirebaseOnlineConnection.connect(
+        displayName: widget.profile.name,
+        avatarId: widget.wallet.equippedProductId(CosmeticCategory.avatar),
+      );
+      if (!mounted) return;
+      final roomController = RealtimeOnlineRoomController(
+        transport: online.transport,
+      );
+      connection = online;
+      controller = roomController;
+      gameReadySubscription = roomController.gameReady.listen(
+        (lobby) => unawaited(_openReadyGame(roomController, lobby)),
+        onError: (Object caught, StackTrace stackTrace) {
+          if (mounted) setState(() => error = caught);
+        },
+      );
+      if (widget.initialRoomCode case final roomCode?) {
+        await roomController.joinRoomByCode(roomCode);
+        if (!mounted) return;
+        setState(() {
+          joiningInvite = false;
+          joinedFromInvite = true;
+        });
+      } else {
+        setState(() {});
+      }
+    } catch (caught) {
+      if (!mounted) return;
+      setState(() {
+        error = caught;
+        joiningInvite = false;
+      });
+    }
+  }
+
+  Future<void> _openReadyGame(
+    RealtimeOnlineRoomController roomController,
+    OnlineLobby lobby,
+  ) async {
+    if (launchingGame || !mounted || lobby.status != RoomStatus.inGame) return;
+    launchingGame = true;
+    if (mounted) setState(() {});
+    PreparedOnlineQuickTableMatch? prepared;
+    try {
+      await _waitForRoomInGame(roomController);
+      prepared = prepareOnlineQuickTableMatch(roomController);
+      await _startOnlineSyncWithRetry(prepared.sync);
+      if (!mounted) {
+        prepared.sync.dispose();
+        return;
+      }
+      Navigator.of(context).push(
+        MaterialPageRoute<void>(
+          builder: (_) => GameScreen(
+            opponent: 'Mesa online · 4 jugadores',
+            mode: prepared!.session.mode,
+            matchFormat: MatchFormat.classic,
+            gameEngine: prepared.engine,
+            wallet: widget.wallet,
+            progression: widget.progression,
+            tutorial: widget.tutorial,
+            localProfile: widget.profile,
+            onlineSession: prepared.session,
+            onlineGameSync: prepared.sync,
+            analytics: widget.analytics,
+            onOnlineRematch: (gameContext) {
+              Navigator.of(gameContext).pushAndRemoveUntil(
+                MaterialPageRoute<void>(
+                  builder: (_) => _QuickTableOnlineShell(
+                    profile: widget.profile,
+                    wallet: widget.wallet,
+                    progression: widget.progression,
+                    tutorial: widget.tutorial,
+                    analytics: widget.analytics,
+                    onPlayLocal: widget.onPlayLocal,
+                  ),
+                ),
+                (route) => route.isFirst,
+              );
+            },
+          ),
+        ),
+      );
+    } catch (caught) {
+      prepared?.sync.dispose();
+      if (mounted) {
+        setState(() {
+          error = caught;
+          launchingGame = false;
+        });
+      }
+    }
+  }
+
+  Future<void> _waitForRoomInGame(
+    RealtimeOnlineRoomController roomController,
+  ) async {
+    final deadline = DateTime.now().add(const Duration(seconds: 5));
+    while (roomController.roomRecord?.status != RoomStatus.inGame) {
+      if (DateTime.now().isAfter(deadline)) {
+        throw const OnlineQuickTablePreparationException(
+          'La sala no terminó de abrir la partida online.',
+        );
+      }
+      await Future<void>.delayed(const Duration(milliseconds: 80));
+    }
+  }
+
+  void _playLocal() {
+    Navigator.of(context).pop();
+    WidgetsBinding.instance.addPostFrameCallback((_) => widget.onPlayLocal());
+  }
+
+  @override
+  void dispose() {
+    unawaited(gameReadySubscription?.cancel());
+    final roomController = controller;
+    if (roomController != null) {
+      roomController.dispose();
+    }
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final roomController = controller;
+    if (error != null) {
+      return Scaffold(
+        backgroundColor: PopColors.cloud,
+        appBar: AppBar(title: const PopText('MESA RÁPIDA')),
+        body: SafeArea(
+          child: Center(
+            child: Padding(
+              padding: const EdgeInsets.all(24),
+              child: ConstrainedBox(
+                constraints: const BoxConstraints(maxWidth: 460),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    const Icon(
+                      Icons.cloud_off_rounded,
+                      color: PopColors.red,
+                      size: 62,
+                    ),
+                    const SizedBox(height: 14),
+                    const PopText(
+                      'NO PUDIMOS ABRIR LA SALA',
+                      textAlign: TextAlign.center,
+                      style: TextStyle(
+                        color: PopColors.navy,
+                        fontSize: 22,
+                        fontWeight: FontWeight.w900,
+                      ),
+                    ),
+                    const SizedBox(height: 7),
+                    const PopText(
+                      'Comprueba tu conexión e inténtalo otra vez.',
+                      textAlign: TextAlign.center,
+                      style: TextStyle(color: Color(0xFF667085)),
+                    ),
+                    const SizedBox(height: 18),
+                    FilledButton.icon(
+                      onPressed: _connect,
+                      icon: const Icon(Icons.refresh_rounded),
+                      label: const PopText('INTENTAR DE NUEVO'),
+                    ),
+                    const SizedBox(height: 7),
+                    TextButton(
+                      onPressed: _playLocal,
+                      child: const PopText('JUGAR PARTIDA LOCAL'),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ),
+        ),
+      );
+    }
+    if (roomController == null || joiningInvite || launchingGame) {
+      return Scaffold(
+        backgroundColor: PopColors.cloud,
+        appBar: AppBar(title: const PopText('MESA RÁPIDA')),
+        body: SafeArea(
+          child: Center(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                const SizedBox.square(
+                  dimension: 58,
+                  child: CircularProgressIndicator(strokeWidth: 7),
+                ),
+                const SizedBox(height: 18),
+                PopText(
+                  launchingGame
+                      ? 'Abriendo la partida…'
+                      : joiningInvite
+                      ? 'Entrando a la sala ${widget.initialRoomCode}…'
+                      : 'Conectando la mesa…',
+                  textAlign: TextAlign.center,
+                  style: const TextStyle(
+                    color: PopColors.navy,
+                    fontSize: 18,
+                    fontWeight: FontWeight.w900,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      );
+    }
+    if (joinedFromInvite) {
+      return RoomLobbyScreen(controller: roomController);
+    }
+    return QuickTableHubScreen(
+      controller: roomController,
+      onPlayLocal: _playLocal,
+    );
+  }
+}
+
+Future<void> _startOnlineSyncWithRetry(
+  OnlineGameSyncClient sync, {
+  Duration timeout = const Duration(seconds: 15),
+}) async {
+  final deadline = DateTime.now().add(timeout);
+  Object? lastError;
+  while (DateTime.now().isBefore(deadline)) {
+    try {
+      await sync.start();
+      return;
+    } catch (error) {
+      lastError = error;
+      await Future<void>.delayed(const Duration(milliseconds: 220));
+    }
+  }
+  throw OnlineGameSyncException(
+    'No se pudo abrir la partida online: ${lastError ?? 'tiempo agotado'}.',
+  );
+}
+
+typedef QuickPopOnlineFailurePresentation = ({
+  String diagnosticCode,
+  String userMessage,
+});
+
+/// Produces support diagnostics without exposing Firebase paths, UIDs or raw
+/// exception messages to either the player or production logs.
+QuickPopOnlineFailurePresentation describeQuickPopOnlineFailure(Object error) {
+  if (error is FirebaseException) {
+    final plugin = _safeOnlineDiagnosticSegment(error.plugin);
+    final code = _safeOnlineDiagnosticSegment(error.code);
+    final diagnosticCode = '$plugin/$code';
+    final userMessage = switch (code) {
+      'network-request-failed' ||
+      'network-error' ||
+      'disconnected' ||
+      'unavailable' =>
+        'No pudimos conectar con el servidor. Revisa tu internet e inténtalo otra vez.',
+      'permission-denied' || 'permission_denied' =>
+        'El servidor no autorizó esta partida. Actualiza el juego e inténtalo otra vez.',
+      'operation-not-allowed' || 'app-not-authorized' || 'invalid-api-key' =>
+        'Quick Pop online necesita una actualización de configuración.',
+      _ =>
+        'No pudimos sincronizar Quick Pop con el servidor. Inténtalo otra vez.',
+    };
+    return (diagnosticCode: diagnosticCode, userMessage: userMessage);
+  }
+  if (error is OnlineTransportException) {
+    final diagnosticCode = 'transport/${error.code.name}';
+    final userMessage = switch (error.code) {
+      OnlineTransportErrorCode.invalidQueueTicket =>
+        'La búsqueda online expiró. Inténtalo otra vez.',
+      OnlineTransportErrorCode.joinTimedOut =>
+        'La conexión tardó demasiado. Inténtalo otra vez.',
+      _ => 'No pudimos completar el emparejamiento online.',
+    };
+    return (diagnosticCode: diagnosticCode, userMessage: userMessage);
+  }
+  if (error is OnlineGameSyncException) {
+    return (
+      diagnosticCode: 'game-sync',
+      userMessage:
+          'Encontramos jugador, pero no pudimos abrir la mesa. Inténtalo otra vez.',
+    );
+  }
+  return (
+    diagnosticCode: 'unexpected/${error.runtimeType}',
+    userMessage: 'No pudimos iniciar Quick Pop online. Inténtalo otra vez.',
+  );
+}
+
+String _safeOnlineDiagnosticSegment(String value) {
+  final sanitized = value
+      .toLowerCase()
+      .replaceAll(RegExp('[^a-z0-9_-]'), '-')
+      .replaceAll(RegExp('-+'), '-');
+  return sanitized.isEmpty ? 'unknown' : sanitized;
+}
+
+class _QuickPopOnlineSearchScreen extends StatefulWidget {
+  const _QuickPopOnlineSearchScreen({
+    required this.profile,
+    required this.wallet,
+    required this.progression,
+    required this.tutorial,
+    required this.analytics,
+  });
+
+  final PlayerProfile profile;
+  final WalletController wallet;
+  final PlayerProgressionController? progression;
+  final TutorialController? tutorial;
+  final GameAnalytics analytics;
+
+  @override
+  State<_QuickPopOnlineSearchScreen> createState() =>
+      _QuickPopOnlineSearchScreenState();
+}
+
+class _QuickPopOnlineSearchScreenState
+    extends State<_QuickPopOnlineSearchScreen> {
+  FirebaseOnlineConnection? connection;
+  QuickPopQueueTicket? ticket;
+  Timer? countdownTimer;
+  DateTime? localDeadline;
+  Object? error;
+  String status = 'Conectando con Parchís Pop…';
+  int secondsRemaining = quickPopSearchWindow.inSeconds;
+  bool cancelled = false;
+  bool resolved = false;
+  bool openingMatch = false;
+
+  @override
+  void initState() {
+    super.initState();
+    unawaited(_beginSearch());
+  }
+
+  @override
+  void dispose() {
+    cancelled = true;
+    countdownTimer?.cancel();
+    final currentTicket = ticket;
+    final currentConnection = connection;
+    if (!resolved && currentTicket != null && currentConnection != null) {
+      unawaited(currentConnection.transport.cancelQuickPop(currentTicket));
+    }
+    super.dispose();
+  }
+
+  Future<void> _beginSearch() async {
+    countdownTimer?.cancel();
+    final previousTicket = ticket;
+    final previousConnection = connection;
+    if (!resolved && previousTicket != null && previousConnection != null) {
+      try {
+        await previousConnection.transport.cancelQuickPop(previousTicket);
+      } catch (_) {
+        // A resolved or expired ticket is already safe to abandon.
+      }
+    }
+    if (!mounted) return;
+    setState(() {
+      error = null;
+      status = 'Conectando con Parchís Pop…';
+      secondsRemaining = quickPopSearchWindow.inSeconds;
+      ticket = null;
+      resolved = false;
+      openingMatch = false;
+      cancelled = false;
+    });
+    try {
+      final online = await FirebaseOnlineConnection.connect(
+        displayName: widget.profile.name,
+        avatarId: widget.wallet.equippedProductId(CosmeticCategory.avatar),
+      );
+      if (!mounted || cancelled) return;
+      connection = online;
+      final queued = await online.transport.enqueueQuickPop(
+        mode: GameMode.traditional.name,
+        matchFormat: MatchFormat.quickPop.name,
+      );
+      if (!mounted || cancelled) {
+        await online.transport.cancelQuickPop(queued);
+        return;
+      }
+      ticket = queued;
+      localDeadline = DateTime.now().add(quickPopSearchWindow);
+      setState(() => status = 'Buscando un jugador online…');
+      countdownTimer = Timer.periodic(
+        const Duration(milliseconds: 100),
+        (_) => _refreshCountdown(),
+      );
+
+      while (mounted && !cancelled && !resolved) {
+        final result = await online.transport.resolveQuickPop(queued);
+        if (result != null) {
+          resolved = true;
+          countdownTimer?.cancel();
+          await _openResolution(online, result);
+          return;
+        }
+        await Future<void>.delayed(const Duration(milliseconds: 160));
+      }
+    } catch (caught, stackTrace) {
+      countdownTimer?.cancel();
+      final failure = describeQuickPopOnlineFailure(caught);
+      debugPrint(
+        'Quick Pop online failed [${failure.diagnosticCode}] '
+        '(${caught.runtimeType}).',
+      );
+      if (kDebugMode) debugPrintStack(stackTrace: stackTrace);
+      if (!mounted || cancelled) return;
+      setState(() {
+        error = caught;
+        status = failure.userMessage;
+      });
+    }
+  }
+
+  void _refreshCountdown() {
+    final deadline = localDeadline;
+    if (!mounted || deadline == null || resolved) return;
+    final remainingMs = deadline.difference(DateTime.now()).inMilliseconds;
+    final next = math.max(0, (remainingMs / 1000).ceil());
+    if (next != secondsRemaining) setState(() => secondsRemaining = next);
+  }
+
+  Future<void> _openResolution(
+    FirebaseOnlineConnection online,
+    QuickPopResolution resolution,
+  ) async {
+    if (!mounted) return;
+    if (resolution.kind == QuickPopResolutionKind.cpu) {
+      final localPlayer = OnlineParticipant(
+        id: online.user.uid,
+        displayName: widget.profile.name,
+        flag: widget.profile.flag,
+        avatarId:
+            widget.wallet.equippedProductId(CosmeticCategory.avatar) ??
+            'avatar_default',
+        level: widget.profile.level,
+        color: PlayerColor.red,
+        kind: ParticipantKind.local,
+        loadout: CosmeticLoadout(
+          themeId: widget.wallet.equippedProductId(CosmeticCategory.theme),
+          diceId: widget.wallet.equippedProductId(CosmeticCategory.dice),
+          tokensId: widget.wallet.equippedProductId(CosmeticCategory.tokens),
+        ),
+      );
+      final fallbackSession =
+          VirtualProfileFactory(
+            seed: resolution.resolvedAtMs & 0x7fffffff,
+          ).createSession(
+            matchId: resolution.roomId,
+            mode: GameMode.traditional,
+            localPlayer: localPlayer,
+          );
+      Navigator.of(context).pushReplacement(
+        MaterialPageRoute<void>(
+          builder: (_) => GameScreen(
+            opponent: 'Quick Pop · CPU',
+            mode: GameMode.traditional,
+            matchFormat: MatchFormat.quickPop,
+            wallet: widget.wallet,
+            progression: widget.progression,
+            tutorial: widget.tutorial,
+            localProfile: widget.profile,
+            onlineSession: fallbackSession,
+            analytics: widget.analytics,
+            matchmakingWaitSeconds: quickPopSearchWindow.inSeconds,
+          ),
+        ),
+      );
+      return;
+    }
+
+    setState(() {
+      openingMatch = true;
+      status = 'Jugador encontrado · preparando la mesa…';
+    });
+    final prepared = await OnlineQuickPopBootstrap.prepare(
+      transport: online.transport,
+      resolution: resolution,
+    );
+    await _startOnlineSyncWithRetry(prepared.sync);
+    if (!mounted || cancelled) {
+      prepared.sync.dispose();
+      return;
+    }
+    final opponent = prepared.session.participants.firstWhere(
+      (participant) => participant.kind == ParticipantKind.remoteHuman,
+    );
+    Navigator.of(context).pushReplacement(
+      MaterialPageRoute<void>(
+        builder: (_) => GameScreen(
+          opponent: '${opponent.displayName} ${opponent.flag}',
+          mode: prepared.session.mode,
+          matchFormat: MatchFormat.quickPop,
+          gameEngine: prepared.engine,
+          wallet: widget.wallet,
+          progression: widget.progression,
+          tutorial: widget.tutorial,
+          localProfile: widget.profile,
+          onlineSession: prepared.session,
+          onlineGameSync: prepared.sync,
+          analytics: widget.analytics,
+          matchmakingWaitSeconds: quickPopSearchWindow.inSeconds,
+          onOnlineRematch: (gameContext) {
+            Navigator.of(gameContext).pushReplacement(
+              MaterialPageRoute<void>(
+                builder: (_) => _QuickPopOnlineSearchScreen(
+                  profile: widget.profile,
+                  wallet: widget.wallet,
+                  progression: widget.progression,
+                  tutorial: widget.tutorial,
+                  analytics: widget.analytics,
+                ),
+              ),
+            );
+          },
+        ),
+      ),
+    );
+  }
+
+  Future<void> _cancelAndLeave() async {
+    if (openingMatch) return;
+    cancelled = true;
+    countdownTimer?.cancel();
+    final currentTicket = ticket;
+    final currentConnection = connection;
+    if (!resolved && currentTicket != null && currentConnection != null) {
+      try {
+        await currentConnection.transport.cancelQuickPop(currentTicket);
+      } catch (_) {
+        // The queue can already have resolved while the player taps Cancel.
+      }
+    }
+    if (mounted) Navigator.pop(context);
+  }
+
+  @override
+  Widget build(BuildContext context) => PopScope(
+    canPop: error != null,
+    onPopInvokedWithResult: (didPop, result) {
+      if (!didPop) unawaited(_cancelAndLeave());
+    },
+    child: Scaffold(
+      body: PopBackground(
+        child: SafeArea(
+          child: Center(
+            child: Padding(
+              padding: const EdgeInsets.all(22),
+              child: ConstrainedBox(
+                constraints: const BoxConstraints(maxWidth: 480),
+                child: Container(
+                  padding: const EdgeInsets.fromLTRB(24, 26, 24, 20),
+                  decoration: BoxDecoration(
+                    color: Colors.white.withValues(alpha: .96),
+                    borderRadius: BorderRadius.circular(30),
+                    border: Border.all(color: Colors.white, width: 2),
+                    boxShadow: const [
+                      BoxShadow(
+                        color: Color(0x3317284D),
+                        blurRadius: 24,
+                        offset: Offset(0, 12),
+                      ),
+                    ],
+                  ),
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Container(
+                        width: 82,
+                        height: 82,
+                        decoration: const BoxDecoration(
+                          color: Color(0xFF7257E9),
+                          shape: BoxShape.circle,
+                        ),
+                        child: error == null
+                            ? Padding(
+                                padding: const EdgeInsets.all(20),
+                                child: CircularProgressIndicator(
+                                  strokeWidth: 7,
+                                  color: Colors.white,
+                                  value: openingMatch
+                                      ? null
+                                      : 1 -
+                                            (secondsRemaining /
+                                                quickPopSearchWindow.inSeconds),
+                                ),
+                              )
+                            : const Icon(
+                                Icons.cloud_off_rounded,
+                                color: Colors.white,
+                                size: 44,
+                              ),
+                      ),
+                      const SizedBox(height: 18),
+                      const PopText(
+                        'QUICK POP ONLINE',
+                        textAlign: TextAlign.center,
+                        style: TextStyle(
+                          color: PopColors.navy,
+                          fontSize: 25,
+                          fontWeight: FontWeight.w900,
+                        ),
+                      ),
+                      const SizedBox(height: 8),
+                      PopText(
+                        status,
+                        key: const ValueKey('quick-pop-search-status'),
+                        textAlign: TextAlign.center,
+                        style: const TextStyle(
+                          color: Color(0xFF667085),
+                          fontWeight: FontWeight.w700,
+                        ),
+                      ),
+                      if (error == null && !openingMatch) ...[
+                        const SizedBox(height: 16),
+                        PopText(
+                          '$secondsRemaining',
+                          key: const ValueKey('quick-pop-countdown'),
+                          style: const TextStyle(
+                            color: Color(0xFF7257E9),
+                            fontSize: 42,
+                            height: 1,
+                            fontWeight: FontWeight.w900,
+                          ),
+                        ),
+                        const SizedBox(height: 5),
+                        const PopText(
+                          'Luego jugarás contra CPU automáticamente',
+                          textAlign: TextAlign.center,
+                          style: TextStyle(
+                            color: Color(0xFF667085),
+                            fontSize: 12,
+                            fontWeight: FontWeight.w700,
+                          ),
+                        ),
+                      ],
+                      const SizedBox(height: 20),
+                      if (error != null) ...[
+                        FilledButton.icon(
+                          onPressed: _beginSearch,
+                          icon: const Icon(Icons.refresh_rounded),
+                          label: const PopText('INTENTAR DE NUEVO'),
+                        ),
+                        const SizedBox(height: 6),
+                      ],
+                      TextButton(
+                        onPressed: openingMatch ? null : _cancelAndLeave,
+                        child: PopText(error == null ? 'CANCELAR' : 'VOLVER'),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            ),
+          ),
+        ),
+      ),
+    ),
+  );
+}
+
+enum _QuickPopEntryChoice { online, cpu }
+
 class _QuickPopEntryDialog extends StatelessWidget {
   const _QuickPopEntryDialog();
 
@@ -2596,21 +3616,21 @@ class _QuickPopEntryDialog extends StatelessWidget {
                         ),
                       ),
                       SizedBox(height: 5),
-                      _ModeStatusBadge(label: 'ONLINE · PRÓXIMAMENTE'),
+                      _ModeStatusBadge(label: 'ONLINE · LISTO'),
                     ],
                   ),
                 ),
                 IconButton(
-                  tooltip: 'Cerrar',
-                  onPressed: () => Navigator.pop(context, false),
+                  tooltip: appTranslate(context, 'Cerrar'),
+                  onPressed: () => Navigator.pop(context),
                   icon: const Icon(Icons.close_rounded),
                 ),
               ],
             ),
             const SizedBox(height: 17),
             const PopText(
-              'El modo online necesita conexión con un servidor seguro. '
-              'Mientras lo terminamos, puedes probar Quick Pop contra el CPU.',
+              'Buscaremos otro jugador durante 5 segundos. Si no aparece '
+              'nadie, la partida empieza automáticamente contra el CPU.',
               style: TextStyle(
                 color: Color(0xFF475467),
                 fontSize: 14,
@@ -2620,10 +3640,11 @@ class _QuickPopEntryDialog extends StatelessWidget {
             ),
             const SizedBox(height: 18),
             FilledButton.icon(
-              key: const ValueKey('quick-pop-local-preview'),
-              onPressed: () => Navigator.pop(context, true),
-              icon: const Icon(Icons.play_arrow_rounded),
-              label: const PopText('PROBAR QUICK POP'),
+              key: const ValueKey('quick-pop-online-start'),
+              onPressed: () =>
+                  Navigator.pop(context, _QuickPopEntryChoice.online),
+              icon: const Icon(Icons.public_rounded),
+              label: const PopText('JUGAR ONLINE · BUSCAR 5 S'),
               style: FilledButton.styleFrom(
                 backgroundColor: const Color(0xFF7257E9),
                 foregroundColor: Colors.white,
@@ -2633,10 +3654,12 @@ class _QuickPopEntryDialog extends StatelessWidget {
                 ),
               ),
             ),
-            TextButton(
-              key: const ValueKey('quick-pop-entry-close'),
-              onPressed: () => Navigator.pop(context, false),
-              child: const PopText('AHORA NO'),
+            const SizedBox(height: 8),
+            OutlinedButton.icon(
+              key: const ValueKey('quick-pop-local-preview'),
+              onPressed: () => Navigator.pop(context, _QuickPopEntryChoice.cpu),
+              icon: const Icon(Icons.smart_toy_rounded),
+              label: const PopText('JUGAR AHORA CONTRA CPU'),
             ),
           ],
         ),
@@ -5222,6 +6245,8 @@ class GameScreen extends StatefulWidget {
     this.guidedTutorial = false,
     this.localProfile,
     this.onlineSession,
+    this.onlineGameSync,
+    this.onOnlineRematch,
     this.analytics = const NoopGameAnalytics(),
     this.analyticsMatchRef,
     this.analyticsFirstRollLogged = false,
@@ -5243,6 +6268,8 @@ class GameScreen extends StatefulWidget {
   final bool guidedTutorial;
   final PlayerProfile? localProfile;
   final OnlineMatchSession? onlineSession;
+  final OnlineGameSyncClient? onlineGameSync;
+  final ValueChanged<BuildContext>? onOnlineRematch;
   final GameAnalytics analytics;
   final String? analyticsMatchRef;
   final bool analyticsFirstRollLogged;
@@ -5319,12 +6346,50 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
   int diceThrowSerial = 0;
   (int, int)? diceThrowResult;
   Timer? diceThrowTimer;
+  Timer? hostRecoveryUiTimer;
+  StreamSubscription<OnlineSafeChatMessage>? onlineSafeChatSubscription;
+  bool hostRecoveryRetrying = false;
+
+  /// The local seat is red for legacy CPU/tutorial matches, but an online
+  /// room can assign this device any of the four clockwise colors.
+  PlayerColor get _localPlayerColor =>
+      widget.onlineSession?.localColor ?? engine.localViewerColor;
 
   bool get _isLocallyControlledTurn =>
-      engine.currentPlayer.isHuman && !localCpuTakeoverActive;
+      engine.currentPlayer.color == _localPlayerColor &&
+      !localCpuTakeoverActive &&
+      (widget.onlineGameSync == null ||
+          widget.onlineGameSync!.connectionState ==
+              OnlineGameConnectionState.connected);
 
-  bool get _isCpuControlledTurn =>
-      !engine.currentPlayer.isHuman || localCpuTakeoverActive;
+  bool get _isCpuControlledTurn {
+    final sync = widget.onlineGameSync;
+    final session = widget.onlineSession;
+    if (sync != null && session != null) {
+      final participant = session.participantForColor(
+        engine.currentPlayer.color,
+      );
+      return sync.canHostDriveParticipant(participant.id);
+    }
+    return !engine.currentPlayer.isHuman || localCpuTakeoverActive;
+  }
+
+  bool get _showOnlineHostRecovery {
+    final sync = widget.onlineGameSync;
+    return sync != null &&
+        !sync.isHost &&
+        !engine.gameOver &&
+        sync.hostAvailability != OnlineHostAvailability.available;
+  }
+
+  int get _hostReconnectSecondsRemaining {
+    final deadline = widget.onlineGameSync?.hostReconnectDeadline;
+    if (deadline == null) return 0;
+    return math.max(
+      0,
+      (deadline.difference(DateTime.now()).inMilliseconds / 1000).ceil(),
+    );
+  }
 
   bool get _usesGuidedTutorial =>
       widget.guidedTutorial ||
@@ -5480,13 +6545,12 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
         ? 'Fácil'
         : 'Normal';
     final onlineSession = widget.onlineSession;
-    final onlineCpuNames = onlineSession == null
+    final onlinePlayerNames = onlineSession == null
         ? null
-        : [
-            onlineSession.participantForColor(PlayerColor.green).displayName,
-            onlineSession.participantForColor(PlayerColor.yellow).displayName,
-            onlineSession.participantForColor(PlayerColor.blue).displayName,
-          ];
+        : <PlayerColor, String>{
+            for (final participant in onlineSession.participants)
+              participant.color: participant.displayName,
+          };
     tutorialScenario =
         _usesGuidedTutorial &&
             widget.gameEngine == null &&
@@ -5496,18 +6560,18 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
             humanName: widget.localProfile?.name ?? 'Tú',
           )
         : null;
-    ownsEngine = widget.gameEngine == null;
+    ownsEngine = widget.gameEngine == null && widget.onlineGameSync == null;
     engine =
+        widget.onlineGameSync?.engine ??
         widget.gameEngine ??
         tutorialScenario?.engine ??
         GameEngine(
           cpuLevel: level,
           mode: onlineSession?.mode ?? widget.mode,
           matchFormat: widget.matchFormat,
-          humanName:
-              onlineSession?.participantForColor(PlayerColor.red).displayName ??
-              'Tú',
-          cpuNames: onlineCpuNames,
+          localViewerColor: onlineSession?.localColor ?? PlayerColor.red,
+          humanName: onlineSession?.localParticipant.displayName ?? 'Tú',
+          playerNames: onlinePlayerNames,
         );
     final playType = _playTypeForSession(onlineSession);
     final matchRef =
@@ -5605,7 +6669,14 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
         ),
       );
     }
+    if (onlineSession != null) {
+      safeChat = SafeChatController();
+      _bindOnlineSafeChat();
+    }
     engine.addListener(_onGameChanged);
+    widget.onlineGameSync?.addListener(_onOnlineSyncChanged);
+    _refreshHostRecoveryTimer();
+    unawaited(widget.onlineGameSync?.start());
     widget.wallet?.addListener(_onWalletChanged);
     lastAudioEventSequence = engine.eventHistory.isEmpty
         ? 0
@@ -5615,9 +6686,6 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
       if (!mounted || engine.gameOver) return;
       setState(() => matchElapsed += const Duration(seconds: 1));
     });
-    if (onlineSession != null) {
-      safeChat = SafeChatController();
-    }
     if (engine.gameOver && engine.winner != null) {
       _queueVictoryCelebration();
     }
@@ -5649,10 +6717,88 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
       oldWidget.wallet?.removeListener(_onWalletChanged);
       widget.wallet?.addListener(_onWalletChanged);
     }
+    if (oldWidget.onlineGameSync != widget.onlineGameSync) {
+      oldWidget.onlineGameSync?.removeListener(_onOnlineSyncChanged);
+      widget.onlineGameSync?.addListener(_onOnlineSyncChanged);
+      _bindOnlineSafeChat();
+      _refreshHostRecoveryTimer();
+    }
+  }
+
+  void _bindOnlineSafeChat() {
+    unawaited(onlineSafeChatSubscription?.cancel());
+    onlineSafeChatSubscription = null;
+    final sync = widget.onlineGameSync;
+    if (sync == null) return;
+    onlineSafeChatSubscription = sync.safeChatMessages.listen(
+      _onOnlineSafeChatMessage,
+      onError: (Object error, StackTrace stackTrace) {
+        debugPrint('Quick Messages realtime stream error: $error');
+      },
+    );
+  }
+
+  void _onOnlineSafeChatMessage(OnlineSafeChatMessage message) {
+    final session = widget.onlineSession;
+    if (!mounted || session == null) return;
+    final sender = session.participants
+        .where((participant) => participant.id == message.senderUid)
+        .firstOrNull;
+    if (sender == null || !sender.beganAsHuman) return;
+    _presentSafeChat(message.toSafeChatMessage(), sender);
   }
 
   void _onWalletChanged() {
     if (mounted) setState(() {});
+  }
+
+  void _onOnlineSyncChanged() {
+    if (!mounted) return;
+    _refreshHostRecoveryTimer();
+    if (!engine.gameOver && _isCpuControlledTurn && !cpuThinking) {
+      _onGameChanged();
+      return;
+    }
+    setState(() {});
+  }
+
+  void _refreshHostRecoveryTimer() {
+    final sync = widget.onlineGameSync;
+    final needsCountdown =
+        sync != null &&
+        !sync.isHost &&
+        sync.hostAvailability == OnlineHostAvailability.reconnecting;
+    if (!needsCountdown) {
+      hostRecoveryUiTimer?.cancel();
+      hostRecoveryUiTimer = null;
+      return;
+    }
+    hostRecoveryUiTimer ??= Timer.periodic(const Duration(seconds: 1), (_) {
+      if (mounted) setState(() {});
+    });
+  }
+
+  Future<void> _retryOnlineHostRecovery() async {
+    final sync = widget.onlineGameSync;
+    if (sync == null || sync.isHost || hostRecoveryRetrying) return;
+    setState(() => hostRecoveryRetrying = true);
+    var recovered = false;
+    try {
+      recovered = await sync.retryHostRecovery();
+    } catch (_) {
+      recovered = false;
+    }
+    if (!mounted) return;
+    setState(() => hostRecoveryRetrying = false);
+    if (!recovered) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: PopText(
+            'El anfitrión todavía no está conectado. Puedes intentar otra vez.',
+          ),
+        ),
+      );
+    }
   }
 
   @override
@@ -5666,9 +6812,13 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
     eventChatTimer?.cancel();
     matchClockTimer?.cancel();
     diceThrowTimer?.cancel();
+    hostRecoveryUiTimer?.cancel();
     _cancelRollGuide(notify: false);
     widget.wallet?.removeListener(_onWalletChanged);
     engine.removeListener(_onGameChanged);
+    widget.onlineGameSync?.removeListener(_onOnlineSyncChanged);
+    unawaited(onlineSafeChatSubscription?.cancel());
+    widget.onlineGameSync?.dispose();
     if (ownsEngine) engine.dispose();
     super.dispose();
   }
@@ -5683,7 +6833,7 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
     if (isLeaving) {
       if (state == AppLifecycleState.detached) {
         if (engine.gameOver) {
-          _logMatchCompleted(placement: engine.placementFor(PlayerColor.red));
+          _logMatchCompleted(placement: engine.placementFor(_localPlayerColor));
           _logRewardedDeclinedIfIgnored();
         } else {
           _logMatchAbandoned(MatchAbandonReason.appClosed);
@@ -5697,7 +6847,12 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
       _cancelRollGuide(resetWindow: true, notify: false);
       mobileBoardCameraMode = _MobileBoardCameraMode.fullBoard;
       unawaited(_saveMatchCheckpoint());
-      if (_sessionHasRemoteHuman(widget.onlineSession) && !engine.gameOver) {
+      if (widget.onlineGameSync case final sync?) {
+        unawaited(sync.pause());
+      }
+      if (widget.onlineGameSync == null &&
+          _sessionHasRemoteHuman(widget.onlineSession) &&
+          !engine.gameOver) {
         localCpuTakeoverActive = true;
         _onGameChanged();
       }
@@ -5706,6 +6861,9 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
     if (state == AppLifecycleState.resumed) {
       rollGuideAppActive = true;
       localCpuTakeoverActive = false;
+      if (widget.onlineGameSync case final sync?) {
+        unawaited(sync.reconnect());
+      }
       unawaited(_saveMatchCheckpoint());
       unawaited(_loadRollGuidePreferences(rearm: true));
       MobileAdsScope.maybeOf(context)?.preloadRewarded();
@@ -5726,7 +6884,7 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
             }
             final resumedCommand = engine.uniqueLegalMoveCommand;
             if (resumedCommand != null) {
-              engine.executeMoveCommand(resumedCommand);
+              _executeLegalMoveCommand(resumedCommand);
             }
           });
         }
@@ -5825,7 +6983,60 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
         diceThrowSerial++;
       });
     }
+    final sync = widget.onlineGameSync;
+    if (sync != null) {
+      unawaited(_rollOnline(sync, reduceMotion: reduceMotion));
+      return;
+    }
     engine.roll();
+    _presentRolledDice(reduceMotion: reduceMotion);
+  }
+
+  Future<void> _rollOnline(
+    OnlineGameSyncClient sync, {
+    required bool reduceMotion,
+  }) async {
+    try {
+      final result = await sync.submitRoll();
+      await _waitForOnlineState(sync, result.stateRevision);
+      if (!result.accepted) {
+        throw OnlineGameSyncException(
+          'El servidor rechazó la tirada: ${result.rejection?.name ?? 'acción inválida'}.',
+        );
+      }
+      if (!mounted) return;
+      _presentRolledDice(reduceMotion: reduceMotion);
+    } catch (error) {
+      if (!mounted) return;
+      setState(() {
+        diceThrowInProgress = false;
+        diceThrowResult = null;
+      });
+      _showOnlineActionError(error);
+    }
+  }
+
+  Future<void> _waitForOnlineState(
+    OnlineGameSyncClient sync,
+    int requiredRevision,
+  ) async {
+    if (sync.stateRevision >= requiredRevision) return;
+    final completer = Completer<void>();
+    void listener() {
+      if (sync.stateRevision >= requiredRevision && !completer.isCompleted) {
+        completer.complete();
+      }
+    }
+
+    sync.addListener(listener);
+    try {
+      await completer.future.timeout(const Duration(seconds: 3));
+    } finally {
+      sync.removeListener(listener);
+    }
+  }
+
+  void _presentRolledDice({required bool reduceMotion}) {
     (int, int) rolledResult = (engine.dice[0], engine.dice[1]);
     for (final event in engine.eventHistory.reversed) {
       if (event.type == GameEventType.roll && event.dice != null) {
@@ -5840,7 +7051,7 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
       if (quickPopCommand != null) {
         diceThrowTimer = Timer(const Duration(milliseconds: 80), () {
           if (!mounted || engine.gameOver || engine.effectResolving) return;
-          engine.executeMoveCommand(quickPopCommand);
+          _executeLegalMoveCommand(quickPopCommand);
         });
       }
       return;
@@ -5855,9 +7066,82 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
       if (quickPopCommand != null &&
           !engine.gameOver &&
           !engine.effectResolving) {
-        engine.executeMoveCommand(quickPopCommand);
+        _executeLegalMoveCommand(quickPopCommand);
       }
     });
+  }
+
+  void _executeLegalMoveCommand(LegalMoveCommand command) {
+    final sync = widget.onlineGameSync;
+    if (sync == null) {
+      engine.executeMoveCommand(command);
+      return;
+    }
+    unawaited(
+      _submitOnlineMove(
+        sync,
+        tokenId: command.token.id,
+        die: command.die!,
+        usesAllDice: command.usesAllDice,
+      ),
+    );
+  }
+
+  Future<void> _submitOnlineMove(
+    OnlineGameSyncClient sync, {
+    required int tokenId,
+    required int die,
+    required bool usesAllDice,
+  }) async {
+    try {
+      final result = usesAllDice
+          ? await sync.submitMoveAll(tokenId: tokenId)
+          : await sync.submitMove(tokenId: tokenId, die: die);
+      await _waitForOnlineState(sync, result.stateRevision);
+      if (!result.accepted) {
+        throw OnlineGameSyncException(
+          'El servidor rechazó el movimiento: ${result.rejection?.name ?? 'acción inválida'}.',
+        );
+      }
+    } catch (error) {
+      if (mounted) _showOnlineActionError(error);
+    }
+  }
+
+  void _useHeldPowerFromHud() {
+    if (!_isLocallyControlledTurn || engine.effectResolving) return;
+    _cancelTokenSelection();
+    final sync = widget.onlineGameSync;
+    if (sync == null) {
+      engine.usePowerUp();
+      return;
+    }
+    unawaited(_submitOnlinePower(sync));
+  }
+
+  Future<void> _submitOnlinePower(OnlineGameSyncClient sync) async {
+    try {
+      final result = await sync.submitPowerUp();
+      await _waitForOnlineState(sync, result.stateRevision);
+      if (!result.accepted) {
+        throw OnlineGameSyncException(
+          'El servidor rechazó el poder: '
+          '${result.rejection?.name ?? 'acción inválida'}.',
+        );
+      }
+    } catch (error) {
+      if (mounted) _showOnlineActionError(error);
+    }
+  }
+
+  void _showOnlineActionError(Object error) {
+    final message = switch (error) {
+      TimeoutException() => 'La conexión tardó demasiado. Inténtalo otra vez.',
+      _ => 'No se pudo completar la acción online.',
+    };
+    ScaffoldMessenger.of(
+      context,
+    ).showSnackBar(SnackBar(content: PopText(message)));
   }
 
   Future<void> _openGameSettings() async {
@@ -5878,7 +7162,10 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
   Future<void> _saveMatchCheckpoint() async {
     // Tutorial progress is enough to reconstruct this short lesson. Never let
     // it overwrite the player's real resumable match.
-    if (_usesGuidedTutorial) return;
+    // Live online matches reconnect from the authoritative room document;
+    // persisting a device-local replica would incorrectly turn it into a CPU
+    // match after a restart.
+    if (_usesGuidedTutorial || widget.onlineGameSync != null) return;
     final store = await SharedPreferences.getInstance();
     if (engine.gameOver) {
       await store.remove('active_match_checkpoint');
@@ -5934,22 +7221,22 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
               'id': participant.id,
               'displayName': participant.displayName,
               'flag': participant.flag,
-              'avatarId': participant.color == PlayerColor.red
+              'avatarId': participant.color == _localPlayerColor
                   ? widget.wallet?.equippedProductId(CosmeticCategory.avatar) ??
                         participant.avatarId
                   : participant.avatarId,
               'level': participant.level,
               'color': participant.color.name,
               'kind': participant.kind.name,
-              'themeId': participant.color == PlayerColor.red
+              'themeId': participant.color == _localPlayerColor
                   ? widget.wallet?.equippedProductId(CosmeticCategory.theme) ??
                         participant.loadout.themeId
                   : participant.loadout.themeId,
-              'diceId': participant.color == PlayerColor.red
+              'diceId': participant.color == _localPlayerColor
                   ? widget.wallet?.equippedProductId(CosmeticCategory.dice) ??
                         participant.loadout.diceId
                   : participant.loadout.diceId,
-              'tokensId': participant.color == PlayerColor.red
+              'tokensId': participant.color == _localPlayerColor
                   ? widget.wallet?.equippedProductId(CosmeticCategory.tokens) ??
                         participant.loadout.tokensId
                   : participant.loadout.tokensId,
@@ -5982,7 +7269,7 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
       unawaited(_trackTutorialEvent(event));
       unawaited(_trackProgressionEvent(event));
 
-      final localPlacement = engine.placementFor(PlayerColor.red);
+      final localPlacement = engine.placementFor(_localPlayerColor);
       if (localPlacement != null) {
         _logMatchCompleted(placement: localPlacement);
       }
@@ -6056,7 +7343,7 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
   Future<void> _trackProgressionEvent(GameEvent event) async {
     if (_usesGuidedTutorial) return;
     final controller = widget.progression;
-    if (controller == null || event.playerColor != PlayerColor.red) return;
+    if (controller == null || event.playerColor != _localPlayerColor) return;
     final eventId = '${progressionEventRunRef}_${event.sequence}';
     final transactions = <ProgressionTransaction>[];
     final releasedQuickPopToken =
@@ -6167,7 +7454,7 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
     if (_usesGuidedTutorial) return;
     final progression = widget.progression;
     if (progression == null) return;
-    final placement = engine.placementFor(PlayerColor.red);
+    final placement = engine.placementFor(_localPlayerColor);
     // The first finisher ends the active match even when the local player has
     // not reached home yet. Award participation at that point so losing never
     // means "no progress". If the player keeps watching, the placement reward
@@ -6213,9 +7500,12 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
       return;
     }
     final ads = MobileAdsScope.maybeOf(context);
+    // Finishing the active table is enough to offer the voluntary bonus.
+    // Placement can arrive later while the player keeps watching the table;
+    // PlayerProgressionController settles that later portion idempotently.
     final reward = widget.progression == null
-        ? (engine.standingsComplete ? 100 : 0)
-        : matchPlacementRewardSettled
+        ? 100
+        : matchCompletionRewardSettled
         ? matchBasePayout
         : 0;
     if (reward <= 0 || ads == null || !ads.supported) return;
@@ -6312,7 +7602,7 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
     });
   }
 
-  /// Optional coin bonus offered after the local placement is known.
+  /// Optional coin bonus offered once the active table has ended.
   /// Navigation never opens an advertisement.
   Future<void> _watchEndMatchRewarded() async {
     if (endMatchRewardInProgress ||
@@ -6325,7 +7615,7 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
     if (ads == null || !ads.supported) return;
     final rewardAmount = widget.progression == null ? 100 : matchBasePayout;
     if (rewardAmount <= 0 ||
-        (widget.progression != null && !matchPlacementRewardSettled)) {
+        (widget.progression != null && !matchCompletionRewardSettled)) {
       return;
     }
 
@@ -6425,9 +7715,18 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
 
   void _playAgain() {
     finalReturnTimer?.cancel();
-    _logMatchCompleted(placement: engine.placementFor(PlayerColor.red));
+    _logMatchCompleted(placement: engine.placementFor(_localPlayerColor));
     _logRewardedDeclinedIfIgnored();
     final playType = _playTypeForSession(widget.onlineSession);
+    if (widget.onlineGameSync != null) {
+      final onlineRematch = widget.onOnlineRematch;
+      if (onlineRematch != null) {
+        onlineRematch(context);
+      } else {
+        unawaited(_returnToStart());
+      }
+      return;
+    }
     final nextMatchRef = _newAnalyticsReference(
       playType == MatchPlayType.cpu ? 'cpu_match' : 'online_match',
     );
@@ -6499,7 +7798,7 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
           final participant = widget.onlineSession?.participantForColor(
             standing.competitor,
           );
-          final localProfile = standing.competitor == PlayerColor.red
+          final localProfile = standing.competitor == _localPlayerColor
               ? widget.localProfile
               : null;
           return _FinalStandingEntry(
@@ -6537,7 +7836,7 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
         onClose: () => Navigator.pop(sheetContext),
       ),
     );
-    if (phraseId != null) _sendSafeChat(phraseId);
+    if (phraseId != null) await _sendSafeChat(phraseId);
   }
 
   Future<void> _showOwnedCosmetics() async {
@@ -6589,11 +7888,11 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
     );
   }
 
-  void _sendSafeChat(SafeChatPhraseId phraseId) {
+  Future<void> _sendSafeChat(SafeChatPhraseId phraseId) async {
     final session = widget.onlineSession;
     final controller = safeChat;
     if (session == null || controller == null) return;
-    final sender = session.participantForColor(PlayerColor.red);
+    final sender = session.participantForColor(_localPlayerColor);
     final result = controller.send(senderId: sender.id, phraseId: phraseId);
     if (result != SafeChatSendResult.sent) {
       ScaffoldMessenger.of(context).showSnackBar(
@@ -6603,12 +7902,28 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
       );
       return;
     }
+    final sync = widget.onlineGameSync;
+    if (sync != null) {
+      try {
+        await sync.sendSafeChat(phraseId);
+      } catch (_) {
+        if (!mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: PopText(
+              'No se pudo enviar el mensaje. Revisa la conexión e inténtalo otra vez.',
+            ),
+          ),
+        );
+      }
+      return;
+    }
     _presentSafeChat(controller.messages.last, sender);
     chatReactionTimer?.cancel();
     chatReactionTimer = Timer(const Duration(milliseconds: 1250), () {
       if (!mounted || widget.onlineSession == null) return;
       final opponents = session.participants
-          .where((participant) => participant.color != PlayerColor.red)
+          .where((participant) => participant.color != _localPlayerColor)
           .toList(growable: false);
       final variation = phraseId.index + engine.turnNumber;
       final opponent = opponents[variation % opponents.length];
@@ -6627,6 +7942,9 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
   /// event decides the phrase, so chat follows the match instead of sending
   /// random comments at confusing moments.
   void _reactToMatchEvent(GameEvent event) {
+    // Real online players speak only for themselves through the authenticated
+    // room stream. Never fabricate a message under another player's name.
+    if (widget.onlineGameSync != null) return;
     final session = widget.onlineSession;
     final controller = safeChat;
     if (session == null || controller == null) return;
@@ -6635,10 +7953,10 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
     PlayerColor? senderColor;
     switch (event.type) {
       case GameEventType.capture:
-        senderColor = event.playerColor == PlayerColor.red
+        senderColor = event.playerColor == _localPlayerColor
             ? event.targetColor
             : event.playerColor;
-        moment = event.playerColor == PlayerColor.red
+        moment = event.playerColor == _localPlayerColor
             ? SafeChatMoment.wasCaptured
             : SafeChatMoment.capturedOpponent;
         break;
@@ -6721,7 +8039,7 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
     finalReturnTimer?.cancel();
     if (discardSavedMatch) {
       if (engine.gameOver) {
-        _logMatchCompleted(placement: engine.placementFor(PlayerColor.red));
+        _logMatchCompleted(placement: engine.placementFor(_localPlayerColor));
         _logRewardedDeclinedIfIgnored();
       } else {
         _logMatchAbandoned(MatchAbandonReason.backButton);
@@ -6822,17 +8140,52 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
 
   Future<void> _playCpuTurn() async {
     cpuThinking = true;
+    try {
+      await _playCpuTurnActions();
+    } catch (error) {
+      if (mounted && widget.onlineGameSync != null) {
+        _showOnlineActionError(error);
+      }
+    } finally {
+      cpuThinking = false;
+      if (mounted && !engine.gameOver && _isCpuControlledTurn) {
+        Future<void>.microtask(_onGameChanged);
+      }
+    }
+  }
+
+  Future<void> _playCpuTurnActions() async {
     await Future<void>.delayed(_nextCpuThinkDelay());
     if (!mounted || engine.gameOver || !_isCpuControlledTurn) {
-      cpuThinking = false;
       return;
     }
+    final sync = widget.onlineGameSync;
+    final virtualParticipantId = sync == null
+        ? null
+        : widget.onlineSession!
+              .participantForColor(engine.currentPlayer.color)
+              .id;
     if (engine.currentPlayer.inventory != null &&
         engine.currentPlayer.inventory != PowerUp.shield &&
         engine.cpuLevel != 'Fácil') {
-      engine.usePowerUp();
+      if (sync == null) {
+        engine.usePowerUp();
+      } else {
+        final result = await sync.submitPowerUpFor(virtualParticipantId!);
+        await _waitForOnlineState(sync, result.stateRevision);
+      }
     }
-    if (!engine.hasRolled) engine.roll();
+    if (!engine.hasRolled) {
+      if (sync == null) {
+        engine.roll();
+      } else {
+        final result = await sync.submitRollFor(virtualParticipantId!);
+        await _waitForOnlineState(sync, result.stateRevision);
+        if (!result.accepted) {
+          return;
+        }
+      }
+    }
     await Future<void>.delayed(_nextCpuThinkDelay());
     while (mounted &&
         !engine.gameOver &&
@@ -6843,9 +8196,25 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
       if (token == null) break;
       final die = engine.chooseCpuDie(token);
       final usedAllDice = die == null && engine.canMoveUsingAllDice(token);
-      final moved = usedAllDice
-          ? engine.moveTokenUsingAllDice(token)
-          : die != null && engine.moveToken(token, die: die);
+      bool moved;
+      if (sync == null) {
+        moved = usedAllDice
+            ? engine.moveTokenUsingAllDice(token)
+            : die != null && engine.moveToken(token, die: die);
+      } else {
+        final result = usedAllDice
+            ? await sync.submitMoveAllFor(
+                virtualParticipantId!,
+                tokenId: token.id,
+              )
+            : await sync.submitMoveFor(
+                virtualParticipantId!,
+                tokenId: token.id,
+                die: die!,
+              );
+        await _waitForOnlineState(sync, result.stateRevision);
+        moved = result.accepted;
+      }
       if (!moved) break;
       await Future<void>.delayed(
         Duration(
@@ -6865,10 +8234,6 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
       while (mounted && engine.effectResolving) {
         await Future<void>.delayed(const Duration(milliseconds: 100));
       }
-    }
-    cpuThinking = false;
-    if (mounted && !engine.gameOver && _isCpuControlledTurn) {
-      Future<void>.microtask(_onGameChanged);
     }
   }
 
@@ -6998,7 +8363,19 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
       return;
     }
     setState(() => selectedToken = null);
-    engine.moveToken(token, die: die);
+    final sync = widget.onlineGameSync;
+    if (sync == null) {
+      engine.moveToken(token, die: die);
+    } else {
+      unawaited(
+        _submitOnlineMove(
+          sync,
+          tokenId: token.id,
+          die: die,
+          usesAllDice: false,
+        ),
+      );
+    }
   }
 
   void _moveSelectedTokenUsingAllDice() {
@@ -7014,7 +8391,19 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
       return;
     }
     setState(() => selectedToken = null);
-    engine.moveTokenUsingAllDice(token);
+    final sync = widget.onlineGameSync;
+    if (sync == null) {
+      engine.moveTokenUsingAllDice(token);
+    } else {
+      unawaited(
+        _submitOnlineMove(
+          sync,
+          tokenId: token.id,
+          die: engine.allDiceTotalFor(token) ?? 0,
+          usesAllDice: true,
+        ),
+      );
+    }
   }
 
   void _cancelTokenSelection() {
@@ -7360,7 +8749,7 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
   @override
   Widget build(BuildContext context) {
     final localParticipant = widget.onlineSession?.participantForColor(
-      PlayerColor.red,
+      _localPlayerColor,
     );
     final currentParticipant = widget.onlineSession?.participantForColor(
       engine.currentPlayer.color,
@@ -7374,7 +8763,7 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
           participant.color: participant.loadout.themeId,
       // The live wallet must win over the snapshot captured when online
       // matchmaking began so changing an owned item updates immediately.
-      PlayerColor.red: localThemeId,
+      _localPlayerColor: localThemeId,
     };
     final localTokenStyleId =
         widget.wallet?.equippedProductId(CosmeticCategory.tokens) ??
@@ -7386,7 +8775,7 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
             themeId: participant.loadout.themeId,
             selectedTokenStyleId: participant.loadout.tokensId,
           ),
-      PlayerColor.red: resolvedTokenStyleIdForTheme(
+      _localPlayerColor: resolvedTokenStyleIdForTheme(
         themeId: localThemeId,
         selectedTokenStyleId: localTokenStyleId,
       ),
@@ -7399,7 +8788,7 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
       if (widget.onlineSession case final onlineSession?)
         for (final participant in onlineSession.participants)
           participant.color: participant.avatarId,
-      PlayerColor.red: localAvatarId,
+      _localPlayerColor: localAvatarId,
     };
     final robotTokens = localTokenStyleId == 'tokens_robot';
     final robotTokenColors = <PlayerColor>{
@@ -7417,7 +8806,7 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
     final localDiceStyleId =
         widget.wallet?.equippedProductId(CosmeticCategory.dice) ??
         localParticipant?.loadout.diceId;
-    final diceStyleId = engine.currentPlayer.color == PlayerColor.red
+    final diceStyleId = engine.currentPlayer.color == _localPlayerColor
         ? localDiceStyleId
         : currentParticipant?.loadout.diceId;
     final gameBackground = defaultThemeVisualSpec.gameBackgroundColor;
@@ -7738,6 +9127,7 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
                       onDieSelected: _moveSelectedToken,
                       onCancelSelection: _cancelTokenSelection,
                       onRollRequested: _rollDiceFromHud,
+                      onUsePowerUp: _useHeldPowerFromHud,
                       rollEnabled:
                           interactionState.canRollDice &&
                           _tutorialAllowsRoll &&
@@ -7831,6 +9221,8 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
                                                           _cancelTokenSelection,
                                                       onRollRequested:
                                                           _rollDiceFromHud,
+                                                      onUsePowerUp:
+                                                          _useHeldPowerFromHud,
                                                       rollEnabled:
                                                           interactionState
                                                               .canRollDice &&
@@ -7925,6 +9317,8 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
                                                       _cancelTokenSelection,
                                                   onRollRequested:
                                                       _rollDiceFromHud,
+                                                  onUsePowerUp:
+                                                      _useHeldPowerFromHud,
                                                   rollEnabled:
                                                       interactionState
                                                           .canRollDice &&
@@ -8093,8 +9487,8 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
                         onWatchRewarded:
                             widget.wallet != null &&
                                 (widget.progression == null
-                                    ? engine.standingsComplete
-                                    : matchPlacementRewardSettled &&
+                                    ? true
+                                    : matchCompletionRewardSettled &&
                                           matchBasePayout > 0) &&
                                 mobileAdsSupported &&
                                 !endMatchRewardClaimed &&
@@ -8109,6 +9503,20 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
                       ),
                     ),
                   ),
+                if (_showOnlineHostRecovery)
+                  Positioned.fill(
+                    child: BlockSemantics(
+                      child: _OnlineHostRecoveryOverlay(
+                        unavailable:
+                            widget.onlineGameSync!.requiresHostRecovery,
+                        secondsRemaining: _hostReconnectSecondsRemaining,
+                        retrying: hostRecoveryRetrying,
+                        onRetry: _retryOnlineHostRecovery,
+                        onExit: () =>
+                            unawaited(_leaveToHome(discardSavedMatch: true)),
+                      ),
+                    ),
+                  ),
               ],
             ),
           ),
@@ -8116,6 +9524,132 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
       ),
     );
   }
+}
+
+class _OnlineHostRecoveryOverlay extends StatelessWidget {
+  const _OnlineHostRecoveryOverlay({
+    required this.unavailable,
+    required this.secondsRemaining,
+    required this.retrying,
+    required this.onRetry,
+    required this.onExit,
+  });
+
+  final bool unavailable;
+  final int secondsRemaining;
+  final bool retrying;
+  final VoidCallback onRetry;
+  final VoidCallback onExit;
+
+  @override
+  Widget build(BuildContext context) => Material(
+    key: const ValueKey('online-host-recovery-overlay'),
+    color: const Color(0xD9142342),
+    child: SafeArea(
+      child: Center(
+        child: Padding(
+          padding: const EdgeInsets.all(22),
+          child: ConstrainedBox(
+            constraints: const BoxConstraints(maxWidth: 430),
+            child: Container(
+              padding: const EdgeInsets.fromLTRB(22, 24, 22, 20),
+              decoration: BoxDecoration(
+                color: Colors.white,
+                borderRadius: BorderRadius.circular(28),
+                border: Border.all(color: Colors.white, width: 2),
+                boxShadow: const [
+                  BoxShadow(
+                    color: Color(0x55000000),
+                    blurRadius: 28,
+                    offset: Offset(0, 14),
+                  ),
+                ],
+              ),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Container(
+                    width: 72,
+                    height: 72,
+                    decoration: BoxDecoration(
+                      color: unavailable ? PopColors.red : PopColors.yellow,
+                      shape: BoxShape.circle,
+                    ),
+                    child: Icon(
+                      unavailable
+                          ? Icons.cloud_off_rounded
+                          : Icons.sync_rounded,
+                      color: unavailable ? Colors.white : PopColors.navy,
+                      size: 40,
+                    ),
+                  ),
+                  const SizedBox(height: 15),
+                  PopText(
+                    unavailable
+                        ? 'ANFITRIÓN SIN CONEXIÓN'
+                        : 'RECONECTANDO ANFITRIÓN',
+                    textAlign: TextAlign.center,
+                    style: const TextStyle(
+                      color: PopColors.navy,
+                      fontSize: 21,
+                      fontWeight: FontWeight.w900,
+                    ),
+                  ),
+                  const SizedBox(height: 8),
+                  PopText(
+                    unavailable
+                        ? 'La partida quedó guardada en el último movimiento seguro. Reintenta cuando vuelva el anfitrión o sal de la mesa.'
+                        : 'La partida está en pausa. Esperaremos $secondsRemaining s sin mover ninguna ficha.',
+                    textAlign: TextAlign.center,
+                    style: const TextStyle(
+                      color: Color(0xFF667085),
+                      fontSize: 14,
+                      height: 1.35,
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
+                  const SizedBox(height: 18),
+                  if (unavailable) ...[
+                    SizedBox(
+                      width: double.infinity,
+                      child: FilledButton.icon(
+                        key: const ValueKey('online-host-retry'),
+                        onPressed: retrying ? null : onRetry,
+                        icon: retrying
+                            ? const SizedBox.square(
+                                dimension: 18,
+                                child: CircularProgressIndicator(
+                                  strokeWidth: 2,
+                                  color: Colors.white,
+                                ),
+                              )
+                            : const Icon(Icons.refresh_rounded),
+                        label: PopText(
+                          retrying ? 'REINTENTANDO…' : 'REINTENTAR',
+                        ),
+                      ),
+                    ),
+                    const SizedBox(height: 8),
+                  ] else
+                    const LinearProgressIndicator(minHeight: 7),
+                  if (!unavailable) const SizedBox(height: 12),
+                  SizedBox(
+                    width: double.infinity,
+                    child: OutlinedButton.icon(
+                      key: const ValueKey('online-host-exit'),
+                      onPressed: retrying ? null : onExit,
+                      icon: const Icon(Icons.home_rounded),
+                      label: const PopText('SALIR DE LA PARTIDA'),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ),
+      ),
+    ),
+  );
 }
 
 class _TutorialCoachBanner extends StatelessWidget {
@@ -9722,6 +11256,7 @@ class _GameSideRail extends StatefulWidget {
     required this.onDieSelected,
     required this.onCancelSelection,
     required this.onRollRequested,
+    required this.onUsePowerUp,
     required this.rollEnabled,
     required this.rollGuideEnabled,
     required this.rollGuideVisible,
@@ -9747,6 +11282,7 @@ class _GameSideRail extends StatefulWidget {
   final ValueChanged<int> onDieSelected;
   final VoidCallback onCancelSelection;
   final VoidCallback onRollRequested;
+  final VoidCallback onUsePowerUp;
   final bool rollEnabled;
   final bool rollGuideEnabled;
   final bool rollGuideVisible;
@@ -9811,6 +11347,7 @@ class _GameSideRailState extends State<_GameSideRail> {
                     onDieSelected: widget.onDieSelected,
                     onCancelSelection: widget.onCancelSelection,
                     onRollRequested: widget.onRollRequested,
+                    onUsePowerUp: widget.onUsePowerUp,
                     rollEnabled: widget.rollEnabled,
                     rollGuideEnabled: widget.rollGuideEnabled,
                     rollGuideVisible: widget.rollGuideVisible,
@@ -9845,6 +11382,7 @@ class _GameSideRailState extends State<_GameSideRail> {
                     onDieSelected: widget.onDieSelected,
                     onCancelSelection: widget.onCancelSelection,
                     onRollRequested: widget.onRollRequested,
+                    onUsePowerUp: widget.onUsePowerUp,
                     rollEnabled: widget.rollEnabled,
                     rollGuideEnabled: widget.rollGuideEnabled,
                     rollGuideVisible: widget.rollGuideVisible,
@@ -16800,6 +18338,7 @@ class GameControlPanel extends StatelessWidget {
     this.onDieSelected,
     this.onCancelSelection,
     this.onRollRequested,
+    this.onUsePowerUp,
     this.rollEnabled = true,
     this.rollGuideEnabled = true,
     this.rollGuideVisible = false,
@@ -16823,6 +18362,7 @@ class GameControlPanel extends StatelessWidget {
   final ValueChanged<int>? onDieSelected;
   final VoidCallback? onCancelSelection;
   final VoidCallback? onRollRequested;
+  final VoidCallback? onUsePowerUp;
   final bool rollEnabled;
   final bool rollGuideEnabled;
   final bool rollGuideVisible;
@@ -17133,7 +18673,7 @@ class GameControlPanel extends StatelessWidget {
             ? null
             : () {
                 onCancelSelection?.call();
-                engine.usePowerUp();
+                (onUsePowerUp ?? engine.usePowerUp).call();
               },
         icon: Icon(
           !engine.isChaos
@@ -17177,7 +18717,7 @@ class GameControlPanel extends StatelessWidget {
             ? null
             : () {
                 onCancelSelection?.call();
-                engine.usePowerUp();
+                (onUsePowerUp ?? engine.usePowerUp).call();
               },
         style: OutlinedButton.styleFrom(
           foregroundColor: Colors.white,
@@ -22583,6 +24123,7 @@ class _HomeProfileDialog extends StatelessWidget {
     this.tutorial,
     required this.authGateway,
     required this.analytics,
+    required this.onlineAccountDeletion,
     this.onLocalDataDeleted,
     required this.onProfileChanged,
   });
@@ -22593,6 +24134,7 @@ class _HomeProfileDialog extends StatelessWidget {
   final TutorialController? tutorial;
   final PlayerAuthGateway authGateway;
   final GameAnalytics analytics;
+  final Future<void> Function() onlineAccountDeletion;
   final Future<void> Function()? onLocalDataDeleted;
   final ValueChanged<PlayerProfile> onProfileChanged;
 
@@ -22607,9 +24149,10 @@ class _HomeProfileDialog extends StatelessWidget {
         ),
         title: const PopText('Eliminar cuenta y datos'),
         content: const PopText(
-          'Se borrarán de este dispositivo el perfil, las credenciales '
-          'locales, las partidas guardadas, el progreso, las monedas, los '
-          'cosméticos y las preferencias. Esta acción no se puede deshacer.',
+          'Se borrarán la sesión online y, de este dispositivo, el perfil, '
+          'las credenciales locales, las partidas guardadas, el progreso, '
+          'las monedas, los cosméticos y las preferencias. Esta acción no se '
+          'puede deshacer.',
           textAlign: TextAlign.center,
         ),
         actions: [
@@ -22618,6 +24161,7 @@ class _HomeProfileDialog extends StatelessWidget {
             child: const PopText('Cancelar'),
           ),
           FilledButton(
+            key: const ValueKey('account-deletion-confirm'),
             style: FilledButton.styleFrom(backgroundColor: PopColors.red),
             onPressed: () => Navigator.pop(dialogContext, true),
             child: const PopText('Eliminar definitivamente'),
@@ -22626,6 +24170,7 @@ class _HomeProfileDialog extends StatelessWidget {
       ),
     );
     if (confirmed != true || !context.mounted) return;
+    if (!await _deleteOnlineAccountWithRetry(context)) return;
     await authGateway.deleteAccount();
     await progression?.resetLocalData();
     await wallet.resetLocalData();
@@ -22642,6 +24187,66 @@ class _HomeProfileDialog extends StatelessWidget {
       onProfileChanged(PlayerProfile.guest);
     }
     if (context.mounted) Navigator.pop(context, false);
+  }
+
+  Future<bool> _deleteOnlineAccountWithRetry(BuildContext context) async {
+    while (true) {
+      if (!context.mounted) return false;
+      final navigator = Navigator.of(context, rootNavigator: true);
+      unawaited(
+        showDialog<void>(
+          context: context,
+          barrierDismissible: false,
+          builder: (_) => const PopScope(
+            canPop: false,
+            child: AlertDialog(
+              key: ValueKey('account-deletion-progress'),
+              content: Row(
+                children: [
+                  CircularProgressIndicator(),
+                  SizedBox(width: 18),
+                  Expanded(child: PopText('Borrando cuenta de forma segura…')),
+                ],
+              ),
+            ),
+          ),
+        ),
+      );
+      try {
+        await onlineAccountDeletion();
+        if (context.mounted && navigator.canPop()) navigator.pop();
+        return true;
+      } catch (error) {
+        if (context.mounted && navigator.canPop()) navigator.pop();
+        if (!context.mounted) return false;
+        final message = error is OnlineAccountDeletionException
+            ? error.message
+            : 'No se pudo completar el borrado online. Tu cuenta local sigue '
+                  'intacta.';
+        final retry = await showDialog<bool>(
+          context: context,
+          builder: (dialogContext) => AlertDialog(
+            key: const ValueKey('account-deletion-retry'),
+            icon: const Icon(Icons.cloud_off_rounded, color: PopColors.red),
+            title: const PopText('No se completó el borrado'),
+            content: PopText(message, textAlign: TextAlign.center),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(dialogContext, false),
+                child: const PopText('Ahora no'),
+              ),
+              FilledButton.icon(
+                key: const ValueKey('account-deletion-retry-button'),
+                onPressed: () => Navigator.pop(dialogContext, true),
+                icon: const Icon(Icons.refresh_rounded),
+                label: const PopText('Intentar de nuevo'),
+              ),
+            ],
+          ),
+        );
+        if (retry != true) return false;
+      }
+    }
   }
 
   @override
@@ -23714,7 +25319,7 @@ class PoliciesScreen extends StatelessWidget {
           ListTile(
             title: const PopText('Política de privacidad'),
             subtitle: const PopText(
-              'liisgo.com/#/apps/ParchesePop/privacy',
+              'parchese-pop.web.app/privacy.html',
               style: TextStyle(fontSize: 11),
             ),
             trailing: const Icon(Icons.chevron_right),
@@ -23748,14 +25353,22 @@ class PoliciesScreen extends StatelessWidget {
             onTap: () => _openPolicy(
               context,
               'Publicidad',
-              'Android y iOS pueden mostrar banners únicamente fuera de la '
-                  'partida, la guía y la búsqueda de jugadores. Los anuncios '
-                  'recompensados son voluntarios al finalizar la mesa. Jugar '
-                  'otra vez, Volver al inicio y Reanudar nunca '
-                  'abren anuncios. '
-                  'Puedes administrar el consentimiento y las preferencias '
-                  'disponibles desde esta pantalla. La versión de macOS no '
-                  'muestra estos anuncios.',
+              'En Android y iOS puede permanecer visible una banda '
+                  'publicitaria adaptable en una franja reservada en la parte '
+                  'inferior, incluso durante la partida, la guía y la búsqueda '
+                  'de jugadores. Esta banda no cubre los controles ni '
+                  'interrumpe una jugada. Los anuncios recompensados son '
+                  'siempre voluntarios: pueden ofrecerse en la tienda por la '
+                  'bonificación indicada y al finalizar la mesa para duplicar '
+                  'una recompensa elegible. Solo se abren cuando los eliges y '
+                  'la recompensa se entrega únicamente al completar el '
+                  'anuncio. Las acciones normales del juego, como tirar los '
+                  'dados, mover una ficha, Jugar otra vez, Volver al inicio y '
+                  'Reanudar, nunca abren anuncios a pantalla completa o '
+                  'recompensados. La aplicación solicita consentimiento '
+                  'cuando corresponde y ofrece opciones para administrar la '
+                  'privacidad publicitaria. macOS no muestra banners ni '
+                  'anuncios recompensados.',
             ),
           ),
           if (ads?.supported == true && ads!.privacyOptionsRequired)
@@ -23772,11 +25385,13 @@ class PoliciesScreen extends StatelessWidget {
             onTap: () => _openPolicy(
               context,
               'Eliminar datos',
-              'El perfil y sus credenciales se guardan localmente. Desde Mi '
-                  'perfil puedes usar Eliminar cuenta y datos para borrar del '
-                  'dispositivo el perfil, la contraseña protegida, las '
-                  'partidas guardadas, el tutorial, el progreso, las monedas, '
-                  'los cosméticos y las preferencias asociadas.',
+              'Desde Mi perfil puedes usar Eliminar cuenta y datos. Primero se eliminan la identidad anónima de Firebase y los datos online removibles; '
+                  'después se borran del dispositivo el '
+                  'perfil, las credenciales locales, las partidas guardadas, '
+                  'el tutorial, el progreso, las monedas, los cosméticos y '
+                  'las preferencias. Las partidas resueltas, el chat '
+                  'inmutable y otros registros compartidos pueden conservarse '
+                  'para proteger el estado de otros jugadores.',
             ),
           ),
         ],
@@ -23792,13 +25407,16 @@ class PoliciesScreen extends StatelessWidget {
 
   Future<void> _openPrivacyPolicy(BuildContext context) async {
     final opened = await launchUrl(
-      Uri.parse('https://liisgo.com/#/apps/ParchesePop/privacy'),
+      Uri.parse('https://parchese-pop.web.app/privacy.html'),
       mode: LaunchMode.externalApplication,
     );
     if (!opened && context.mounted) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
-          content: PopText('No se pudo abrir la política. Visita liisgo.com.'),
+          content: PopText(
+            'No se pudo abrir la política. Visita '
+            'parchese-pop.web.app/privacy.html.',
+          ),
         ),
       );
     }

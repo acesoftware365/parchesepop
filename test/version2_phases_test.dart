@@ -159,10 +159,10 @@ void main() {
       reason: 'Quick Pop must not be duplicated in the secondary menu dock.',
     );
     expect(find.text('QUICK POP'), findsOneWidget);
-    expect(find.text('ONLINE · PRÓXIMAMENTE'), findsOneWidget);
+    expect(find.text('ONLINE · CPU EN 5 S'), findsOneWidget);
     expect(find.text('2 fichas · partida rápida'), findsOneWidget);
     expect(find.text('MESA RÁPIDA'), findsOneWidget);
-    expect(find.text('Partida local'), findsOneWidget);
+    expect(find.text('Amigos online o partida local'), findsOneWidget);
     expect(find.text('CONTRA CPU'), findsOneWidget);
     expect(find.text('Juega contra el CPU'), findsOneWidget);
 

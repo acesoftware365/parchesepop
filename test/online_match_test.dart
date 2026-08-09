@@ -54,6 +54,24 @@ void main() {
     level: 20,
   );
 
+  test('session exposes its local participant and arbitrary local color', () {
+    final greenLocal = participant(
+      id: 'local-green',
+      name: 'VerdeLocal',
+      color: PlayerColor.green,
+      kind: ParticipantKind.local,
+    );
+    final session = const VirtualProfileFactory(seed: 512).createSession(
+      matchId: 'match-green-local',
+      mode: GameMode.traditional,
+      localPlayer: greenLocal,
+    );
+
+    expect(session.localParticipant, same(greenLocal));
+    expect(session.localColor, PlayerColor.green);
+    expect(session.participantForColor(session.localColor), same(greenLocal));
+  });
+
   test('the same seeds and inputs keep virtual profiles deterministic', () {
     const seeds = [0, 1, 99, 8042, 104729, 0x7FFFFFFF];
 

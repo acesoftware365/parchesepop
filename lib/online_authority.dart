@@ -82,6 +82,21 @@ class OnlineMoveAllCommand extends OnlineActionCommand {
   String get fingerprint => '${fingerprintPrefix('moveAll')}|$tokenId';
 }
 
+/// Requests activation of the current player's equipped power. The client
+/// supplies no destination, distance, target, or random outcome; the trusted
+/// engine resolves the complete effect.
+class OnlineUsePowerUpCommand extends OnlineActionCommand {
+  const OnlineUsePowerUpCommand({
+    required super.matchId,
+    required super.participantId,
+    required super.actionId,
+    required super.expectedRevision,
+  });
+
+  @override
+  String get fingerprint => fingerprintPrefix('powerUp');
+}
+
 enum OnlineCommandStatus { accepted, duplicate, rejected }
 
 enum OnlineCommandRejection {
@@ -99,6 +114,7 @@ enum OnlineCommandRejection {
   invalidToken,
   fabricatedDie,
   illegalMove,
+  powerUpUnavailable,
 }
 
 @immutable
@@ -338,6 +354,7 @@ class OnlineMatchAuthority {
   factory OnlineMatchAuthority.fromCheckpoint({
     required OnlineMatchSession session,
     required Map<String, dynamic> checkpoint,
+    PlayerColor localViewerColor = PlayerColor.red,
     OnlineDisconnectPolicy disconnectPolicy = const OnlineDisconnectPolicy(),
   }) {
     if (checkpoint['authorityVersion'] != onlineAuthorityContractVersion) {
@@ -353,7 +370,10 @@ class OnlineMatchAuthority {
     final engineCheckpoint = <String, dynamic>{
       for (final entry in rawEngine.entries) entry.key.toString(): entry.value,
     };
-    final engine = GameEngine.fromCheckpoint(engineCheckpoint);
+    final engine = GameEngine.fromCheckpoint(
+      engineCheckpoint,
+      localViewerColor: localViewerColor,
+    );
     engine.gameOver = engineCheckpoint['gameOver'] as bool? ?? false;
     final winnerName = engineCheckpoint['winner'] as String?;
     if (winnerName != null) {
@@ -470,7 +490,10 @@ class OnlineMatchAuthority {
     );
   }
 
-  OnlineCommandResult submit(OnlineActionCommand command) {
+  OnlineCommandResult submit(
+    OnlineActionCommand command, {
+    bool allowCpuControlledParticipant = false,
+  }) {
     if (!_validActionId(command.actionId)) {
       return _reject(OnlineCommandRejection.invalidActionId);
     }
@@ -493,8 +516,16 @@ class OnlineMatchAuthority {
     if (participant == null) {
       return _reject(OnlineCommandRejection.unknownParticipant);
     }
-    if (_connections[participant.id]!.presence !=
-        OnlineParticipantPresence.connected) {
+    final presence = _connections[participant.id]!.presence;
+    // A trusted gateway may let the room host drive any CPU-controlled seat,
+    // including a remote human after the reconnect grace period expires. The
+    // gateway must authenticate that host privilege; ordinary participant
+    // commands never receive [allowCpuControlledParticipant].
+    final authorityMayDriveCpuSeat =
+        allowCpuControlledParticipant &&
+        presence == OnlineParticipantPresence.cpuControlled;
+    if (presence != OnlineParticipantPresence.connected &&
+        !authorityMayDriveCpuSeat) {
       return _reject(OnlineCommandRejection.participantUnavailable);
     }
     if (command.expectedRevision != _revision) {
@@ -531,6 +562,12 @@ class OnlineMatchAuthority {
       return engine.rollSerial == previousSerial
           ? OnlineCommandRejection.illegalPhase
           : null;
+    }
+
+    if (command is OnlineUsePowerUpCommand) {
+      return engine.usePowerUp()
+          ? null
+          : OnlineCommandRejection.powerUpUnavailable;
     }
 
     if (!engine.hasRolled) return OnlineCommandRejection.illegalPhase;

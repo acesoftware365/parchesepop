@@ -96,6 +96,12 @@ class OnlineMatchSession {
   bool get hasVirtualControl =>
       participants.any((participant) => participant.isVirtuallyControlled);
 
+  OnlineParticipant get localParticipant => participants.singleWhere(
+    (participant) => participant.isLocallyControlled,
+  );
+
+  PlayerColor get localColor => localParticipant.color;
+
   OnlineParticipant participantForColor(PlayerColor color) =>
       participants.firstWhere((participant) => participant.color == color);
 

@@ -1,3 +1,4 @@
+import 'dart:convert';
 import 'dart:math';
 
 import 'package:flutter_test/flutter_test.dart';
@@ -1971,6 +1972,213 @@ void main() {
       expect(game.effectKind, PowerEffectKind.triggered);
       expect(game.message, '¡BOMBA! Tú volvió a la cárcel.');
       game.dispose();
+    });
+  });
+
+  group('authoritative viewer and checkpoint support', () {
+    const names = <PlayerColor, String>{
+      PlayerColor.red: 'Roja',
+      PlayerColor.green: 'Verde',
+      PlayerColor.yellow: 'Amarilla',
+      PlayerColor.blue: 'Azul',
+    };
+
+    test('an arbitrary local color and opening-roll winner are respected', () {
+      final game = GameEngine(
+        localViewerColor: PlayerColor.green,
+        initialPlayerColor: PlayerColor.yellow,
+        playerNames: names,
+      );
+
+      expect(game.localViewerColor, PlayerColor.green);
+      expect(
+        game.players.where((player) => player.isHuman).single.color,
+        PlayerColor.green,
+      );
+      expect(<PlayerColor, String>{
+        for (final player in game.players) player.color: player.name,
+      }, names);
+      expect(game.initialPlayerColor, PlayerColor.yellow);
+      expect(game.currentPlayer.color, PlayerColor.yellow);
+      expect(game.message, 'Turno de Amarilla.');
+
+      game.dice = const <int>[2, 3];
+      game.endTurn();
+      expect(game.currentPlayer.color, PlayerColor.blue);
+      game.dispose();
+    });
+
+    test('legacy constructor defaults remain red and keep CPU name order', () {
+      final game = GameEngine(
+        humanName: 'Local',
+        cpuNames: const <String>['Uno', 'Dos', 'Tres'],
+      );
+
+      expect(game.localViewerColor, PlayerColor.red);
+      expect(game.initialPlayerColor, PlayerColor.red);
+      expect(game.currentPlayer.color, PlayerColor.red);
+      expect(game.players.map((player) => player.name), <String>[
+        'Local',
+        'Uno',
+        'Dos',
+        'Tres',
+      ]);
+      game.dispose();
+    });
+
+    test('checkpoint restore accepts a requested local viewer color', () {
+      final source = GameEngine(
+        initialPlayerColor: PlayerColor.blue,
+        playerNames: names,
+      );
+      final restored = GameEngine.fromCheckpoint(
+        Map<String, dynamic>.from(source.createCheckpoint()),
+        localViewerColor: PlayerColor.green,
+      );
+
+      expect(restored.localViewerColor, PlayerColor.green);
+      expect(
+        restored.players.where((player) => player.isHuman).single.color,
+        PlayerColor.green,
+      );
+      expect(restored.initialPlayerColor, PlayerColor.blue);
+      expect(restored.currentPlayer.color, PlayerColor.blue);
+      expect(restored.players.map((player) => player.name), names.values);
+
+      restored.dispose();
+      source.dispose();
+    });
+
+    test('a complete checkpoint applies atomically to a remote replica', () {
+      final source = GameEngine(
+        mode: GameMode.chaos,
+        matchFormat: MatchFormat.quickPop,
+        localViewerColor: PlayerColor.yellow,
+        initialPlayerColor: PlayerColor.blue,
+        playerNames: names,
+        random: _SequenceRandom(<int>[1, 2, 3, 4]),
+      );
+      source
+        ..turnNumber = 9
+        ..dice = const <int>[4, 6]
+        ..rollSerial = 5
+        ..hasRolled = true
+        ..message = 'Estado confirmado por el servidor.';
+      source.remainingDice.addAll(const <int>[4, 6]);
+      source.players[PlayerColor.blue.index]
+        ..inventory = PowerUp.boost
+        ..shielded = true
+        ..skippedTurns = 1;
+      source.players[PlayerColor.blue.index].tokens.first.progress = 12;
+      source.traps.add(
+        const BoardTrap(
+          owner: PlayerColor.yellow,
+          type: PowerUp.glueTrap,
+          loopIndex: 31,
+        ),
+      );
+
+      final checkpoint = Map<String, dynamic>.from(
+        jsonDecode(jsonEncode(source.createCheckpoint()))
+            as Map<String, dynamic>,
+      );
+      final replica = GameEngine(
+        mode: GameMode.chaos,
+        matchFormat: MatchFormat.quickPop,
+        localViewerColor: PlayerColor.green,
+        playerNames: const <PlayerColor, String>{
+          PlayerColor.red: 'Anterior 1',
+          PlayerColor.green: 'Anterior 2',
+          PlayerColor.yellow: 'Anterior 3',
+          PlayerColor.blue: 'Anterior 4',
+        },
+      );
+      var notifications = 0;
+      replica.addListener(() => notifications++);
+
+      replica.applyRemoteCheckpoint(checkpoint);
+
+      expect(notifications, 1);
+      expect(replica.localViewerColor, PlayerColor.green);
+      expect(replica.initialPlayerColor, PlayerColor.blue);
+      expect(replica.currentPlayer.color, PlayerColor.blue);
+      expect(replica.turnNumber, 9);
+      expect(replica.dice, <int>[4, 6]);
+      expect(replica.remainingDice, <int>[4, 6]);
+      expect(replica.rollSerial, 5);
+      expect(replica.hasRolled, isTrue);
+      expect(replica.message, 'Estado confirmado por el servidor.');
+      expect(replica.players.map((player) => player.name), names.values);
+      expect(replica.players[PlayerColor.blue.index].tokens.first.progress, 12);
+      expect(replica.players[PlayerColor.blue.index].inventory, PowerUp.boost);
+      expect(replica.players[PlayerColor.blue.index].shielded, isTrue);
+      expect(replica.players[PlayerColor.blue.index].skippedTurns, 1);
+      expect(replica.itemLoopIndices, source.itemLoopIndices);
+      expect(
+        replica.traps.map((trap) => (trap.owner, trap.type, trap.loopIndex)),
+        source.traps.map((trap) => (trap.owner, trap.type, trap.loopIndex)),
+      );
+      expect(
+        replica.eventHistory.map((event) => event.sequence),
+        source.eventHistory.map((event) => event.sequence),
+      );
+
+      replica.dispose();
+      source.dispose();
+    });
+
+    testWidgets('a remote replica never advances a server transition locally', (
+      tester,
+    ) async {
+      final authority = GameEngine()
+        ..turnNumber = 4
+        ..hasRolled = true
+        ..dice = const <int>[1, 2];
+      final replica = GameEngine();
+
+      replica.applyRemoteCheckpoint(
+        Map<String, dynamic>.from(authority.createCheckpoint()),
+      );
+      await tester.pump(const Duration(milliseconds: 1));
+
+      expect(replica.currentPlayer.color, PlayerColor.red);
+      expect(replica.turnNumber, 4);
+      expect(replica.hasRolled, isTrue);
+
+      replica.dispose();
+      authority.dispose();
+    });
+
+    test('an incompatible remote checkpoint leaves the replica unchanged', () {
+      final replica = GameEngine();
+      final previousMessage = replica.message;
+      final incompatible = GameEngine(
+        matchFormat: MatchFormat.quickPop,
+      ).createCheckpoint();
+
+      expect(
+        () => replica.applyRemoteCheckpoint(
+          Map<String, dynamic>.from(incompatible),
+        ),
+        throwsFormatException,
+      );
+      expect(replica.matchFormat, MatchFormat.classic);
+      expect(replica.message, previousMessage);
+
+      replica.dispose();
+    });
+
+    test('a malformed non-list remainingDice is still rejected', () {
+      final replica = GameEngine();
+      final malformed = Map<String, dynamic>.from(replica.createCheckpoint())
+        ..['remainingDice'] = 'not-a-list';
+
+      expect(
+        () => replica.applyRemoteCheckpoint(malformed),
+        throwsFormatException,
+      );
+
+      replica.dispose();
     });
   });
 }
