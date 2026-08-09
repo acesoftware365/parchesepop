@@ -83,6 +83,7 @@ const String settingsDiceHandKey = 'settings_dice_hand';
 const String diceRollGuideHandAsset = 'assets/images/dice_hand_grip_empty.png';
 const String diceRollGuideReleaseAsset =
     'assets/images/dice_hand_release_empty.png';
+const Duration diceThrowAnimationDuration = Duration(milliseconds: 1500);
 const AppFeatureRollout appFeatureRollout = AppFeatureRollout.safeDefaults;
 // Retained only in debug/test builds for the existing ad diagnostics. Release
 // builds use the single post-match "double reward" offer.
@@ -5927,7 +5928,7 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
       setState(() => diceThrowResult = rolledResult);
     }
     final activeThrow = diceThrowSerial;
-    diceThrowTimer = Timer(const Duration(milliseconds: 620), () {
+    diceThrowTimer = Timer(diceThrowAnimationDuration, () {
       if (!mounted || activeThrow != diceThrowSerial) return;
       setState(() => diceThrowInProgress = false);
       if (quickPopCommand != null &&
@@ -16715,11 +16716,16 @@ class _MobileBoardNavigatorState extends State<_MobileBoardNavigator> {
     builder: (context, box) {
       final side = math.min(box.maxWidth, box.maxHeight);
       final size = Size.square(side);
-      final viewport = mobileBoardViewportRectForTesting(
+      final frameBorderWidth = (side * .035).clamp(2.0, 4.0).toDouble();
+      final frameRadius = (side * .11).clamp(7.0, 13.0).toDouble();
+      final rawViewport = mobileBoardViewportRectForTesting(
         size: size,
         focus: widget.focus,
         fullBoard: widget.fullBoard,
-      ).deflate(3);
+      );
+      final viewport = widget.fullBoard
+          ? rawViewport
+          : rawViewport.deflate(frameBorderWidth);
 
       void moveFocus(Offset localPosition) {
         widget.onFocusChanged(
@@ -16768,7 +16774,7 @@ class _MobileBoardNavigatorState extends State<_MobileBoardNavigator> {
             onPanUpdate: (_) {},
             child: RepaintBoundary(
               child: ClipRRect(
-                borderRadius: BorderRadius.circular(13),
+                borderRadius: BorderRadius.circular(frameRadius),
                 child: DecoratedBox(
                   decoration: BoxDecoration(
                     color: const Color(0xFFF3F6FB),
@@ -16776,7 +16782,7 @@ class _MobileBoardNavigatorState extends State<_MobileBoardNavigator> {
                       color: const Color(0xFF7E8BA2),
                       width: 1.5,
                     ),
-                    borderRadius: BorderRadius.circular(13),
+                    borderRadius: BorderRadius.circular(frameRadius),
                   ),
                   child: Stack(
                     fit: StackFit.expand,
@@ -16797,10 +16803,14 @@ class _MobileBoardNavigatorState extends State<_MobileBoardNavigator> {
                             ),
                             decoration: BoxDecoration(
                               color: Colors.white.withValues(alpha: .06),
-                              borderRadius: BorderRadius.circular(9),
+                              borderRadius: BorderRadius.circular(
+                                widget.fullBoard
+                                    ? frameRadius
+                                    : math.max(7, frameRadius - 4),
+                              ),
                               border: Border.all(
                                 color: const Color(0xFFFFD34F),
-                                width: 4,
+                                width: frameBorderWidth,
                               ),
                               boxShadow: const [
                                 BoxShadow(
@@ -17012,8 +17022,7 @@ class GameControlPanel extends StatelessWidget {
     final remainingForSlots = <int>[
       ...(visibleRemainingDice ?? engine.remainingDice),
     ];
-    final remainingDiceForDisplay =
-        visibleRemainingDice ?? engine.remainingDice;
+    final showDiceTray = !engine.hasRolled;
     final dieAvailable = [
       for (final value in engine.dice)
         !engine.hasRolled || remainingForSlots.remove(value),
@@ -17060,29 +17069,37 @@ class GameControlPanel extends StatelessWidget {
           borderRadius: BorderRadius.circular(14),
           child: Container(
             key: const ValueKey('dice-group'),
-            padding: const EdgeInsets.all(9),
-            decoration: BoxDecoration(
-              gradient: LinearGradient(
-                begin: Alignment.topLeft,
-                end: Alignment.bottomRight,
-                colors: [
-                  Color.lerp(diceStyle.stageColor, Colors.white, .88)!,
-                  Color.lerp(diceStyle.stageColor, Colors.white, .62)!,
-                ],
-              ),
-              borderRadius: BorderRadius.circular(14),
-              border: Border.all(
-                color: Color.lerp(diceStyle.borderColor, Colors.white, .32)!,
-                width: 1.5,
-              ),
-              boxShadow: [
-                BoxShadow(
-                  color: diceStyle.glowColor.withValues(alpha: .18),
-                  blurRadius: 9,
-                  offset: Offset(0, 4),
-                ),
-              ],
-            ),
+            padding: showDiceTray
+                ? const EdgeInsets.all(9)
+                : const EdgeInsets.symmetric(horizontal: 3, vertical: 2),
+            decoration: showDiceTray
+                ? BoxDecoration(
+                    gradient: LinearGradient(
+                      begin: Alignment.topLeft,
+                      end: Alignment.bottomRight,
+                      colors: [
+                        Color.lerp(diceStyle.stageColor, Colors.white, .88)!,
+                        Color.lerp(diceStyle.stageColor, Colors.white, .62)!,
+                      ],
+                    ),
+                    borderRadius: BorderRadius.circular(14),
+                    border: Border.all(
+                      color: Color.lerp(
+                        diceStyle.borderColor,
+                        Colors.white,
+                        .32,
+                      )!,
+                      width: 1.5,
+                    ),
+                    boxShadow: [
+                      BoxShadow(
+                        color: diceStyle.glowColor.withValues(alpha: .18),
+                        blurRadius: 9,
+                        offset: const Offset(0, 4),
+                      ),
+                    ],
+                  )
+                : const BoxDecoration(),
             child: Column(
               mainAxisSize: MainAxisSize.min,
               children: [
@@ -17157,19 +17174,6 @@ class GameControlPanel extends StatelessWidget {
                           ),
                         ),
                       ],
-                    ),
-                  ),
-                ],
-                if (engine.hasRolled) ...[
-                  const SizedBox(height: 4),
-                  PopText(
-                    remainingDiceForDisplay.length == 1
-                        ? '1 dado disponible'
-                        : '${remainingDiceForDisplay.length} dados disponibles',
-                    style: const TextStyle(
-                      fontSize: 9,
-                      color: Color(0xFF667085),
-                      fontWeight: FontWeight.w700,
                     ),
                   ),
                 ],
@@ -18211,13 +18215,15 @@ class _DiceThrowAnimation extends StatefulWidget {
 class _DiceThrowAnimationState extends State<_DiceThrowAnimation>
     with SingleTickerProviderStateMixin {
   late final AnimationController controller;
+  late final DiceVisualSpec throwStyle;
 
   @override
   void initState() {
     super.initState();
+    throwStyle = widget.diceStyle;
     controller = AnimationController(
       vsync: this,
-      duration: const Duration(milliseconds: 620),
+      duration: diceThrowAnimationDuration,
     )..forward();
   }
 
@@ -18234,13 +18240,14 @@ class _DiceThrowAnimationState extends State<_DiceThrowAnimation>
       animation: controller,
       builder: (context, _) {
         final progress = controller.value;
-        final windUp = (progress / .18).clamp(0.0, 1.0);
-        final launchProgress = ((progress - .16) / .72).clamp(0.0, 1.0);
+        final windUp = (progress / .14).clamp(0.0, 1.0);
+        final launchProgress = ((progress - .12) / .60).clamp(0.0, 1.0);
+        final zoomProgress = ((progress - .72) / .22).clamp(0.0, 1.0);
         final handOpens = Curves.easeInOutCubic.transform(
-          ((progress - .12) / .24).clamp(0.0, 1.0),
+          ((progress - .10) / .22).clamp(0.0, 1.0),
         );
         final handExit = Curves.easeInCubic.transform(
-          ((progress - .66) / .34).clamp(0.0, 1.0),
+          ((progress - .52) / .28).clamp(0.0, 1.0),
         );
         final direction = widget.hand == DiceHandPreference.right ? 1.0 : -1.0;
         final shake = math.sin(windUp * math.pi * 3) * (1 - windUp) * 3;
@@ -18252,10 +18259,10 @@ class _DiceThrowAnimationState extends State<_DiceThrowAnimation>
             final height = constraints.hasBoundedHeight
                 ? constraints.maxHeight
                 : 72.0;
-            final dieSize = (height * (widget.expandedStage ? .34 : .38))
+            final dieSize = (height * (widget.expandedStage ? .27 : .33))
                 .clamp(
-                  widget.expandedStage ? 27.0 : 19.0,
-                  widget.expandedStage ? 40.0 : 30.0,
+                  widget.expandedStage ? 22.0 : 18.0,
+                  widget.expandedStage ? 30.0 : 27.0,
                 )
                 .toDouble();
             final firstStart = Offset(
@@ -18284,7 +18291,7 @@ class _DiceThrowAnimationState extends State<_DiceThrowAnimation>
                         center: const Alignment(0, .1),
                         radius: .76,
                         colors: [
-                          widget.diceStyle.glowColor.withValues(alpha: .22),
+                          throwStyle.glowColor.withValues(alpha: .22),
                           Colors.transparent,
                         ],
                       ),
@@ -18315,9 +18322,10 @@ class _DiceThrowAnimationState extends State<_DiceThrowAnimation>
                   key: const ValueKey('dice-throw-die-0'),
                   slotIndex: 0,
                   value: rolled.$1,
-                  style: widget.diceStyle,
+                  style: throwStyle,
                   size: dieSize,
                   progress: launchProgress,
+                  zoomProgress: zoomProgress,
                   start: firstStart,
                   end: firstEnd,
                   arcHeight: math.min(height * .26, safeArcHeight),
@@ -18326,9 +18334,10 @@ class _DiceThrowAnimationState extends State<_DiceThrowAnimation>
                   key: const ValueKey('dice-throw-die-1'),
                   slotIndex: 1,
                   value: rolled.$2,
-                  style: widget.diceStyle,
+                  style: throwStyle,
                   size: dieSize,
                   progress: launchProgress,
+                  zoomProgress: zoomProgress,
                   start: secondStart,
                   end: secondEnd,
                   arcHeight: math.min(height * .32, safeArcHeight),
@@ -18350,6 +18359,7 @@ class _ThrownDie extends StatelessWidget {
     required this.style,
     required this.size,
     required this.progress,
+    required this.zoomProgress,
     required this.start,
     required this.end,
     required this.arcHeight,
@@ -18360,6 +18370,7 @@ class _ThrownDie extends StatelessWidget {
   final DiceVisualSpec style;
   final double size;
   final double progress;
+  final double zoomProgress;
   final Offset start;
   final Offset end;
   final double arcHeight;
@@ -18380,6 +18391,8 @@ class _ThrownDie extends StatelessWidget {
         : value;
     final direction = slotIndex.isEven ? 1.0 : -1.0;
     final spin = Curves.easeOutQuart.transform(progress);
+    final resultZoom = Curves.easeOutBack.transform(zoomProgress);
+    final resultScale = 1 + resultZoom * .34;
     final transform = Matrix4.identity()
       ..setEntry(3, 2, .0025)
       ..rotateX(math.sin(spin * math.pi * 6) * .30)
@@ -18390,15 +18403,20 @@ class _ThrownDie extends StatelessWidget {
       top: center.dy - size / 2,
       width: size,
       height: size,
-      child: Transform(
-        alignment: Alignment.center,
-        transform: transform,
-        child: _DieSurface(
-          value: shown,
-          style: style,
-          slotIndex: slotIndex,
-          size: size,
-          shadowLift: arc * .08,
+      child: Transform.scale(
+        key: ValueKey('dice-throw-result-zoom-$slotIndex'),
+        scale: resultScale,
+        child: Transform(
+          alignment: Alignment.center,
+          transform: transform,
+          child: _DieSurface(
+            key: ValueKey('dice-throw-surface-$slotIndex-${style.id}'),
+            value: shown,
+            style: style,
+            slotIndex: slotIndex,
+            size: size,
+            shadowLift: arc * .08 + resultZoom * size * .28,
+          ),
         ),
       ),
     );
@@ -18920,8 +18938,8 @@ class _HeldDicePair extends StatelessWidget {
       final height = constraints.hasBoundedHeight
           ? constraints.maxHeight
           : 72.0;
-      final dieSize = (height * (expandedStage ? .36 : .40))
-          .clamp(expandedStage ? 24.0 : 18.0, expandedStage ? 36.0 : 28.0)
+      final dieSize = (height * (expandedStage ? .29 : .33))
+          .clamp(expandedStage ? 21.0 : 17.0, expandedStage ? 30.0 : 24.0)
           .toDouble();
       final mirror = hand == DiceHandPreference.right ? 1.0 : -1.0;
       final shakeWindow = phase >= .25 && phase <= .58
@@ -18947,6 +18965,7 @@ class _HeldDicePair extends StatelessWidget {
             child: Transform.rotate(
               angle: mirror * (-.18 + shake * .012),
               child: _DieSurface(
+                key: ValueKey('dice-guide-surface-0-${style.id}'),
                 value: 1,
                 style: style,
                 slotIndex: 0,
@@ -18962,6 +18981,7 @@ class _HeldDicePair extends StatelessWidget {
             child: Transform.rotate(
               angle: mirror * (.24 - shake * .012),
               child: _DieSurface(
+                key: ValueKey('dice-guide-surface-1-${style.id}'),
                 value: 5,
                 style: style,
                 slotIndex: 1,
@@ -19680,6 +19700,7 @@ Color _playerUiColor(PlayerColor color) => switch (color) {
 
 class _DieSurface extends StatelessWidget {
   const _DieSurface({
+    super.key,
     required this.value,
     required this.style,
     required this.slotIndex,
@@ -19865,6 +19886,9 @@ class _DieFaceState extends State<_DieFace>
               alignment: Alignment.center,
               transform: transform,
               child: _DieSurface(
+                key: ValueKey(
+                  'dice-result-surface-${widget.slotIndex}-${widget.style.id}',
+                ),
                 value: shown,
                 style: widget.style,
                 slotIndex: widget.slotIndex,

@@ -1024,7 +1024,9 @@ void main() {
     await tester.tap(find.byKey(const ValueKey('dice-roll-target')));
     await tester.pump();
     expect(engine.rollSerial, initialRollSerial + 1);
-    await tester.pump(const Duration(milliseconds: 850));
+    await tester.pump(
+      diceThrowAnimationDuration + const Duration(milliseconds: 1),
+    );
     expect(tester.takeException(), isNull);
     engine.dispose();
   });

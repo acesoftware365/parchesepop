@@ -154,7 +154,14 @@ void main() {
             .evaluate()
             .isNotEmpty,
       );
-      expect(find.text('1 dado disponible'), findsOneWidget);
+      expect(find.text('1 dado disponible'), findsNothing);
+      final resultDecoration =
+          tester
+                  .widget<Container>(find.byKey(const ValueKey('dice-group')))
+                  .decoration!
+              as BoxDecoration;
+      expect(resultDecoration.gradient, isNull);
+      expect(resultDecoration.border, isNull);
 
       for (final expected in const <(TutorialStep, int)>[
         (TutorialStep.releaseToken, 5),

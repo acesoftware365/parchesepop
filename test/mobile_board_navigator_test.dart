@@ -57,11 +57,16 @@ void _expectWindowAt(
   required bool fullBoard,
 }) {
   final navigator = tester.getRect(find.byKey(_navigatorKey));
-  final expected = mobileBoardViewportRectForTesting(
+  final rawExpected = mobileBoardViewportRectForTesting(
     size: navigator.size,
     focus: focus,
     fullBoard: fullBoard,
-  ).deflate(3).shift(navigator.topLeft);
+  );
+  final frameBorderWidth = (navigator.width * .035).clamp(2.0, 4.0).toDouble();
+  final expected =
+      (fullBoard ? rawExpected : rawExpected.deflate(frameBorderWidth)).shift(
+        navigator.topLeft,
+      );
   final actual = tester.getRect(find.byKey(_windowKey));
 
   expect(actual.left, closeTo(expected.left, 1));
@@ -623,7 +628,7 @@ void main() {
       settingsDiceHandKey: DiceHandPreference.right.name,
     });
     _useViewport(tester, const Size(402, 707));
-    final engine = GameEngine();
+    final engine = GameEngine(random: _SequenceRandom([1, 4]));
 
     await tester.pumpWidget(
       MaterialApp(
@@ -731,7 +736,19 @@ void main() {
     );
     await tester.pump();
     expect(engine.rollSerial, initialRollSerial + 1);
-    await tester.pump(const Duration(milliseconds: 621));
+    await tester.pump(const Duration(milliseconds: 1200));
+    expect(find.byKey(const ValueKey('dice-throw-overlay')), findsOneWidget);
+    final zoom = tester.widget<Transform>(
+      find.byKey(const ValueKey('dice-throw-result-zoom-0')),
+    );
+    expect(zoom.transform.storage[0], greaterThan(1.05));
+    expect(
+      find.byKey(const ValueKey('dice-throw-surface-0-dice_default')),
+      findsOneWidget,
+    );
+    await tester.pump(
+      diceThrowAnimationDuration - const Duration(milliseconds: 1199),
+    );
     expect(find.byKey(const ValueKey('dice-throw-overlay')), findsNothing);
     expect(tester.takeException(), isNull);
     await tester.pumpWidget(const SizedBox.shrink());
@@ -760,6 +777,75 @@ void main() {
       find.byKey(const ValueKey('dice-hand-art-left')),
     );
     expect(mirroredHand.transform.storage[0], lessThan(0));
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('equipped dice stay identical through guide throw and result', (
+    tester,
+  ) async {
+    SharedPreferences.setMockInitialValues({
+      settingsRollGuideKey: true,
+      'parchesepop.wallet.owned.v1': ['dice_galaxy'],
+      'parchesepop.wallet.equipped.v1.dice': 'dice_galaxy',
+    });
+    _useViewport(tester, const Size(402, 707));
+    final wallet = await WalletController.create();
+    final engine = GameEngine(random: _SequenceRandom([1, 4]));
+    addTearDown(wallet.dispose);
+    addTearDown(engine.dispose);
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: GameScreen(
+          opponent: 'CPU • Fácil',
+          gameEngine: engine,
+          wallet: wallet,
+        ),
+      ),
+    );
+    await tester.pump(const Duration(seconds: 1));
+
+    expect(
+      find.byKey(const ValueKey('dice-guide-surface-0-dice_galaxy')),
+      findsOneWidget,
+    );
+    expect(
+      find.byKey(const ValueKey('dice-guide-surface-1-dice_galaxy')),
+      findsOneWidget,
+    );
+
+    await tester.tap(find.byKey(const ValueKey('dice-roll-target')));
+    await tester.pump();
+
+    expect(
+      find.byKey(const ValueKey('dice-throw-surface-0-dice_galaxy')),
+      findsOneWidget,
+    );
+    expect(
+      find.byKey(const ValueKey('dice-throw-surface-1-dice_galaxy')),
+      findsOneWidget,
+    );
+    await tester.pump(
+      diceThrowAnimationDuration + const Duration(milliseconds: 1),
+    );
+    expect(
+      find.byKey(const ValueKey('dice-result-surface-0-dice_galaxy')),
+      findsOneWidget,
+    );
+    expect(
+      find.byKey(const ValueKey('dice-result-surface-1-dice_galaxy')),
+      findsOneWidget,
+    );
+    final resultDecoration =
+        tester
+                .widget<Container>(find.byKey(const ValueKey('dice-group')))
+                .decoration!
+            as BoxDecoration;
+    expect(resultDecoration.color, isNull);
+    expect(resultDecoration.gradient, isNull);
+    expect(resultDecoration.border, isNull);
+    expect(resultDecoration.boxShadow, isNull);
+    expect(find.textContaining('dados disponibles'), findsNothing);
     expect(tester.takeException(), isNull);
   });
 
