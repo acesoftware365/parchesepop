@@ -37,6 +37,11 @@ Rama: **version-2**
 - La progresión normal permite alcanzar cosméticos sin depender de anuncios.
 - El anuncio posterior a la partida es voluntario y duplica únicamente el
   premio base de partida y posición.
+- El CTA de bonus por anuncio recompensado es permanente en los resultados de
+  Tradicional, Caos, Quick Table y Quick Pop en Android/iOS, contra CPU, local
+  y online. Un modo o rediseño nuevo debe conservarlo; si el anuncio está
+  cargando o no disponible cambia su estado, no se oculta, y después del cobro
+  se transforma en confirmación sin permitir pagos duplicados.
 - No hay anuncios obligatorios al reanudar, volver al inicio o pedir revancha.
 - Los cosméticos no cambian movimientos ni probabilidades.
 

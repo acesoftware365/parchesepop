@@ -94,6 +94,20 @@ El nombre de jugador permite entre 3 y 12 caracteres. El prototipo incluye valid
   premio.
 - La mesa final también puede ofrecer voluntariamente `+100` monedas. Reanudar,
   Jugar otra vez y Volver al inicio nunca abren un anuncio.
+- **Regla permanente del producto - bonus recompensado:** en Android e iOS, el
+  bloque y el botón voluntario para obtener un bonus mediante un anuncio
+  recompensado deben permanecer disponibles en la pantalla de resultados de
+  todos los modos: Tradicional, Caos, Quick Table y Quick Pop, contra CPU,
+  local y online cuando ese modo esté habilitado. Nunca se eliminan por un
+  rediseño, por compactar el HUD ni por incorporar un modo nuevo. Si el anuncio
+  todavía está cargando o temporalmente no está disponible, el mismo espacio
+  se conserva con un estado de preparación o reintento en vez de ocultar el
+  CTA. El anuncio solo se abre mediante una acción explícita y el bonus se
+  acredita únicamente después de confirmar su finalización. La recompensa base
+  de la partida se entrega de forma independiente. Tras reclamar el bonus, el
+  bloque permanece como confirmación de recompensa recibida y nunca permite un
+  pago duplicado. Esta regla aplica a las plataformas móviles compatibles con
+  anuncios recompensados; macOS y Windows conservan su exclusión documentada.
 - Al iniciar la aplicación móvil se actualiza el estado de consentimiento.
   Los anuncios se solicitan solamente cuando se permite hacerlo y Ajustes
   ofrece `Opciones de privacidad de anuncios` cuando el proveedor lo exige.

@@ -14,7 +14,9 @@ macOS y Windows.
 - Clasificación final de cuatro posiciones y puntuación por lugar.
 - Tutorial contextual de seis pasos sobre el tablero, sin reducirlo.
 - Monedas por terminar partidas, posición, primera partida diaria y misiones.
-- Anuncio opcional después de la partida para duplicar el premio base.
+- Botón voluntario y permanente después de la partida para obtener el bonus
+  recompensado en todos los modos móviles; nunca bloquea las demás acciones y,
+  tras reclamarlo, muestra el estado recibido sin permitir pagos duplicados.
 - Tienda de temas, fichas, dados y avatares, con vista previa.
 - Interfaz en español, inglés o idioma del sistema.
 - Analítica anónima opcional —apagada por defecto y activable en Ajustes— de
