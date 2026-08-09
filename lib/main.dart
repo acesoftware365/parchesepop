@@ -35,7 +35,6 @@ import 'wallet.dart';
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
   await enableFlexibleOrientation();
-  await gameAudio.initialize();
   final analytics = await initializeGameAnalytics();
   final adsController = createAppAdsController();
   final availability = await AppAvailabilityService.load();
@@ -774,11 +773,13 @@ class ParchesePopApp extends StatefulWidget {
     super.key,
     this.analytics = const NoopGameAnalytics(),
     this.adsController,
+    this.audioController,
     this.availability = AppAvailability.available,
   });
 
   final GameAnalytics analytics;
   final AppAdsController? adsController;
+  final GameAudioController? audioController;
   final AppAvailability availability;
 
   @override
@@ -804,6 +805,9 @@ class _ParchesePopAppState extends State<ParchesePopApp>
   bool loading = true;
   bool restoringSavedMatch = false;
 
+  GameAudioController get audioController =>
+      widget.audioController ?? gameAudio;
+
   @override
   void initState() {
     super.initState();
@@ -811,10 +815,21 @@ class _ParchesePopAppState extends State<ParchesePopApp>
     adsController = widget.adsController ?? NoopAppAdsController();
     unawaited(adsController.initialize());
     _loadProfile();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) unawaited(_initializeAudio());
+    });
+  }
+
+  Future<void> _initializeAudio() async {
+    await audioController.initialize();
+    final lifecycleState = WidgetsBinding.instance.lifecycleState;
+    if (!mounted || lifecycleState == null) return;
+    await audioController.handleAppLifecycleState(lifecycleState);
   }
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
+    unawaited(audioController.handleAppLifecycleState(state));
     if (state == AppLifecycleState.resumed) {
       adsController.preloadRewarded();
     }
@@ -5745,7 +5760,6 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
       _cancelRollGuide(resetWindow: true, notify: false);
       mobileBoardCameraMode = _MobileBoardCameraMode.fullBoard;
       unawaited(_saveMatchCheckpoint());
-      unawaited(gameAudio.pauseForBackground());
       if (_sessionHasRemoteHuman(widget.onlineSession) && !engine.gameOver) {
         localCpuTakeoverActive = true;
         _onGameChanged();
@@ -5755,7 +5769,6 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
     if (state == AppLifecycleState.resumed) {
       rollGuideAppActive = true;
       localCpuTakeoverActive = false;
-      unawaited(gameAudio.resumeAfterForeground());
       unawaited(_saveMatchCheckpoint());
       unawaited(_loadRollGuidePreferences(rearm: true));
       MobileAdsScope.maybeOf(context)?.preloadRewarded();
@@ -22438,6 +22451,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
   bool anonymousAnalytics = false;
   DiceHandPreference diceHand = DiceHandPreference.right;
   final AppLanguageController localLanguage = AppLanguageController();
+  Future<void> musicPreferenceWrites = Future<void>.value();
 
   @override
   void initState() {
@@ -22474,6 +22488,14 @@ class _SettingsScreenState extends State<SettingsScreen> {
   Future<void> _setPreference(String key, bool value) async {
     final store = await SharedPreferences.getInstance();
     await store.setBool(key, value);
+  }
+
+  void _updateMusicPreference(bool value) {
+    setState(() => music = value);
+    unawaited(gameAudio.setMusicEnabled(value));
+    musicPreferenceWrites = musicPreferenceWrites
+        .then((_) => _setPreference('settings_music', value))
+        .catchError((Object _) {});
   }
 
   Future<void> _setStringPreference(String key, String value) async {
@@ -22689,11 +22711,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                           SwitchListTile(
                             key: const ValueKey('settings-music'),
                             value: music,
-                            onChanged: (value) {
-                              setState(() => music = value);
-                              _setPreference('settings_music', value);
-                              unawaited(gameAudio.setMusicEnabled(value));
-                            },
+                            onChanged: _updateMusicPreference,
                             title: const PopText('Música'),
                             subtitle: const PopText('Menú y música de partida'),
                             secondary: const Icon(Icons.music_note_rounded),
