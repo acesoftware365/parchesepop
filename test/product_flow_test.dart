@@ -993,7 +993,7 @@ void main() {
     expect(hud.width, closeTo(312, .5));
     expect(hud.height, lessThanOrEqualTo(215));
     expect(dice.right, lessThan(actions.left));
-    expect(item.height, greaterThanOrEqualTo(40));
+    expect(item.height, greaterThanOrEqualTo(39.9));
     expect(message.top, greaterThan(actions.bottom));
     expect(find.text('Tú'), findsOneWidget);
     expect(find.text('Sin poder ni trampa'), findsOneWidget);

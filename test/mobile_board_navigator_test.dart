@@ -80,6 +80,25 @@ void _expectFullBoard(WidgetTester tester) {
   _expectWindowAt(tester, focus: const Offset(.5, .5), fullBoard: true);
 }
 
+void _expectTransparentDiceStage(WidgetTester tester) {
+  final decoration = tester
+      .widget<Container>(find.byKey(const ValueKey('dice-group')))
+      .decoration;
+  if (decoration == null) return;
+  expect(decoration, isA<BoxDecoration>());
+  final box = decoration as BoxDecoration;
+  expect(box.color, isNull);
+  expect(box.gradient, isNull);
+  expect(box.border, isNull);
+  expect(box.boxShadow, isNull);
+}
+
+void _expectMinimumTouchTarget(WidgetTester tester, Finder finder) {
+  final size = tester.getSize(finder);
+  expect(size.width, greaterThanOrEqualTo(44));
+  expect(size.height, greaterThanOrEqualTo(44));
+}
+
 Offset _boardCellGlobalPosition(WidgetTester tester, Offset logicalCell) {
   final plane = tester.renderObject<RenderBox>(
     find.byKey(const ValueKey('game-board-hit-plane')),
@@ -813,6 +832,21 @@ void main() {
       find.byKey(const ValueKey('dice-guide-surface-1-dice_galaxy')),
       findsOneWidget,
     );
+    _expectTransparentDiceStage(tester);
+    expect(
+      find.byKey(const ValueKey('dice-roll-target')).hitTestable(),
+      findsOne,
+    );
+    _expectMinimumTouchTarget(
+      tester,
+      find.byKey(const ValueKey('dice-roll-target')),
+    );
+    _expectMinimumTouchTarget(tester, find.byKey(const ValueKey('die-slot-0')));
+    _expectMinimumTouchTarget(tester, find.byKey(const ValueKey('die-slot-1')));
+    final idleDiceSize = tester.getSize(
+      find.byKey(const ValueKey('dice-result-surface-0-dice_galaxy')),
+    );
+    expect(idleDiceSize.width, closeTo(40, .1));
 
     await tester.tap(find.byKey(const ValueKey('dice-roll-target')));
     await tester.pump();
@@ -825,6 +859,7 @@ void main() {
       find.byKey(const ValueKey('dice-throw-surface-1-dice_galaxy')),
       findsOneWidget,
     );
+    _expectTransparentDiceStage(tester);
     await tester.pump(
       diceThrowAnimationDuration + const Duration(milliseconds: 1),
     );
@@ -836,18 +871,98 @@ void main() {
       find.byKey(const ValueKey('dice-result-surface-1-dice_galaxy')),
       findsOneWidget,
     );
-    final resultDecoration =
-        tester
-                .widget<Container>(find.byKey(const ValueKey('dice-group')))
-                .decoration!
-            as BoxDecoration;
-    expect(resultDecoration.color, isNull);
-    expect(resultDecoration.gradient, isNull);
-    expect(resultDecoration.border, isNull);
-    expect(resultDecoration.boxShadow, isNull);
+    _expectTransparentDiceStage(tester);
+    _expectMinimumTouchTarget(tester, find.byKey(const ValueKey('die-slot-0')));
+    _expectMinimumTouchTarget(tester, find.byKey(const ValueKey('die-slot-1')));
+    final resultDiceSize = tester.getSize(
+      find.byKey(const ValueKey('dice-result-surface-0-dice_galaxy')),
+    );
+    expect(resultDiceSize.width, closeTo(48, .1));
+    expect(resultDiceSize.width, greaterThan(idleDiceSize.width));
     expect(find.textContaining('dados disponibles'), findsNothing);
     expect(tester.takeException(), isNull);
   });
+
+  for (final (width, expectedResultSize) in const [
+    (320.0, 44.0),
+    (402.0, 48.0),
+  ]) {
+    testWidgets('CPU dice use no white tray and grow at ${width.toInt()} px', (
+      tester,
+    ) async {
+      _useViewport(tester, Size(width, 707));
+      final engine = GameEngine(random: _SequenceRandom([4, 2]))
+        ..currentPlayerIndex = 3;
+      addTearDown(engine.dispose);
+
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: SizedBox(
+              width: width,
+              height: 220,
+              child: AnimatedBuilder(
+                animation: engine,
+                builder: (context, _) => GameControlPanel(
+                  engine: engine,
+                  rollGuideEnabled: false,
+                  mobileBoardNavigator: const ColoredBox(
+                    color: Color(0xFF20304F),
+                  ),
+                ),
+              ),
+            ),
+          ),
+        ),
+      );
+      await tester.pump();
+
+      expect(find.text('CPU 3'), findsOneWidget);
+      _expectTransparentDiceStage(tester);
+      _expectMinimumTouchTarget(
+        tester,
+        find.byKey(const ValueKey('die-slot-0')),
+      );
+      _expectMinimumTouchTarget(
+        tester,
+        find.byKey(const ValueKey('die-slot-1')),
+      );
+      final idleSize = tester.getSize(
+        find.byKey(const ValueKey('dice-result-surface-0-dice_default')),
+      );
+      expect(idleSize.width, closeTo(40, .1));
+
+      engine.roll();
+      await tester.pump();
+      final firstFaceState = tester.state(
+        find.byKey(const ValueKey('die-face-0')),
+      );
+      final secondFaceState = tester.state(
+        find.byKey(const ValueKey('die-face-1')),
+      );
+      expect((firstFaceState as dynamic).controller.isAnimating, isTrue);
+      expect((secondFaceState as dynamic).controller.isAnimating, isTrue);
+      _expectTransparentDiceStage(tester);
+
+      await tester.pump(const Duration(milliseconds: 621));
+
+      expect((firstFaceState as dynamic).controller.isAnimating, isFalse);
+      expect((secondFaceState as dynamic).controller.isAnimating, isFalse);
+      _expectTransparentDiceStage(tester);
+      final resultSize = tester.getSize(
+        find.byKey(const ValueKey('dice-result-surface-0-dice_default')),
+      );
+      expect(resultSize.width, closeTo(expectedResultSize, .1));
+      expect(resultSize.width, greaterThan(idleSize.width));
+      final hud = tester.getRect(
+        find.byKey(const ValueKey('portrait-game-hud')),
+      );
+      expect(hud.left, greaterThanOrEqualTo(0));
+      expect(hud.right, lessThanOrEqualTo(width));
+      expect(hud.bottom, lessThanOrEqualTo(220));
+      expect(tester.takeException(), isNull);
+    });
+  }
 
   testWidgets('landscape side rail runs the same one-shot dice throw', (
     tester,

@@ -17022,7 +17022,7 @@ class GameControlPanel extends StatelessWidget {
     final remainingForSlots = <int>[
       ...(visibleRemainingDice ?? engine.remainingDice),
     ];
-    final showDiceTray = !engine.hasRolled;
+    final emphasizeDiceResult = engine.hasRolled;
     final dieAvailable = [
       for (final value in engine.dice)
         !engine.hasRolled || remainingForSlots.remove(value),
@@ -17063,43 +17063,14 @@ class GameControlPanel extends StatelessWidget {
       child: Material(
         color: Colors.transparent,
         borderRadius: BorderRadius.circular(14),
-        clipBehavior: Clip.antiAlias,
+        clipBehavior: Clip.none,
         child: InkWell(
           onTap: canRollDice ? rollDice : null,
           borderRadius: BorderRadius.circular(14),
           child: Container(
             key: const ValueKey('dice-group'),
-            padding: showDiceTray
-                ? const EdgeInsets.all(9)
-                : const EdgeInsets.symmetric(horizontal: 3, vertical: 2),
-            decoration: showDiceTray
-                ? BoxDecoration(
-                    gradient: LinearGradient(
-                      begin: Alignment.topLeft,
-                      end: Alignment.bottomRight,
-                      colors: [
-                        Color.lerp(diceStyle.stageColor, Colors.white, .88)!,
-                        Color.lerp(diceStyle.stageColor, Colors.white, .62)!,
-                      ],
-                    ),
-                    borderRadius: BorderRadius.circular(14),
-                    border: Border.all(
-                      color: Color.lerp(
-                        diceStyle.borderColor,
-                        Colors.white,
-                        .32,
-                      )!,
-                      width: 1.5,
-                    ),
-                    boxShadow: [
-                      BoxShadow(
-                        color: diceStyle.glowColor.withValues(alpha: .18),
-                        blurRadius: 9,
-                        offset: const Offset(0, 4),
-                      ),
-                    ],
-                  )
-                : const BoxDecoration(),
+            padding: const EdgeInsets.symmetric(horizontal: 3, vertical: 2),
+            decoration: const BoxDecoration(),
             child: Column(
               mainAxisSize: MainAxisSize.min,
               children: [
@@ -17112,19 +17083,21 @@ class GameControlPanel extends StatelessWidget {
                       value: engine.dice[0],
                       style: diceStyle,
                       animationId: engine.rollSerial,
+                      emphasizeResult: emphasizeDiceResult,
                       available: dieAvailable[0],
                       selectable:
                           !boardCalloutsOwnMoveChoice &&
                           moveChoices.contains(engine.dice[0]),
                       onTap: onDieSelected,
                     ),
-                    const SizedBox(width: 5),
+                    const SizedBox(width: 9),
                     _DieSlot(
                       key: const ValueKey('die-slot-1'),
                       slotIndex: 1,
                       value: engine.dice[1],
                       style: diceStyle,
                       animationId: engine.rollSerial,
+                      emphasizeResult: emphasizeDiceResult,
                       available: dieAvailable[1],
                       selectable:
                           !boardCalloutsOwnMoveChoice &&
@@ -18392,7 +18365,13 @@ class _ThrownDie extends StatelessWidget {
     final direction = slotIndex.isEven ? 1.0 : -1.0;
     final spin = Curves.easeOutQuart.transform(progress);
     final resultZoom = Curves.easeOutBack.transform(zoomProgress);
-    final resultScale = 1 + resultZoom * .34;
+    final targetResultSize = MediaQuery.sizeOf(context).width <= 360
+        ? 44.0
+        : 48.0;
+    final resultScaleGain = (targetResultSize / size - 1)
+        .clamp(.25, .85)
+        .toDouble();
+    final resultScale = 1 + resultZoom * resultScaleGain;
     final transform = Matrix4.identity()
       ..setEntry(3, 2, .0025)
       ..rotateX(math.sin(spin * math.pi * 6) * .30)
@@ -19152,6 +19131,7 @@ class _DieSlot extends StatelessWidget {
     required this.value,
     required this.style,
     required this.animationId,
+    required this.emphasizeResult,
     required this.available,
     required this.selectable,
     this.onTap,
@@ -19161,6 +19141,7 @@ class _DieSlot extends StatelessWidget {
   final int value;
   final DiceVisualSpec style;
   final int animationId;
+  final bool emphasizeResult;
   final bool available;
   final bool selectable;
   final ValueChanged<int>? onTap;
@@ -19191,12 +19172,18 @@ class _DieSlot extends StatelessWidget {
               width: 2,
             ),
           ),
-          child: _DieFace(
-            key: ValueKey('die-face-$slotIndex'),
-            value: value,
-            style: style,
-            slotIndex: slotIndex,
-            animationId: animationId,
+          child: SizedBox.square(
+            dimension: 48,
+            child: Center(
+              child: _DieFace(
+                key: ValueKey('die-face-$slotIndex'),
+                value: value,
+                style: style,
+                slotIndex: slotIndex,
+                animationId: animationId,
+                emphasizeResult: emphasizeResult,
+              ),
+            ),
           ),
         ),
       ),
@@ -19788,11 +19775,13 @@ class _DieFace extends StatefulWidget {
     required this.style,
     required this.slotIndex,
     required this.animationId,
+    required this.emphasizeResult,
   });
   final int value;
   final DiceVisualSpec style;
   final int slotIndex;
   final int animationId;
+  final bool emphasizeResult;
 
   @override
   State<_DieFace> createState() => _DieFaceState();
@@ -19865,6 +19854,13 @@ class _DieFaceState extends State<_DieFace>
         final settleHop = progress >= .70
             ? math.sin(settleProgress * math.pi) * (1 - settleProgress) * 4.5
             : 0.0;
+        final targetResultSize = MediaQuery.sizeOf(context).width <= 360
+            ? 44.0
+            : 48.0;
+        final resultReveal = widget.emphasizeResult
+            ? Curves.easeOutBack.transform(settleProgress)
+            : 0.0;
+        final faceSize = 40 + (targetResultSize - 40) * resultReveal;
         final hop = firstHop + settleHop;
         final direction = widget.slotIndex.isEven ? 1.0 : -1.0;
         final sideways =
@@ -19892,8 +19888,8 @@ class _DieFaceState extends State<_DieFace>
                 value: shown,
                 style: widget.style,
                 slotIndex: widget.slotIndex,
-                size: 40,
-                shadowLift: hop,
+                size: faceSize,
+                shadowLift: hop + resultReveal * 2,
               ),
             ),
           ),
