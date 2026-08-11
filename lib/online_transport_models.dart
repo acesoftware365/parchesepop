@@ -4,6 +4,8 @@ import 'online_lobby.dart';
 
 const String onlineTransportRoot = 'onlineV2';
 const Duration quickPopSearchWindow = Duration(seconds: 5);
+const Duration quickPopSettlementPeerWait = Duration(milliseconds: 1200);
+const Duration quickPopSettlementOperationTimeout = Duration(seconds: 2);
 
 Map<String, Object?> onlineMap(Object? value) {
   if (value is! Map) return <String, Object?>{};
@@ -349,6 +351,7 @@ final class OnlineRoomJoinRequestRecord {
     required this.roomCode,
     required this.uid,
     required this.displayName,
+    required this.attemptId,
     required this.requestedAtMs,
   });
 
@@ -356,6 +359,7 @@ final class OnlineRoomJoinRequestRecord {
   final RoomCode roomCode;
   final String uid;
   final String displayName;
+  final String attemptId;
   final int requestedAtMs;
 
   Map<String, Object?> toJson() => <String, Object?>{
@@ -363,17 +367,28 @@ final class OnlineRoomJoinRequestRecord {
     'roomCode': roomCode.value,
     'uid': uid,
     'displayName': displayName,
+    'attemptId': attemptId,
     'requestedAt': requestedAtMs,
   };
 
   factory OnlineRoomJoinRequestRecord.fromJson(Object? raw, {String? uid}) {
     final map = onlineMap(raw);
+    final resolvedUid = uid ?? _requiredString(map, 'uid');
+    final roomId = _requiredString(map, 'roomId');
+    final requestedAtMs = _requiredInt(map, 'requestedAt');
+    final attemptId = map['attemptId'];
     return OnlineRoomJoinRequestRecord(
-      roomId: _requiredString(map, 'roomId'),
+      roomId: roomId,
       roomCode: RoomCode.parse(_requiredString(map, 'roomCode')),
-      uid: uid ?? _requiredString(map, 'uid'),
+      uid: resolvedUid,
       displayName: _requiredString(map, 'displayName'),
-      requestedAtMs: _requiredInt(map, 'requestedAt'),
+      // Decode legacy records so their owners can still remove them after an
+      // upgrade. They have no matching room fence and therefore cannot be
+      // admitted by the current transport protocol.
+      attemptId: attemptId is String && attemptId.trim().isNotEmpty
+          ? attemptId.trim()
+          : 'legacy_${roomId}_${resolvedUid}_$requestedAtMs',
+      requestedAtMs: requestedAtMs,
     );
   }
 }
@@ -381,6 +396,9 @@ final class OnlineRoomJoinRequestRecord {
 enum QuickPopTicketState { waiting, matched, cpuFallback, cancelled }
 
 enum QuickPopResolutionKind { human, cpu }
+
+/// Final authoritative decision after the provisional Quick Pop room commit.
+enum QuickPopLaunchSettlement { human, fallback, unavailable }
 
 final class QuickPopQueueTicket {
   const QuickPopQueueTicket({
@@ -407,6 +425,14 @@ final class QuickPopQueueTicket {
   final String? roomId;
   final String? opponentUid;
 
+  /// Server-query visibility for matchmaking enumeration.
+  ///
+  /// Only a ticket that is still waiting participates in the active queue.
+  /// Resolved and cancelled records remain available through their narrow,
+  /// exact-record permissions without appearing in another player's search.
+  int get activeUntilMs =>
+      state == QuickPopTicketState.waiting ? deadlineAtMs : 0;
+
   bool get resolved =>
       state == QuickPopTicketState.matched ||
       state == QuickPopTicketState.cpuFallback;
@@ -418,6 +444,7 @@ final class QuickPopQueueTicket {
     'queueKey': queueKey,
     'joinedAt': joinedAtMs,
     'deadlineAt': deadlineAtMs,
+    'activeUntil': activeUntilMs,
     'state': state.name,
     if (claimId != null) 'claimId': claimId,
     if (roomId != null) 'roomId': roomId,
@@ -426,18 +453,30 @@ final class QuickPopQueueTicket {
 
   factory QuickPopQueueTicket.fromJson(Object? raw, {String? uid}) {
     final map = onlineMap(raw);
+    final deadlineAtMs = _requiredInt(map, 'deadlineAt');
+    final state = _enumValue(
+      QuickPopTicketState.values,
+      map['state'],
+      QuickPopTicketState.waiting,
+    );
+    final storedActiveUntil = _optionalInt(map, 'activeUntil');
+    if (map.containsKey('activeUntil') && storedActiveUntil == null) {
+      throw const FormatException('Missing or invalid activeUntil.');
+    }
+    final expectedActiveUntil = state == QuickPopTicketState.waiting
+        ? deadlineAtMs
+        : 0;
+    if (storedActiveUntil != null && storedActiveUntil != expectedActiveUntil) {
+      throw const FormatException('Invalid Quick Pop activeUntil.');
+    }
     return QuickPopQueueTicket(
       ticketId: _requiredString(map, 'ticketId'),
       uid: uid ?? _requiredString(map, 'uid'),
       displayName: _requiredString(map, 'displayName'),
       queueKey: _requiredString(map, 'queueKey'),
       joinedAtMs: _requiredInt(map, 'joinedAt'),
-      deadlineAtMs: _requiredInt(map, 'deadlineAt'),
-      state: _enumValue(
-        QuickPopTicketState.values,
-        map['state'],
-        QuickPopTicketState.waiting,
-      ),
+      deadlineAtMs: deadlineAtMs,
+      state: state,
       claimId: _optionalString(map, 'claimId'),
       roomId: _optionalString(map, 'roomId'),
       opponentUid: _optionalString(map, 'opponentUid'),
@@ -452,6 +491,8 @@ final class QuickPopResolution {
     required this.kind,
     required this.resolvedAtMs,
     this.opponentUid,
+    this.queueKey,
+    this.claimId,
   });
 
   final String ticketId;
@@ -459,6 +500,8 @@ final class QuickPopResolution {
   final QuickPopResolutionKind kind;
   final int resolvedAtMs;
   final String? opponentUid;
+  final String? queueKey;
+  final String? claimId;
 }
 
 final class QuickPopClaimAcceptance {

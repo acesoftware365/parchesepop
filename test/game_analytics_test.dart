@@ -239,6 +239,107 @@ void main() {
     );
   });
 
+  test('Quick Pop funnel records real wait without identity fields', () async {
+    const event = OnlineFlowEvent(
+      experience: OnlineExperience.quickPop,
+      stage: OnlineFlowStage.cpuFallback,
+      launchSource: MatchLaunchSource.rematch,
+      elapsedMilliseconds: 5174,
+      correlation: AnalyticsCorrelation(
+        anonymousSessionId: 'session_quick_pop_test',
+      ),
+    );
+
+    expect(event.eventName, 'quick_pop_cpu_fallback');
+    expect(event.parameters, {
+      'online_experience': 'quickPop',
+      'flow_stage': 'cpuFallback',
+      'launch_source': 'rematch',
+      'elapsed_milliseconds': 5174,
+      'app_session_ref': 'session_quick_pop_test',
+    });
+    expect(
+      event.parameters.keys,
+      isNot(
+        contains(anyOf('name', 'room_code', 'firebase_uid', 'email', 'phone')),
+      ),
+    );
+
+    final sink = _RecordingSink();
+    await SinkGameAnalytics(sink).logEvent(event);
+    expect(sink.events.single.name, 'quick_pop_cpu_fallback');
+  });
+
+  test('unconfirmed Quick Pop settlement is categorical and timed', () async {
+    const event = OnlineFlowEvent(
+      experience: OnlineExperience.quickPop,
+      stage: OnlineFlowStage.settlementUnavailable,
+      launchSource: MatchLaunchSource.rematch,
+      elapsedMilliseconds: 6842,
+      failureReason: OnlineFlowFailureReason.network,
+    );
+
+    expect(event.eventName, 'quick_pop_settlement_unavailable');
+    expect(event.parameters, {
+      'online_experience': 'quickPop',
+      'flow_stage': 'settlementUnavailable',
+      'launch_source': 'rematch',
+      'elapsed_milliseconds': 6842,
+      'failure_reason': 'network',
+    });
+    expect(
+      event.parameters.keys,
+      isNot(
+        contains(
+          anyOf('name', 'room_code', 'firebase_uid', 'raw_error', 'email'),
+        ),
+      ),
+    );
+
+    final sink = _RecordingSink();
+    await SinkGameAnalytics(sink).logEvent(event);
+    expect(sink.events.single.name, 'quick_pop_settlement_unavailable');
+  });
+
+  test('Quick Table failure is categorical and never includes a room code', () {
+    const event = OnlineFlowEvent(
+      experience: OnlineExperience.quickTable,
+      stage: OnlineFlowStage.joinFailed,
+      joinMethod: OnlineJoinMethod.roomCode,
+      failureReason: OnlineFlowFailureReason.roomFull,
+      elapsedMilliseconds: 930,
+    );
+
+    expect(event.eventName, 'quick_table_join_failed');
+    expect(event.parameters, {
+      'online_experience': 'quickTable',
+      'flow_stage': 'joinFailed',
+      'launch_source': 'home',
+      'elapsed_milliseconds': 930,
+      'join_method': 'roomCode',
+      'failure_reason': 'roomFull',
+    });
+    expect(event.parameters, isNot(contains('room_code')));
+  });
+
+  test('online wait is derived from the actual search interval', () {
+    final startedAt = DateTime.utc(2026, 8, 9, 12);
+    final elapsed = onlineSearchElapsedMilliseconds(
+      startedAt: startedAt,
+      now: startedAt.add(const Duration(milliseconds: 3875)),
+    );
+
+    expect(elapsed, 3875);
+    expect(onlineMatchmakingWaitSeconds(elapsed), 4);
+    expect(
+      onlineSearchElapsedMilliseconds(
+        startedAt: startedAt,
+        now: startedAt.subtract(const Duration(seconds: 1)),
+      ),
+      0,
+    );
+  });
+
   test('match format is optional and only emitted when supplied', () async {
     const legacyStart = MatchStartEvent(
       playType: MatchPlayType.cpu,

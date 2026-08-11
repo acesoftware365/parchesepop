@@ -7,7 +7,16 @@ import {
   assertSucceeds,
   initializeTestEnvironment,
 } from '@firebase/rules-unit-testing';
-import { get, ref, set, update } from 'firebase/database';
+import {
+  get,
+  limitToFirst,
+  orderByChild,
+  query,
+  ref,
+  set,
+  startAt,
+  update,
+} from 'firebase/database';
 
 const projectId = 'parchese-pop';
 const emulatorAddress =
@@ -24,6 +33,15 @@ const environment = await initializeTestEnvironment({
 
 const dbFor = (uid) => environment.authenticatedContext(uid).database();
 const pathRef = (uid, path) => ref(dbFor(uid), path);
+const activeQueueQuery = (uid, path, ownJoinedAt) =>
+  query(
+    pathRef(uid, path),
+    orderByChild('activeUntil'),
+    startAt(ownJoinedAt),
+    limitToFirst(64),
+  );
+const delay = (milliseconds) =>
+  new Promise((resolve) => setTimeout(resolve, milliseconds));
 
 async function seed(path, value) {
   await environment.withSecurityRulesDisabled(async (context) => {
@@ -95,6 +113,7 @@ const queueTicket = (uid, ticketId, queueKey, joinedAt) => ({
   queueKey,
   joinedAt,
   deadlineAt: joinedAt + 5000,
+  activeUntil: joinedAt + 5000,
   state: 'waiting',
 });
 
@@ -110,8 +129,17 @@ test('Realtime Database rules enforce the online security contract', async (t) =
       roomCode: 'ABC234',
       uid: 'guest',
       displayName: 'Guest',
+      attemptId: 'join_attempt_guest',
       requestedAt: now + 1,
     };
+    const fence = {
+      uid: 'guest',
+      attemptId: request.attemptId,
+      requestedAt: request.requestedAt,
+    };
+    await assertSucceeds(
+      set(pathRef('guest', 'onlineV2/rooms/room-1/joinFences/guest'), fence),
+    );
     await assertSucceeds(
       set(pathRef('guest', 'onlineV2/joinRequests/room-1/guest'), request),
     );
@@ -124,6 +152,7 @@ test('Realtime Database rules enforce the online security contract', async (t) =
     );
 
     const admitted = waitingRoom(now, { withGuest: true });
+    admitted.joinFences = { guest: fence };
     // Admission adds membership only. The admitted device establishes its own
     // presence after observing the room snapshot.
     delete admitted.presence.guest;
@@ -134,6 +163,86 @@ test('Realtime Database rules enforce the online security contract', async (t) =
       get(pathRef('guest', 'onlineV2/rooms/room-1/members/guest')),
     );
     assert.equal(snapshot.val().seat, 'green');
+  });
+
+  await t.test('join fences reject stale or cross-account admission attempts', async () => {
+    await environment.clearDatabase();
+    const now = Date.now();
+    await seed('onlineV2/rooms/room-1', waitingRoom(now));
+    const fencePath = 'onlineV2/rooms/room-1/joinFences/guest';
+    const requestPath = 'onlineV2/joinRequests/room-1/guest';
+    const fence = {
+      uid: 'guest',
+      attemptId: 'join_attempt_exact',
+      requestedAt: now + 1,
+    };
+    const request = {
+      roomId: 'room-1',
+      roomCode: 'ABC234',
+      uid: 'guest',
+      displayName: 'Guest',
+      attemptId: fence.attemptId,
+      requestedAt: fence.requestedAt,
+    };
+
+    await assertFails(
+      set(pathRef('outsider', fencePath), {
+        ...fence,
+        uid: 'guest',
+      }),
+    );
+    await assertSucceeds(set(pathRef('guest', fencePath), fence));
+    await assertFails(
+      set(pathRef('guest', requestPath), {
+        ...request,
+        attemptId: 'join_attempt_mismatch',
+      }),
+    );
+    await assertSucceeds(set(pathRef('guest', requestPath), request));
+
+    await assertSucceeds(set(pathRef('guest', fencePath), null));
+    const staleAdmission = waitingRoom(now, { withGuest: true });
+    delete staleAdmission.presence.guest;
+    await assertFails(
+      set(pathRef('host', 'onlineV2/rooms/room-1'), staleAdmission),
+    );
+  });
+
+  await t.test('only a pristine host-owned Quick Table room can be rolled back', async () => {
+    await environment.clearDatabase();
+    const now = Date.now();
+    const roomPath = 'onlineV2/rooms/room-1';
+
+    const pristine = waitingRoom(now);
+    pristine.creationState = 'initializing';
+    await seed(roomPath, pristine);
+    await assertFails(set(pathRef('guest', roomPath), null));
+    await assertSucceeds(set(pathRef('host', roomPath), null));
+
+    const shared = waitingRoom(now, { withGuest: true });
+    shared.creationState = 'initializing';
+    await seed(roomPath, shared);
+    await assertFails(set(pathRef('host', roomPath), null));
+
+    const inGame = waitingRoom(now);
+    inGame.status = 'inGame';
+    await seed(roomPath, inGame);
+    await assertFails(set(pathRef('host', roomPath), null));
+
+    const quickPopStarting = waitingRoom(now);
+    quickPopStarting.status = 'starting';
+    quickPopStarting.matchFormat = 'quickPop';
+    quickPopStarting.quickPopLaunch = {
+      queueKey: 'traditional_quickPop',
+      claimId: 'claim_rollback',
+      firstUid: 'host',
+      firstTicketId: 'ticket_host',
+      secondUid: 'guest',
+      secondTicketId: 'ticket_guest',
+      sharedDeadlineAt: now + 5000,
+    };
+    await seed(roomPath, quickPopStarting);
+    await assertFails(set(pathRef('host', roomPath), null));
   });
 
   await t.test('a member may change only their Ready flag, never their seat', async () => {
@@ -168,6 +277,8 @@ test('Realtime Database rules enforce the online security contract', async (t) =
         updatedAt: now,
       }),
     );
+    await assertSucceeds(get(pathRef('player', profilePath)));
+    await assertFails(get(pathRef('other', profilePath)));
     await assertSucceeds(
       set(
         pathRef('player', ticketPath),
@@ -181,10 +292,104 @@ test('Realtime Database rules enforce the online security contract', async (t) =
     await assertFails(set(pathRef('other', profilePath), null));
     await assertFails(set(pathRef('other', ticketPath), null));
     await assertSucceeds(
-      update(pathRef('player', ticketPath), { state: 'cancelled' }),
+      update(pathRef('player', ticketPath), {
+        state: 'cancelled',
+        activeUntil: 0,
+      }),
     );
     await assertSucceeds(set(pathRef('player', ticketPath), null));
     await assertSucceeds(set(pathRef('player', profilePath), null));
+  });
+
+  await t.test('Quick Pop queue enumeration ends when a search is no longer active', async () => {
+    await environment.clearDatabase();
+    const now = Date.now();
+    const queueKey = 'traditional_quickPop';
+    const queuePath = `onlineV2/quickQueues/${queueKey}`;
+
+    await assertSucceeds(
+      set(
+        pathRef('active', `${queuePath}/active`),
+        {
+          ...queueTicket('active', 'ticket_active', queueKey, now),
+          displayName: 'Active',
+        },
+      ),
+    );
+    await assertSucceeds(
+      set(
+        pathRef('peer', `${queuePath}/peer`),
+        {
+          ...queueTicket('peer', 'ticket_peer', queueKey, now + 1),
+          displayName: 'Peer',
+        },
+      ),
+    );
+    await seed(`${queuePath}/historical`, {
+      ...queueTicket(
+        'historical',
+        'ticket_historical',
+        queueKey,
+        now - 1,
+      ),
+      displayName: 'Historical',
+      state: 'cancelled',
+      activeUntil: 0,
+    });
+    await assertFails(get(pathRef('active', queuePath)));
+    const activeQueue = await assertSucceeds(
+      get(activeQueueQuery('active', queuePath, now)),
+    );
+    assert.equal(activeQueue.hasChild('peer'), true);
+    assert.equal(activeQueue.hasChild('historical'), false);
+    await assertFails(
+      get(activeQueueQuery('active', queuePath, now - 10000)),
+    );
+    await assertFails(
+      get(
+        query(
+          pathRef('active', queuePath),
+          orderByChild('activeUntil'),
+          startAt(now),
+          limitToFirst(63),
+        ),
+      ),
+    );
+    await assertFails(
+      get(
+        query(
+          pathRef('active', queuePath),
+          orderByChild('deadlineAt'),
+          startAt(now),
+          limitToFirst(64),
+        ),
+      ),
+    );
+
+    await assertFails(
+      update(pathRef('active', `${queuePath}/active`), {
+        state: 'cancelled',
+      }),
+    );
+    await assertSucceeds(
+      update(pathRef('active', `${queuePath}/active`), {
+        state: 'cancelled',
+        activeUntil: 0,
+      }),
+    );
+    await assertSucceeds(get(pathRef('active', `${queuePath}/active`)));
+    await assertFails(get(activeQueueQuery('active', queuePath, now)));
+    await assertFails(get(pathRef('active', `${queuePath}/peer`)));
+
+    await seed(`${queuePath}/expired`, {
+      ...queueTicket('expired', 'ticket_expired_private', queueKey, now - 6000),
+      displayName: 'Expired',
+    });
+    await assertSucceeds(get(pathRef('expired', `${queuePath}/expired`)));
+    await assertFails(
+      get(activeQueueQuery('expired', queuePath, now - 6000)),
+    );
+    await assertFails(get(pathRef('expired', `${queuePath}/peer`)));
   });
 
   await t.test('durable account resources are private, exact, and cleanup-safe', async () => {
@@ -210,6 +415,7 @@ test('Realtime Database rules enforce the online security contract', async (t) =
           roomCode: 'ABC234',
           uid: 'player',
           displayName: 'Player',
+          attemptId: 'join_attempt_player',
           requestedAt: now,
         },
       },
@@ -341,6 +547,29 @@ test('Realtime Database rules enforce the online security contract', async (t) =
       }),
     );
 
+    const claimPath = `onlineV2/quickClaims/${queueKey}/${claimId}`;
+    const leaderPendingClaim = await assertSucceeds(
+      get(pathRef('leader', claimPath)),
+    );
+    assert.equal(leaderPendingClaim.exists(), false);
+    await assertFails(get(pathRef('observer', `onlineV2/quickQueues/${queueKey}`)));
+    await assertSucceeds(
+      set(
+        pathRef('observer', `onlineV2/quickQueues/${queueKey}/observer`),
+        queueTicket('observer', 'ticket_observer', queueKey, now),
+      ),
+    );
+    const visibleQueue = await assertSucceeds(
+      get(
+        activeQueueQuery(
+          'observer',
+          `onlineV2/quickQueues/${queueKey}`,
+          now,
+        ),
+      ),
+    );
+    assert.equal(visibleQueue.val().leader.displayName, 'Leader');
+
     const claim = {
       claimId,
       queueKey,
@@ -352,8 +581,11 @@ test('Realtime Database rules enforce the online security contract', async (t) =
       createdAt: now,
     };
     await assertSucceeds(
-      set(pathRef('leader', `onlineV2/quickClaims/${queueKey}/${claimId}`), claim),
+      set(pathRef('leader', claimPath), claim),
     );
+    await assertSucceeds(get(pathRef('leader', claimPath)));
+    await assertSucceeds(get(pathRef('follower', claimPath)));
+    await assertFails(get(pathRef('observer', claimPath)));
 
     const leaderAcceptance = {
       uid: 'leader',
@@ -414,6 +646,7 @@ test('Realtime Database rules enforce the online security contract', async (t) =
     await assertSucceeds(
       update(pathRef('leader', `onlineV2/quickQueues/${queueKey}/leader`), {
         state: 'matched',
+        activeUntil: 0,
         roomId: 'quick_shared_room',
         opponentUid: 'follower',
       }),
@@ -421,9 +654,31 @@ test('Realtime Database rules enforce the online security contract', async (t) =
     await assertSucceeds(
       update(pathRef('follower', `onlineV2/quickQueues/${queueKey}/follower`), {
         state: 'matched',
+        activeUntil: 0,
         roomId: 'quick_shared_room',
         opponentUid: 'leader',
       }),
+    );
+    await assertFails(
+      get(
+        activeQueueQuery(
+          'leader',
+          `onlineV2/quickQueues/${queueKey}`,
+          first.joinedAt,
+        ),
+      ),
+    );
+    await assertSucceeds(
+      get(pathRef('leader', `onlineV2/quickQueues/${queueKey}/follower`)),
+    );
+    await assertSucceeds(
+      update(pathRef('observer', `onlineV2/quickQueues/${queueKey}/observer`), {
+        state: 'cancelled',
+        activeUntil: 0,
+      }),
+    );
+    await assertFails(
+      get(pathRef('observer', `onlineV2/quickQueues/${queueKey}/leader`)),
     );
   });
 
@@ -444,6 +699,7 @@ test('Realtime Database rules enforce the online security contract', async (t) =
     await assertFails(
       update(pathRef('solo', `onlineV2/quickQueues/${queueKey}/solo`), {
         state: 'cpuFallback',
+        activeUntil: 0,
         roomId: 'quick_cpu_room',
       }),
     );
@@ -458,8 +714,54 @@ test('Realtime Database rules enforce the online security contract', async (t) =
     await assertSucceeds(
       update(pathRef('expired', `onlineV2/quickQueues/${queueKey}/expired`), {
         state: 'cpuFallback',
+        activeUntil: 0,
         roomId: 'quick_cpu_expired',
       }),
+    );
+
+    await assertSucceeds(
+      set(pathRef('short', `onlineV2/quickQueues/${queueKey}/short`), {
+        ...queueTicket('short', 'ticket_short', queueKey, now),
+        deadlineAt: now + 1200,
+        activeUntil: now + 1200,
+      }),
+    );
+    await assertFails(
+      set(pathRef('too-long', `onlineV2/quickQueues/${queueKey}/too-long`), {
+        ...queueTicket('too-long', 'ticket_too_long', queueKey, now),
+        deadlineAt: now + 5001,
+        activeUntil: now + 5001,
+      }),
+    );
+    const missingActiveUntil = queueTicket(
+      'missing-index',
+      'ticket_missing_index',
+      queueKey,
+      now,
+    );
+    delete missingActiveUntil.activeUntil;
+    await assertFails(
+      set(
+        pathRef(
+          'missing-index',
+          `onlineV2/quickQueues/${queueKey}/missing-index`,
+        ),
+        missingActiveUntil,
+      ),
+    );
+    await assertFails(
+      set(
+        pathRef('wrong-index', `onlineV2/quickQueues/${queueKey}/wrong-index`),
+        {
+          ...queueTicket(
+            'wrong-index',
+            'ticket_wrong_index',
+            queueKey,
+            now,
+          ),
+          activeUntil: 0,
+        },
+      ),
     );
   });
 
@@ -516,12 +818,14 @@ test('Realtime Database rules enforce the online security contract', async (t) =
     await assertFails(
       update(pathRef('leader', `onlineV2/quickQueues/${queueKey}/leader`), {
         state: 'cpuFallback',
+        activeUntil: 0,
         roomId: 'quick_cpu_must_not_win',
       }),
     );
     await assertSucceeds(
       update(pathRef('leader', `onlineV2/quickQueues/${queueKey}/leader`), {
         state: 'matched',
+        activeUntil: 0,
         roomId: 'quick_human_room',
         opponentUid: 'follower',
       }),
@@ -535,12 +839,51 @@ test('Realtime Database rules enforce the online security contract', async (t) =
       set(pathRef('host', 'onlineV2/rooms/room-1'), waitingRoom(now)),
     );
 
+    const queueKey = 'traditional_quickPop';
+    const claimId = 'quick-launch-claim';
+    const roomId = 'quick-room';
+    const leaderTicket = {
+      ...queueTicket('leader', 'ticket-leader', queueKey, now),
+      state: 'matched',
+      activeUntil: 0,
+      claimId,
+      roomId,
+      opponentUid: 'follower',
+    };
+    const followerTicket = {
+      ...queueTicket('follower', 'ticket-follower', queueKey, now),
+      state: 'matched',
+      activeUntil: 0,
+      claimId,
+      roomId,
+      opponentUid: 'leader',
+    };
+    await seed(`onlineV2/quickQueues/${queueKey}/leader`, leaderTicket);
+    await seed(`onlineV2/quickQueues/${queueKey}/follower`, followerTicket);
+    await seed(`onlineV2/quickClaims/${queueKey}/${claimId}`, {
+      claimId,
+      queueKey,
+      leaderUid: 'leader',
+      firstUid: 'leader',
+      firstTicketId: leaderTicket.ticketId,
+      secondUid: 'follower',
+      secondTicketId: followerTicket.ticketId,
+      createdAt: now,
+      resolution: {
+        kind: 'human',
+        roomId,
+        resolvedAt: now,
+        firstUid: 'leader',
+        secondUid: 'follower',
+      },
+    });
+
     const quickRoom = {
       id: 'quick-room',
       code: 'QCK234',
       hostUid: 'leader',
       visibility: 'private',
-      status: 'inGame',
+      status: 'starting',
       mode: 'traditional',
       matchFormat: 'quickPop',
       members: {
@@ -558,10 +901,257 @@ test('Realtime Database rules enforce the online security contract', async (t) =
       revision: 0,
       createdAt: now,
       updatedAt: now,
+      quickPopLaunch: {
+        queueKey,
+        claimId,
+        firstUid: 'leader',
+        firstTicketId: leaderTicket.ticketId,
+        secondUid: 'follower',
+        secondTicketId: followerTicket.ticketId,
+        sharedDeadlineAt: leaderTicket.deadlineAt,
+      },
     };
     await assertSucceeds(
       set(pathRef('leader', 'onlineV2/rooms/quick-room'), quickRoom),
     );
+  });
+
+  await t.test('Quick Pop launch barrier serializes ready, play, and fallback', async () => {
+    await environment.clearDatabase();
+    const now = Date.now();
+    const queueKey = 'traditional_quickPop';
+    const claimId = 'barrier-claim';
+    const roomId = 'barrier-room';
+    const leaderTicket = {
+      ...queueTicket('leader', 'barrier-leader', queueKey, now),
+      deadlineAt: now + 1200,
+      state: 'matched',
+      activeUntil: 0,
+      claimId,
+      roomId,
+      opponentUid: 'follower',
+    };
+    const followerTicket = {
+      ...queueTicket('follower', 'barrier-follower', queueKey, now),
+      deadlineAt: now + 1200,
+      state: 'matched',
+      activeUntil: 0,
+      claimId,
+      roomId,
+      opponentUid: 'leader',
+    };
+    const claim = {
+      claimId,
+      queueKey,
+      leaderUid: 'leader',
+      firstUid: 'leader',
+      firstTicketId: leaderTicket.ticketId,
+      secondUid: 'follower',
+      secondTicketId: followerTicket.ticketId,
+      createdAt: now,
+      resolution: {
+        kind: 'human',
+        roomId,
+        resolvedAt: now,
+        firstUid: 'leader',
+        secondUid: 'follower',
+      },
+    };
+    const room = {
+      id: roomId,
+      code: 'BAR234',
+      hostUid: 'leader',
+      visibility: 'private',
+      status: 'starting',
+      mode: 'traditional',
+      matchFormat: 'quickPop',
+      members: {
+        leader: member('leader', 'Leader', 'red', now, true),
+        follower: member('follower', 'Follower', 'green', now, true),
+        cpu_yellow: member('cpu_yellow', 'CPU Rayo', 'yellow', now, true),
+        cpu_blue: member('cpu_blue', 'CPU Pop', 'blue', now, true),
+      },
+      presence: {
+        leader: presence('leader', now),
+        follower: presence('follower', now),
+        cpu_yellow: presence('cpu_yellow', now),
+        cpu_blue: presence('cpu_blue', now),
+      },
+      revision: 0,
+      createdAt: now,
+      updatedAt: now,
+      quickPopLaunch: {
+        queueKey,
+        claimId,
+        firstUid: 'leader',
+        firstTicketId: leaderTicket.ticketId,
+        secondUid: 'follower',
+        secondTicketId: followerTicket.ticketId,
+        sharedDeadlineAt: leaderTicket.deadlineAt,
+      },
+      match: {
+        ...matchDocument(now),
+        roomId,
+        matchId: roomId,
+        hostUid: 'leader',
+      },
+    };
+    const seedCandidate = async () => {
+      await seed(`onlineV2/quickQueues/${queueKey}/leader`, leaderTicket);
+      await seed(`onlineV2/quickQueues/${queueKey}/follower`, followerTicket);
+      await seed(`onlineV2/quickClaims/${queueKey}/${claimId}`, claim);
+      await seed(`onlineV2/rooms/${roomId}`, room);
+    };
+    await seedCandidate();
+
+    const statusPath = `onlineV2/rooms/${roomId}/status`;
+    await assertFails(set(pathRef('leader', statusPath), 'inGame'));
+    await assertSucceeds(
+      set(
+        pathRef(
+          'leader',
+          `onlineV2/quickClaims/${queueKey}/${claimId}/launchReady/leader`,
+        ),
+        { uid: 'leader', ticketId: leaderTicket.ticketId, readyAt: Date.now() },
+      ),
+    );
+    await assertFails(set(pathRef('leader', statusPath), 'inGame'));
+    await assertSucceeds(
+      set(
+        pathRef(
+          'follower',
+          `onlineV2/quickClaims/${queueKey}/${claimId}/launchReady/follower`,
+        ),
+        {
+          uid: 'follower',
+          ticketId: followerTicket.ticketId,
+          readyAt: Date.now(),
+        },
+      ),
+    );
+    await assertFails(set(pathRef('follower', statusPath), 'inGame'));
+    await assertSucceeds(set(pathRef('leader', statusPath), 'inGame'));
+    await assertFails(set(pathRef('outsider', statusPath), 'closed'));
+    await assertSucceeds(set(pathRef('follower', statusPath), 'closed'));
+    await assertFails(
+      set(
+        pathRef(
+          'leader',
+          `onlineV2/quickClaims/${queueKey}/${claimId}/launchSettled/leader`,
+        ),
+        {
+          uid: 'leader',
+          ticketId: leaderTicket.ticketId,
+          settledAt: Date.now(),
+        },
+      ),
+    );
+
+    await environment.clearDatabase();
+    await seedCandidate();
+    await Promise.all([
+      assertSucceeds(
+        set(
+          pathRef(
+            'leader',
+            `onlineV2/quickClaims/${queueKey}/${claimId}/launchReady/leader`,
+          ),
+          {
+            uid: 'leader',
+            ticketId: leaderTicket.ticketId,
+            readyAt: now + 100,
+          },
+        ),
+      ),
+      assertSucceeds(
+        set(
+          pathRef(
+            'follower',
+            `onlineV2/quickClaims/${queueKey}/${claimId}/launchReady/follower`,
+          ),
+          {
+            uid: 'follower',
+            ticketId: followerTicket.ticketId,
+            readyAt: now + 100,
+          },
+        ),
+      ),
+    ]);
+    await assertSucceeds(set(pathRef('leader', statusPath), 'inGame'));
+    await delay(Math.max(0, leaderTicket.deadlineAt - Date.now() + 25));
+    await Promise.all([
+      assertSucceeds(
+        set(
+          pathRef(
+            'leader',
+            `onlineV2/quickClaims/${queueKey}/${claimId}/launchSettled/leader`,
+          ),
+          {
+            uid: 'leader',
+            ticketId: leaderTicket.ticketId,
+            settledAt: Date.now(),
+          },
+        ),
+      ),
+      assertSucceeds(
+        set(
+          pathRef(
+            'follower',
+            `onlineV2/quickClaims/${queueKey}/${claimId}/launchSettled/follower`,
+          ),
+          {
+            uid: 'follower',
+            ticketId: followerTicket.ticketId,
+            settledAt: Date.now(),
+          },
+        ),
+      ),
+    ]);
+    await assertFails(set(pathRef('follower', statusPath), 'closed'));
+    await assertFails(
+      set(
+        pathRef(
+          'follower',
+          `onlineV2/quickClaims/${queueKey}/${claimId}/launchAborted/follower`,
+        ),
+        {
+          uid: 'follower',
+          ticketId: followerTicket.ticketId,
+          abortedAt: Date.now(),
+        },
+      ),
+    );
+
+    // A write-once abort tombstone prevents delayed host room creation and
+    // readiness after the local client has already left.
+    await environment.clearDatabase();
+    await seed(`onlineV2/quickQueues/${queueKey}/leader`, leaderTicket);
+    await seed(`onlineV2/quickQueues/${queueKey}/follower`, followerTicket);
+    await seed(`onlineV2/quickClaims/${queueKey}/${claimId}`, claim);
+    const abortPath =
+      `onlineV2/quickClaims/${queueKey}/${claimId}/launchAborted/follower`;
+    await assertFails(
+      set(pathRef('outsider', abortPath), {
+        uid: 'follower',
+        ticketId: followerTicket.ticketId,
+        abortedAt: Date.now(),
+      }),
+    );
+    await assertFails(
+      set(pathRef('follower', abortPath), {
+        uid: 'follower',
+        ticketId: 'wrong-ticket',
+        abortedAt: Date.now(),
+      }),
+    );
+    await assertSucceeds(
+      set(pathRef('follower', abortPath), {
+        uid: 'follower',
+        ticketId: followerTicket.ticketId,
+        abortedAt: Date.now(),
+      }),
+    );
+    await assertFails(set(pathRef('leader', `onlineV2/rooms/${roomId}`), room));
   });
 
   await t.test('known room codes and exact join paths work without exposing indexes or active rooms', async () => {
@@ -694,7 +1284,7 @@ test('Realtime Database rules enforce the online security contract', async (t) =
     const now = Date.now();
     const room = waitingRoom(now, { withGuest: true });
     room.status = 'inGame';
-    room.matchFormat = 'quickPop';
+    room.matchFormat = 'quickTable';
     room.members.cpu_green = member('cpu_green', 'CPU', 'yellow', now + 2, true);
     await seed('onlineV2/rooms/room-1', room);
     await seed('onlineV2/rooms/room-1/match', matchDocument(now));
@@ -775,7 +1365,7 @@ test('Realtime Database rules enforce the online security contract', async (t) =
     const now = Date.now();
     const room = waitingRoom(now, { withGuest: true });
     room.status = 'inGame';
-    room.matchFormat = 'quickPop';
+    room.matchFormat = 'quickTable';
     room.lobbyState = {
       schemaVersion: 1,
       roomId: 'room-1',

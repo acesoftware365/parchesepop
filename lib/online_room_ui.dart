@@ -1,14 +1,23 @@
 import 'dart:async';
 
+import 'package:firebase_core/firebase_core.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:share_plus/share_plus.dart' show ShareResultStatus;
 
 import 'app_language.dart';
+import 'game_analytics.dart';
 import 'online_invite.dart';
 import 'online_lobby.dart';
 import 'online_transport.dart';
 
 enum OnlineRoomGameMode { classic, chaos }
+
+/// A local room operation was explicitly cancelled before it could become
+/// visible to the player.
+final class OnlineRoomOperationCancelledException implements Exception {
+  const OnlineRoomOperationCancelledException();
+}
 
 class PublicRoomSummary {
   const PublicRoomSummary({
@@ -46,8 +55,10 @@ abstract interface class OnlineRoomController implements Listenable {
     required RoomVisibility visibility,
   });
 
+  Future<void> cancelPendingCreate();
   Future<void> joinRoomByCode(RoomCode roomCode);
   Future<void> joinPublicRoom(String roomId);
+  Future<void> cancelPendingJoin();
   Future<void> setReady(bool ready);
   Future<void> changeVisibility(RoomVisibility visibility);
   Future<void> kick(String participantId);
@@ -72,11 +83,17 @@ class QuickTableHubScreen extends StatelessWidget {
     required this.controller,
     required this.onPlayLocal,
     this.shareService,
-  });
+    this.analytics = const NoopGameAnalytics(),
+    this.launchSource = MatchLaunchSource.home,
+    this.createTimeout = const Duration(seconds: 15),
+  }) : assert(createTimeout > Duration.zero);
 
   final OnlineRoomController controller;
   final VoidCallback onPlayLocal;
   final RoomInviteShareService? shareService;
+  final GameAnalytics analytics;
+  final MatchLaunchSource launchSource;
+  final Duration createTimeout;
 
   @override
   Widget build(BuildContext context) => Scaffold(
@@ -133,6 +150,9 @@ class QuickTableHubScreen extends StatelessWidget {
                             CreateRoomScreen(
                               controller: controller,
                               shareService: shareService,
+                              analytics: analytics,
+                              launchSource: launchSource,
+                              createTimeout: createTimeout,
                             ),
                           ),
                         ),
@@ -150,6 +170,8 @@ class QuickTableHubScreen extends StatelessWidget {
                             JoinRoomCodeScreen(
                               controller: controller,
                               shareService: shareService,
+                              analytics: analytics,
+                              launchSource: launchSource,
                             ),
                           ),
                         ),
@@ -167,6 +189,8 @@ class QuickTableHubScreen extends StatelessWidget {
                             PublicRoomsScreen(
                               controller: controller,
                               shareService: shareService,
+                              analytics: analytics,
+                              launchSource: launchSource,
                             ),
                           ),
                         ),
@@ -203,10 +227,16 @@ class CreateRoomScreen extends StatefulWidget {
     super.key,
     required this.controller,
     this.shareService,
-  });
+    this.analytics = const NoopGameAnalytics(),
+    this.launchSource = MatchLaunchSource.home,
+    this.createTimeout = const Duration(seconds: 15),
+  }) : assert(createTimeout > Duration.zero);
 
   final OnlineRoomController controller;
   final RoomInviteShareService? shareService;
+  final GameAnalytics analytics;
+  final MatchLaunchSource launchSource;
+  final Duration createTimeout;
 
   @override
   State<CreateRoomScreen> createState() => _CreateRoomScreenState();
@@ -216,127 +246,257 @@ class _CreateRoomScreenState extends State<CreateRoomScreen> {
   OnlineRoomGameMode mode = OnlineRoomGameMode.classic;
   RoomVisibility visibility = RoomVisibility.private;
   bool submitting = false;
+  bool createTerminalLogged = false;
+  bool cancellationInProgress = false;
+  DateTime? attemptStartedAt;
+
+  int get attemptElapsedMilliseconds {
+    final startedAt = attemptStartedAt;
+    if (startedAt == null) return 0;
+    final elapsed = DateTime.now().difference(startedAt).inMilliseconds;
+    return elapsed < 0 ? 0 : elapsed;
+  }
+
+  OnlineRoomAccess get analyticsRoomAccess =>
+      visibility == RoomVisibility.public
+      ? OnlineRoomAccess.public
+      : OnlineRoomAccess.private;
 
   @override
-  Widget build(BuildContext context) => Scaffold(
-    backgroundColor: _RoomColors.cloud,
-    appBar: AppBar(title: const PopText('CREAR SALA')),
-    body: SafeArea(
-      child: Padding(
-        padding: const EdgeInsets.fromLTRB(18, 18, 18, 14),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            const _SectionLabel(
-              icon: Icons.sports_esports_rounded,
-              label: 'MODO DE JUEGO',
-            ),
-            const SizedBox(height: 10),
-            SegmentedButton<OnlineRoomGameMode>(
-              key: const ValueKey('create-room-mode'),
-              segments: const [
-                ButtonSegment(
-                  value: OnlineRoomGameMode.classic,
-                  icon: Icon(Icons.emoji_events_rounded),
-                  label: PopText('CLÁSICO'),
+  void dispose() {
+    if (submitting && !createTerminalLogged) {
+      createTerminalLogged = true;
+      unawaited(_cancelPendingRoomCreate(widget.controller));
+      unawaited(
+        widget.analytics.logEvent(
+          OnlineFlowEvent(
+            experience: OnlineExperience.quickTable,
+            stage: OnlineFlowStage.createCancelled,
+            launchSource: widget.launchSource,
+            elapsedMilliseconds: attemptElapsedMilliseconds,
+            roomAccess: analyticsRoomAccess,
+          ),
+        ),
+      );
+    }
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) => PopScope(
+    canPop: !submitting || createTerminalLogged,
+    onPopInvokedWithResult: (didPop, result) {
+      if (!didPop && submitting) unawaited(_cancelCreateAndLeave());
+    },
+    child: Scaffold(
+      backgroundColor: _RoomColors.cloud,
+      appBar: AppBar(title: const PopText('CREAR SALA')),
+      body: SafeArea(
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(18, 18, 18, 14),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              const _SectionLabel(
+                icon: Icons.sports_esports_rounded,
+                label: 'MODO DE JUEGO',
+              ),
+              const SizedBox(height: 10),
+              SegmentedButton<OnlineRoomGameMode>(
+                key: const ValueKey('create-room-mode'),
+                segments: const [
+                  ButtonSegment(
+                    value: OnlineRoomGameMode.classic,
+                    icon: Icon(Icons.emoji_events_rounded),
+                    label: PopText('CLÁSICO'),
+                  ),
+                  ButtonSegment(
+                    value: OnlineRoomGameMode.chaos,
+                    icon: Icon(Icons.bolt_rounded),
+                    label: PopText('CAOS'),
+                  ),
+                ],
+                selected: {mode},
+                onSelectionChanged: submitting
+                    ? null
+                    : (selection) => setState(() => mode = selection.single),
+                showSelectedIcon: false,
+                style: const ButtonStyle(
+                  visualDensity: VisualDensity(vertical: 2),
                 ),
-                ButtonSegment(
-                  value: OnlineRoomGameMode.chaos,
-                  icon: Icon(Icons.bolt_rounded),
-                  label: PopText('CAOS'),
+              ),
+              const SizedBox(height: 24),
+              const _SectionLabel(
+                icon: Icons.visibility_rounded,
+                label: 'QUIÉN PUEDE ENTRAR',
+              ),
+              const SizedBox(height: 10),
+              SegmentedButton<RoomVisibility>(
+                key: const ValueKey('create-room-visibility'),
+                segments: const [
+                  ButtonSegment(
+                    value: RoomVisibility.private,
+                    icon: Icon(Icons.lock_rounded),
+                    label: PopText('PRIVADA'),
+                  ),
+                  ButtonSegment(
+                    value: RoomVisibility.public,
+                    icon: Icon(Icons.public_rounded),
+                    label: PopText('PÚBLICA'),
+                  ),
+                ],
+                selected: {visibility},
+                onSelectionChanged: submitting
+                    ? null
+                    : (selection) =>
+                          setState(() => visibility = selection.single),
+                showSelectedIcon: false,
+                style: const ButtonStyle(
+                  visualDensity: VisualDensity(vertical: 2),
+                ),
+              ),
+              const SizedBox(height: 16),
+              _InfoPanel(
+                icon: visibility == RoomVisibility.private
+                    ? Icons.key_rounded
+                    : Icons.travel_explore_rounded,
+                text: visibility == RoomVisibility.private
+                    ? 'Solo entran quienes tengan tu código o invitación.'
+                    : 'Tu sala aparecerá en la lista pública hasta llenarse.',
+              ),
+              const Spacer(),
+              FilledButton.icon(
+                key: const ValueKey('create-room-submit'),
+                onPressed: submitting ? null : _createRoom,
+                icon: submitting
+                    ? const SizedBox.square(
+                        dimension: 20,
+                        child: CircularProgressIndicator(
+                          strokeWidth: 2.5,
+                          color: Colors.white,
+                        ),
+                      )
+                    : const Icon(Icons.add_rounded),
+                label: PopText(submitting ? 'CREANDO…' : 'CREAR SALA'),
+                style: _RoomStyles.primaryButton(_RoomColors.blue),
+              ),
+              if (submitting) ...[
+                const SizedBox(height: 8),
+                TextButton.icon(
+                  key: const ValueKey('create-room-cancel'),
+                  onPressed: cancellationInProgress
+                      ? null
+                      : _cancelCreateAndLeave,
+                  icon: const Icon(Icons.close_rounded),
+                  label: const PopText('CANCELAR'),
                 ),
               ],
-              selected: {mode},
-              onSelectionChanged: submitting
-                  ? null
-                  : (selection) => setState(() => mode = selection.single),
-              showSelectedIcon: false,
-              style: const ButtonStyle(
-                visualDensity: VisualDensity(vertical: 2),
-              ),
-            ),
-            const SizedBox(height: 24),
-            const _SectionLabel(
-              icon: Icons.visibility_rounded,
-              label: 'QUIÉN PUEDE ENTRAR',
-            ),
-            const SizedBox(height: 10),
-            SegmentedButton<RoomVisibility>(
-              key: const ValueKey('create-room-visibility'),
-              segments: const [
-                ButtonSegment(
-                  value: RoomVisibility.private,
-                  icon: Icon(Icons.lock_rounded),
-                  label: PopText('PRIVADA'),
-                ),
-                ButtonSegment(
-                  value: RoomVisibility.public,
-                  icon: Icon(Icons.public_rounded),
-                  label: PopText('PÚBLICA'),
-                ),
-              ],
-              selected: {visibility},
-              onSelectionChanged: submitting
-                  ? null
-                  : (selection) =>
-                        setState(() => visibility = selection.single),
-              showSelectedIcon: false,
-              style: const ButtonStyle(
-                visualDensity: VisualDensity(vertical: 2),
-              ),
-            ),
-            const SizedBox(height: 16),
-            _InfoPanel(
-              icon: visibility == RoomVisibility.private
-                  ? Icons.key_rounded
-                  : Icons.travel_explore_rounded,
-              text: visibility == RoomVisibility.private
-                  ? 'Solo entran quienes tengan tu código o invitación.'
-                  : 'Tu sala aparecerá en la lista pública hasta llenarse.',
-            ),
-            const Spacer(),
-            FilledButton.icon(
-              key: const ValueKey('create-room-submit'),
-              onPressed: submitting ? null : _createRoom,
-              icon: submitting
-                  ? const SizedBox.square(
-                      dimension: 20,
-                      child: CircularProgressIndicator(
-                        strokeWidth: 2.5,
-                        color: Colors.white,
-                      ),
-                    )
-                  : const Icon(Icons.add_rounded),
-              label: PopText(submitting ? 'CREANDO…' : 'CREAR SALA'),
-              style: _RoomStyles.primaryButton(_RoomColors.blue),
-            ),
-          ],
+            ],
+          ),
         ),
       ),
     ),
   );
 
   Future<void> _createRoom() async {
+    attemptStartedAt = DateTime.now();
+    createTerminalLogged = false;
+    cancellationInProgress = false;
+    final roomAccess = analyticsRoomAccess;
+    unawaited(
+      widget.analytics.logEvent(
+        OnlineFlowEvent(
+          experience: OnlineExperience.quickTable,
+          stage: OnlineFlowStage.createStarted,
+          launchSource: widget.launchSource,
+          roomAccess: roomAccess,
+        ),
+      ),
+    );
     setState(() => submitting = true);
     try {
-      await widget.controller.createRoom(mode: mode, visibility: visibility);
+      await widget.controller
+          .createRoom(mode: mode, visibility: visibility)
+          .timeout(
+            widget.createTimeout,
+            onTimeout: () async {
+              await _cancelPendingRoomCreate(widget.controller);
+              throw TimeoutException('Room creation timed out.');
+            },
+          );
+      if (createTerminalLogged) return;
       if (!mounted) return;
       if (widget.controller.lobby == null) {
         throw StateError('El servidor no devolvió la sala creada.');
       }
+      createTerminalLogged = true;
+      unawaited(
+        widget.analytics.logEvent(
+          OnlineFlowEvent(
+            experience: OnlineExperience.quickTable,
+            stage: OnlineFlowStage.roomCreated,
+            launchSource: widget.launchSource,
+            elapsedMilliseconds: attemptElapsedMilliseconds,
+            roomAccess: roomAccess,
+          ),
+        ),
+      );
       await Navigator.of(context).pushReplacement(
         MaterialPageRoute<void>(
           builder: (_) => RoomLobbyScreen(
             controller: widget.controller,
             shareService: widget.shareService,
+            analytics: widget.analytics,
+            launchSource: widget.launchSource,
           ),
         ),
       );
     } catch (error) {
+      if (createTerminalLogged || !mounted) return;
+      createTerminalLogged = true;
+      unawaited(
+        widget.analytics.logEvent(
+          OnlineFlowEvent(
+            experience: OnlineExperience.quickTable,
+            stage: OnlineFlowStage.createFailed,
+            launchSource: widget.launchSource,
+            elapsedMilliseconds: attemptElapsedMilliseconds,
+            failureReason: onlineRoomAnalyticsFailureReason(error),
+            roomAccess: roomAccess,
+          ),
+        ),
+      );
       if (mounted) _showRoomError(context, error);
     } finally {
       if (mounted) setState(() => submitting = false);
     }
+  }
+
+  Future<void> _cancelCreateAndLeave() async {
+    if (!submitting || createTerminalLogged || cancellationInProgress) return;
+    setState(() {
+      cancellationInProgress = true;
+      createTerminalLogged = true;
+    });
+    unawaited(
+      widget.analytics.logEvent(
+        OnlineFlowEvent(
+          experience: OnlineExperience.quickTable,
+          stage: OnlineFlowStage.createCancelled,
+          launchSource: widget.launchSource,
+          elapsedMilliseconds: attemptElapsedMilliseconds,
+          roomAccess: analyticsRoomAccess,
+        ),
+      ),
+    );
+    try {
+      await widget.controller.cancelPendingCreate();
+    } catch (_) {
+      // The local attempt is already terminal; cleanup remains best effort.
+    }
+    if (!mounted) return;
+    await WidgetsBinding.instance.endOfFrame;
+    if (mounted) await Navigator.of(context).maybePop();
   }
 }
 
@@ -345,10 +505,14 @@ class JoinRoomCodeScreen extends StatefulWidget {
     super.key,
     required this.controller,
     this.shareService,
+    this.analytics = const NoopGameAnalytics(),
+    this.launchSource = MatchLaunchSource.home,
   });
 
   final OnlineRoomController controller;
   final RoomInviteShareService? shareService;
+  final GameAnalytics analytics;
+  final MatchLaunchSource launchSource;
 
   @override
   State<JoinRoomCodeScreen> createState() => _JoinRoomCodeScreenState();
@@ -357,11 +521,35 @@ class JoinRoomCodeScreen extends StatefulWidget {
 class _JoinRoomCodeScreenState extends State<JoinRoomCodeScreen> {
   final textController = TextEditingController();
   bool submitting = false;
+  DateTime? attemptStartedAt;
+  bool joinTerminalLogged = false;
 
   bool get valid => RoomCode.isValid(textController.text);
 
+  int get attemptElapsedMilliseconds {
+    final startedAt = attemptStartedAt;
+    if (startedAt == null) return 0;
+    final elapsed = DateTime.now().difference(startedAt).inMilliseconds;
+    return elapsed < 0 ? 0 : elapsed;
+  }
+
   @override
   void dispose() {
+    if (submitting && !joinTerminalLogged) {
+      joinTerminalLogged = true;
+      unawaited(_cancelPendingRoomJoin(widget.controller));
+      unawaited(
+        widget.analytics.logEvent(
+          OnlineFlowEvent(
+            experience: OnlineExperience.quickTable,
+            stage: OnlineFlowStage.joinCancelled,
+            launchSource: widget.launchSource,
+            elapsedMilliseconds: attemptElapsedMilliseconds,
+            joinMethod: OnlineJoinMethod.roomCode,
+          ),
+        ),
+      );
+    }
     textController.dispose();
     super.dispose();
   }
@@ -459,6 +647,18 @@ class _JoinRoomCodeScreenState extends State<JoinRoomCodeScreen> {
   );
 
   Future<void> _joinRoom() async {
+    attemptStartedAt = DateTime.now();
+    joinTerminalLogged = false;
+    unawaited(
+      widget.analytics.logEvent(
+        OnlineFlowEvent(
+          experience: OnlineExperience.quickTable,
+          stage: OnlineFlowStage.joinStarted,
+          launchSource: widget.launchSource,
+          joinMethod: OnlineJoinMethod.roomCode,
+        ),
+      ),
+    );
     setState(() => submitting = true);
     try {
       await widget.controller.joinRoomByCode(
@@ -468,15 +668,48 @@ class _JoinRoomCodeScreenState extends State<JoinRoomCodeScreen> {
       if (widget.controller.lobby == null) {
         throw StateError('La sala no está disponible.');
       }
+      joinTerminalLogged = true;
+      unawaited(
+        widget.analytics.logEvent(
+          OnlineFlowEvent(
+            experience: OnlineExperience.quickTable,
+            stage: OnlineFlowStage.roomJoined,
+            launchSource: widget.launchSource,
+            elapsedMilliseconds: attemptElapsedMilliseconds,
+            joinMethod: OnlineJoinMethod.roomCode,
+          ),
+        ),
+      );
       await Navigator.of(context).pushReplacement(
         MaterialPageRoute<void>(
           builder: (_) => RoomLobbyScreen(
             controller: widget.controller,
             shareService: widget.shareService,
+            analytics: widget.analytics,
+            launchSource: widget.launchSource,
           ),
         ),
       );
     } catch (error) {
+      if (!mounted || joinTerminalLogged) return;
+      final failureReason = onlineRoomAnalyticsFailureReason(error);
+      joinTerminalLogged = true;
+      unawaited(
+        widget.analytics.logEvent(
+          OnlineFlowEvent(
+            experience: OnlineExperience.quickTable,
+            stage: failureReason == OnlineFlowFailureReason.cancelled
+                ? OnlineFlowStage.joinCancelled
+                : OnlineFlowStage.joinFailed,
+            launchSource: widget.launchSource,
+            elapsedMilliseconds: attemptElapsedMilliseconds,
+            joinMethod: OnlineJoinMethod.roomCode,
+            failureReason: failureReason == OnlineFlowFailureReason.cancelled
+                ? null
+                : failureReason,
+          ),
+        ),
+      );
       if (mounted) _showRoomError(context, error);
     } finally {
       if (mounted) setState(() => submitting = false);
@@ -511,10 +744,14 @@ class PublicRoomsScreen extends StatefulWidget {
     super.key,
     required this.controller,
     this.shareService,
+    this.analytics = const NoopGameAnalytics(),
+    this.launchSource = MatchLaunchSource.home,
   });
 
   final OnlineRoomController controller;
   final RoomInviteShareService? shareService;
+  final GameAnalytics analytics;
+  final MatchLaunchSource launchSource;
 
   @override
   State<PublicRoomsScreen> createState() => _PublicRoomsScreenState();
@@ -522,11 +759,117 @@ class PublicRoomsScreen extends StatefulWidget {
 
 class _PublicRoomsScreenState extends State<PublicRoomsScreen> {
   String? joiningRoomId;
+  DateTime? searchStartedAt;
+  DateTime? joinStartedAt;
+  bool joinedRoom = false;
+  bool searchCancellationLogged = false;
+  bool searchFailureLogged = false;
+  bool joinTerminalLogged = false;
+  bool refreshInProgress = false;
+
+  int _elapsedMillisecondsSince(DateTime? startedAt) {
+    if (startedAt == null) return 0;
+    final elapsed = DateTime.now().difference(startedAt).inMilliseconds;
+    return elapsed < 0 ? 0 : elapsed;
+  }
 
   @override
   void initState() {
     super.initState();
-    unawaited(widget.controller.refreshPublicRooms());
+    widget.controller.addListener(_handleControllerUpdate);
+    unawaited(_refreshRooms());
+  }
+
+  @override
+  void didUpdateWidget(covariant PublicRoomsScreen oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.controller == widget.controller) return;
+    oldWidget.controller.removeListener(_handleControllerUpdate);
+    widget.controller.addListener(_handleControllerUpdate);
+  }
+
+  @override
+  void dispose() {
+    widget.controller.removeListener(_handleControllerUpdate);
+    if (joiningRoomId != null && !joinedRoom && !joinTerminalLogged) {
+      joinTerminalLogged = true;
+      unawaited(_cancelPendingRoomJoin(widget.controller));
+      unawaited(
+        widget.analytics.logEvent(
+          OnlineFlowEvent(
+            experience: OnlineExperience.quickTable,
+            stage: OnlineFlowStage.joinCancelled,
+            launchSource: widget.launchSource,
+            elapsedMilliseconds: _elapsedMillisecondsSince(joinStartedAt),
+            joinMethod: OnlineJoinMethod.publicDirectory,
+          ),
+        ),
+      );
+    } else if (!joinedRoom &&
+        !searchCancellationLogged &&
+        !searchFailureLogged &&
+        searchStartedAt != null) {
+      searchCancellationLogged = true;
+      unawaited(
+        widget.analytics.logEvent(
+          OnlineFlowEvent(
+            experience: OnlineExperience.quickTable,
+            stage: OnlineFlowStage.searchCancelled,
+            launchSource: widget.launchSource,
+            elapsedMilliseconds: _elapsedMillisecondsSince(searchStartedAt),
+          ),
+        ),
+      );
+    }
+    super.dispose();
+  }
+
+  void _handleControllerUpdate() {
+    if (!refreshInProgress &&
+        widget.controller.publicRoomsError != null &&
+        !searchFailureLogged) {
+      _logSearchFailure(OnlineFlowFailureReason.network);
+    }
+  }
+
+  Future<void> _refreshRooms() async {
+    refreshInProgress = true;
+    searchStartedAt = DateTime.now();
+    searchFailureLogged = false;
+    unawaited(
+      widget.analytics.logEvent(
+        OnlineFlowEvent(
+          experience: OnlineExperience.quickTable,
+          stage: OnlineFlowStage.searchStarted,
+          launchSource: widget.launchSource,
+        ),
+      ),
+    );
+    try {
+      await widget.controller.refreshPublicRooms();
+      refreshInProgress = false;
+      _handleControllerUpdate();
+    } catch (error) {
+      refreshInProgress = false;
+      _logSearchFailure(onlineRoomAnalyticsFailureReason(error));
+      if (mounted) _showRoomError(context, error);
+    }
+  }
+
+  void _logSearchFailure(OnlineFlowFailureReason reason) {
+    if (searchFailureLogged) return;
+    searchFailureLogged = true;
+    unawaited(
+      widget.analytics.logEvent(
+        OnlineFlowEvent(
+          experience: OnlineExperience.quickTable,
+          stage: OnlineFlowStage.searchFailed,
+          launchSource: widget.launchSource,
+          elapsedMilliseconds: _elapsedMillisecondsSince(searchStartedAt),
+          failureReason: reason,
+        ),
+      ),
+    );
   }
 
   @override
@@ -540,7 +883,7 @@ class _PublicRoomsScreenState extends State<PublicRoomsScreen> {
           tooltip: appTranslate(context, 'Actualizar'),
           onPressed: widget.controller.loadingPublicRooms
               ? null
-              : () => widget.controller.refreshPublicRooms(),
+              : _refreshRooms,
           icon: const Icon(Icons.refresh_rounded),
         ),
       ],
@@ -560,7 +903,7 @@ class _PublicRoomsScreenState extends State<PublicRoomsScreen> {
               title: 'NO PUDIMOS CARGAR LAS SALAS',
               message:
                   'No pudimos conectar con el servidor. Revisa tu internet e inténtalo otra vez.',
-              onRetry: widget.controller.refreshPublicRooms,
+              onRetry: _refreshRooms,
             );
           }
           if (widget.controller.publicRooms.isEmpty) {
@@ -568,11 +911,11 @@ class _PublicRoomsScreenState extends State<PublicRoomsScreen> {
               icon: Icons.weekend_rounded,
               title: 'NO HAY SALAS ABIERTAS',
               message: 'Crea una sala pública o vuelve a intentarlo.',
-              onRetry: widget.controller.refreshPublicRooms,
+              onRetry: _refreshRooms,
             );
           }
           return RefreshIndicator(
-            onRefresh: widget.controller.refreshPublicRooms,
+            onRefresh: _refreshRooms,
             child: ListView.separated(
               key: const ValueKey('public-rooms-list'),
               padding: const EdgeInsets.fromLTRB(14, 14, 14, 18),
@@ -594,6 +937,18 @@ class _PublicRoomsScreenState extends State<PublicRoomsScreen> {
   );
 
   Future<void> _join(PublicRoomSummary room) async {
+    joinStartedAt = DateTime.now();
+    joinTerminalLogged = false;
+    unawaited(
+      widget.analytics.logEvent(
+        OnlineFlowEvent(
+          experience: OnlineExperience.quickTable,
+          stage: OnlineFlowStage.joinStarted,
+          launchSource: widget.launchSource,
+          joinMethod: OnlineJoinMethod.publicDirectory,
+        ),
+      ),
+    );
     setState(() => joiningRoomId = room.roomId);
     try {
       await widget.controller.joinPublicRoom(room.roomId);
@@ -601,15 +956,49 @@ class _PublicRoomsScreenState extends State<PublicRoomsScreen> {
       if (widget.controller.lobby == null) {
         throw StateError('La sala ya no está disponible.');
       }
+      joinedRoom = true;
+      joinTerminalLogged = true;
+      unawaited(
+        widget.analytics.logEvent(
+          OnlineFlowEvent(
+            experience: OnlineExperience.quickTable,
+            stage: OnlineFlowStage.roomJoined,
+            launchSource: widget.launchSource,
+            elapsedMilliseconds: _elapsedMillisecondsSince(joinStartedAt),
+            joinMethod: OnlineJoinMethod.publicDirectory,
+          ),
+        ),
+      );
       await Navigator.of(context).pushReplacement(
         MaterialPageRoute<void>(
           builder: (_) => RoomLobbyScreen(
             controller: widget.controller,
             shareService: widget.shareService,
+            analytics: widget.analytics,
+            launchSource: widget.launchSource,
           ),
         ),
       );
     } catch (error) {
+      if (!mounted || joinTerminalLogged) return;
+      final failureReason = onlineRoomAnalyticsFailureReason(error);
+      joinTerminalLogged = true;
+      unawaited(
+        widget.analytics.logEvent(
+          OnlineFlowEvent(
+            experience: OnlineExperience.quickTable,
+            stage: failureReason == OnlineFlowFailureReason.cancelled
+                ? OnlineFlowStage.joinCancelled
+                : OnlineFlowStage.joinFailed,
+            launchSource: widget.launchSource,
+            elapsedMilliseconds: _elapsedMillisecondsSince(joinStartedAt),
+            joinMethod: OnlineJoinMethod.publicDirectory,
+            failureReason: failureReason == OnlineFlowFailureReason.cancelled
+                ? null
+                : failureReason,
+          ),
+        ),
+      );
       if (mounted) _showRoomError(context, error);
     } finally {
       if (mounted) setState(() => joiningRoomId = null);
@@ -622,10 +1011,14 @@ class RoomLobbyScreen extends StatefulWidget {
     super.key,
     required this.controller,
     this.shareService,
+    this.analytics = const NoopGameAnalytics(),
+    this.launchSource = MatchLaunchSource.home,
   });
 
   final OnlineRoomController controller;
   final RoomInviteShareService? shareService;
+  final GameAnalytics analytics;
+  final MatchLaunchSource launchSource;
 
   @override
   State<RoomLobbyScreen> createState() => _RoomLobbyScreenState();
@@ -635,12 +1028,16 @@ class _RoomLobbyScreenState extends State<RoomLobbyScreen> {
   String? action;
   bool allowPop = false;
   bool handledClosedRoom = false;
+  bool handledUnavailableRoom = false;
+  bool hadLobby = false;
+  bool intentionalLeaveInProgress = false;
 
   bool get busy => action != null;
 
   @override
   void initState() {
     super.initState();
+    hadLobby = widget.controller.lobby != null;
     widget.controller.addListener(_handleControllerUpdate);
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (mounted) _handleControllerUpdate();
@@ -654,6 +1051,9 @@ class _RoomLobbyScreenState extends State<RoomLobbyScreen> {
     oldWidget.controller.removeListener(_handleControllerUpdate);
     widget.controller.addListener(_handleControllerUpdate);
     handledClosedRoom = false;
+    handledUnavailableRoom = false;
+    hadLobby = widget.controller.lobby != null;
+    intentionalLeaveInProgress = false;
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (mounted) _handleControllerUpdate();
     });
@@ -666,14 +1066,26 @@ class _RoomLobbyScreenState extends State<RoomLobbyScreen> {
   }
 
   void _handleControllerUpdate() {
-    if (!mounted ||
-        handledClosedRoom ||
-        widget.controller.lobby?.status != RoomStatus.closed) {
+    if (!mounted) return;
+    final lobby = widget.controller.lobby;
+    if (lobby != null) {
+      hadLobby = true;
+      if (handledClosedRoom || lobby.status != RoomStatus.closed) return;
+      handledClosedRoom = true;
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) unawaited(_exitClosedRoom());
+      });
       return;
     }
-    handledClosedRoom = true;
+    if (!hadLobby ||
+        handledClosedRoom ||
+        intentionalLeaveInProgress ||
+        handledUnavailableRoom) {
+      return;
+    }
+    handledUnavailableRoom = true;
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (mounted) unawaited(_exitClosedRoom());
+      if (mounted) unawaited(_exitUnavailableRoom());
     });
   }
 
@@ -702,6 +1114,25 @@ class _RoomLobbyScreenState extends State<RoomLobbyScreen> {
       );
   }
 
+  Future<void> _exitUnavailableRoom() async {
+    if (!mounted) return;
+    final messenger = ScaffoldMessenger.of(context);
+    if (!allowPop) {
+      setState(() => allowPop = true);
+      await WidgetsBinding.instance.endOfFrame;
+      if (!mounted) return;
+    }
+    await Navigator.of(context).maybePop();
+    messenger
+      ..hideCurrentSnackBar()
+      ..showSnackBar(
+        const SnackBar(
+          key: ValueKey('room-unavailable-feedback'),
+          content: PopText('Ya no estás en la sala.'),
+        ),
+      );
+  }
+
   @override
   Widget build(BuildContext context) => PopScope(
     canPop: allowPop,
@@ -709,8 +1140,10 @@ class _RoomLobbyScreenState extends State<RoomLobbyScreen> {
       if (didPop || allowPop || busy) return;
       final lobby = widget.controller.lobby;
       if (lobby == null) {
-        setState(() => allowPop = true);
-        Navigator.of(context).maybePop();
+        if (!handledUnavailableRoom) {
+          handledUnavailableRoom = true;
+          unawaited(_exitUnavailableRoom());
+        }
         return;
       }
       final isHost =
@@ -857,13 +1290,38 @@ class _RoomLobbyScreenState extends State<RoomLobbyScreen> {
     if (renderBox is RenderBox && renderBox.hasSize) {
       origin = renderBox.localToGlobal(Offset.zero) & renderBox.size;
     }
-    await _run(
-      'share',
-      () async => service.share(
-        RoomInvite(lobby.roomCode),
-        sharePositionOrigin: origin,
-      ),
-    );
+    await _run('share', () async {
+      try {
+        final result = await service.share(
+          RoomInvite(lobby.roomCode),
+          sharePositionOrigin: origin,
+        );
+        final stage = result.status == ShareResultStatus.dismissed
+            ? OnlineFlowStage.inviteShareCancelled
+            : OnlineFlowStage.inviteShared;
+        unawaited(
+          widget.analytics.logEvent(
+            OnlineFlowEvent(
+              experience: OnlineExperience.quickTable,
+              stage: stage,
+              launchSource: widget.launchSource,
+            ),
+          ),
+        );
+      } catch (error) {
+        unawaited(
+          widget.analytics.logEvent(
+            OnlineFlowEvent(
+              experience: OnlineExperience.quickTable,
+              stage: OnlineFlowStage.inviteShareFailed,
+              launchSource: widget.launchSource,
+              failureReason: onlineRoomAnalyticsFailureReason(error),
+            ),
+          ),
+        );
+        rethrow;
+      }
+    });
   }
 
   Future<void> _confirmKick(LobbyParticipant participant) async {
@@ -936,10 +1394,17 @@ class _RoomLobbyScreenState extends State<RoomLobbyScreen> {
       ),
     );
     if (confirmed != true) return;
+    intentionalLeaveInProgress = true;
     await _run('leave', widget.controller.leaveRoom);
     if (mounted && widget.controller.lobby == null) {
-      setState(() => allowPop = true);
-      Navigator.of(context).maybePop();
+      if (!allowPop) {
+        setState(() => allowPop = true);
+        await WidgetsBinding.instance.endOfFrame;
+        if (!mounted) return;
+      }
+      await Navigator.of(context).maybePop();
+    } else {
+      intentionalLeaveInProgress = false;
     }
   }
 }
@@ -1764,7 +2229,82 @@ int? _latestOpeningRoll(OpeningRollState opening, String participantId) {
   return null;
 }
 
+Future<void> _cancelPendingRoomJoin(OnlineRoomController controller) async {
+  try {
+    await controller.cancelPendingJoin();
+  } catch (_) {
+    // The local attempt token is invalidated synchronously. Remote cleanup is
+    // best effort and must never make route disposal fail.
+  }
+}
+
+Future<void> _cancelPendingRoomCreate(OnlineRoomController controller) async {
+  try {
+    await controller.cancelPendingCreate();
+  } catch (_) {
+    // The attempt token is invalidated synchronously by production. Cleanup is
+    // best effort when a controller is concurrently being disposed.
+  }
+}
+
+OnlineFlowFailureReason onlineRoomAnalyticsFailureReason(Object error) {
+  if (error is TimeoutException) return OnlineFlowFailureReason.timeout;
+  if (error is OnlineRoomOperationCancelledException) {
+    return OnlineFlowFailureReason.cancelled;
+  }
+  if (error is FirebaseException) {
+    final code = error.code.toLowerCase().replaceAll('_', '-');
+    return switch (code) {
+      'network-request-failed' ||
+      'network-error' ||
+      'disconnected' ||
+      'unavailable' => OnlineFlowFailureReason.network,
+      'permission-denied' => OnlineFlowFailureReason.permission,
+      'operation-not-allowed' ||
+      'app-not-authorized' ||
+      'invalid-api-key' => OnlineFlowFailureReason.configuration,
+      _ => OnlineFlowFailureReason.unknown,
+    };
+  }
+  if (error is OnlineTransportException) {
+    return switch (error.code) {
+      OnlineTransportErrorCode.joinTimedOut => OnlineFlowFailureReason.timeout,
+      OnlineTransportErrorCode.joinCancelled =>
+        OnlineFlowFailureReason.cancelled,
+      OnlineTransportErrorCode.roomFull => OnlineFlowFailureReason.roomFull,
+      OnlineTransportErrorCode.roomNotFound ||
+      OnlineTransportErrorCode.roomClosed => OnlineFlowFailureReason.roomClosed,
+      OnlineTransportErrorCode.invalidIdentity ||
+      OnlineTransportErrorCode.invalidPathSegment ||
+      OnlineTransportErrorCode.invalidQueueTicket =>
+        OnlineFlowFailureReason.invalidInput,
+      OnlineTransportErrorCode.roomCodeUnavailable ||
+      OnlineTransportErrorCode.duplicateSeat ||
+      OnlineTransportErrorCode.unknownParticipant ||
+      OnlineTransportErrorCode.notHost ||
+      OnlineTransportErrorCode.invalidRoomStatus =>
+        OnlineFlowFailureReason.unavailable,
+    };
+  }
+  if (error is LobbyException) {
+    return switch (error.code) {
+      LobbyErrorCode.invalidRoomCode ||
+      LobbyErrorCode.invalidParticipant => OnlineFlowFailureReason.invalidInput,
+      LobbyErrorCode.roomFull => OnlineFlowFailureReason.roomFull,
+      LobbyErrorCode.roomNotJoinable => OnlineFlowFailureReason.roomClosed,
+      _ => OnlineFlowFailureReason.unavailable,
+    };
+  }
+  if (error is RoomInviteFormatException) {
+    return OnlineFlowFailureReason.invalidInput;
+  }
+  return OnlineFlowFailureReason.unknown;
+}
+
 String onlineRoomErrorMessage(Object error) => switch (error) {
+  TimeoutException() =>
+    'La operación tardó demasiado. Revisa tu conexión e inténtalo otra vez.',
+  OnlineRoomOperationCancelledException() => 'La operación fue cancelada.',
   LobbyException(:final code) => switch (code) {
     LobbyErrorCode.invalidRoomCode => 'El código de sala no es válido.',
     LobbyErrorCode.invalidParticipant ||

@@ -3,10 +3,18 @@
 Juego de parchés multiplataforma desarrollado con Flutter para iOS, Android,
 macOS y Windows.
 
-## Estado actual · versión 2.1
+## Estado actual · versión 2.2
 
 - Modos Tradicional y Caos.
-- Quick Pop local de dos fichas por jugador para partidas más cortas.
+- Quick Pop de dos fichas por jugador para partidas más cortas: busca a otro
+  jugador online durante cinco segundos. Si al llegar al límite no existe un
+  compromiso humano compartido, abre la partida local contra CPU; si una
+  partida humana ya fue comprometida pero la conexión no permite confirmar el
+  mismo resultado en ambos dispositivos, muestra una opción honesta para
+  revisar la conexión y volver, sin separar a los jugadores.
+- Quick Table local y online con salas públicas o privadas, código de seis
+  caracteres, invitación compartible, hasta cuatro jugadores y tirada inicial
+  para decidir quién comienza; los turnos continúan hacia la derecha.
 - Partidas contra CPU y mesa rápida local con rivales identificados como CPU.
 - Tablero completo con salidas, seguros, barreras, capturas y carriles de meta.
 - Cubos animados, poderes automáticos, trampas, escudo y efectos visuales.
@@ -20,18 +28,21 @@ macOS y Windows.
 - Tienda de temas, fichas, dados y avatares, con vista previa.
 - Interfaz en español, inglés o idioma del sistema.
 - Analítica anónima opcional —apagada por defecto y activable en Ajustes— de
-  inicio, primera tirada, finalización, abandono, reanudación, revancha,
-  tutorial, misiones, anuncios voluntarios y tienda.
+  sesión y retención, primera tirada, finalización, abandono, reanudación,
+  revancha, tutorial, misiones, anuncios voluntarios, tienda y embudos de
+  conexión de Quick Pop y Quick Table. No registra nombres, códigos de sala,
+  identificadores de cuenta ni errores sin filtrar.
 - Banners AdMob adaptables pueden aparecer como una banda inferior reservada en
   iOS y Android, incluso durante una partida, la guía o la búsqueda, sin cubrir
   controles, pausar ni interrumpir una jugada. Los rewarded ads se abren solo
   cuando el jugador los elige voluntariamente; macOS no muestra anuncios.
 - Diseño adaptable para teléfono, tableta, escritorio y ambas orientaciones.
 
-El juego online competitivo todavía no se anuncia como disponible. El proyecto
-incluye el contrato de autoridad, reconexión, idempotencia y validación que debe
-ejecutarse en un servidor real antes de activar Quick Pop online, rangos o
-eventos con recompensas.
+Quick Pop online y las salas casuales de Quick Table están disponibles para
+pruebas controladas sobre Firebase. El modo clasificado, premios competitivos y
+una publicación social a gran escala todavía requieren autoridad confiable del
+servidor, App Check, moderación y endurecimiento operativo; por eso no se
+anuncian como funciones de producción.
 
 ## Ejecutar
 
@@ -50,12 +61,15 @@ flutter run -d <device-id>
 Para generar un APK optimizado de prueba sin servir anuncios reales:
 
 ```bash
-flutter build apk --release --dart-define=QA_TEST_ADS=true
+PARCHES_POP_ALLOW_DEBUG_RELEASE_APK=true flutter build apk --release --dart-define=QA_TEST_ADS=true
 ```
 
 `QA_TEST_ADS` utiliza exclusivamente las unidades de prueba oficiales de
-Google. Las compilaciones de producción omiten este parámetro y conservan las
-unidades reales configuradas para la aplicación.
+Google. `PARCHES_POP_ALLOW_DEBUG_RELEASE_APK` permite únicamente el APK QA
+firmado con el certificado de depuración cuando todavía no existe un keystore
+privado de distribución. Nunca se debe publicar ese APK en una tienda. Las
+compilaciones de producción omiten `QA_TEST_ADS` y requieren su propio keystore
+seguro, sin esta excepción de QA.
 
 ## Verificación
 

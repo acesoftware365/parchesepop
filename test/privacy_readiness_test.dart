@@ -14,7 +14,11 @@ void main() {
     expect(page, contains('Rewarded ads are always voluntary.'));
     expect(page, contains('<strong>Tienda</strong>'));
     expect(page, contains('deletes the anonymous Firebase'));
-    expect(page, contains('Resolved matches, immutable chat'));
+    expect(
+      page,
+      contains('Resolved matchmaking tickets and claims, resolved matches'),
+    );
+    expect(page, contains('After that window, a player cannot list the queue'));
     expect(
       mainSource,
       contains("Uri.parse('https://parchese-pop.web.app/privacy.html')"),
@@ -50,5 +54,42 @@ void main() {
     ).readAsStringSync();
 
     expect(manifest, contains('android:allowBackup="false"'));
+  });
+
+  test('native analytics collection defaults off on macOS', () {
+    final infoPlist = File('macos/Runner/Info.plist').readAsStringSync();
+
+    expect(infoPlist, contains('FIREBASE_ANALYTICS_COLLECTION_ENABLED'));
+    expect(
+      infoPlist,
+      contains('<key>FIREBASE_ANALYTICS_COLLECTION_ENABLED</key>\n\t<false/>'),
+    );
+  });
+
+  test('analytics consent copy covers retention and both online funnels', () {
+    final mainSource = File('lib/main.dart').readAsStringSync();
+    final languageSource = File('lib/app_language.dart').readAsStringSync();
+    final policy = File('PRIVACY_POLICY.md').readAsStringSync();
+    final hostedPolicy = File('hosting/privacy.html').readAsStringSync();
+
+    expect(mainSource, contains('Mide sesiones, retención y pasos online'));
+    expect(mainSource, contains('Quick Pop y Quick Table'));
+    expect(mainSource, contains('códigos de sala'));
+    expect(languageSource, contains('sessions, retention'));
+    expect(languageSource, contains('room codes'));
+
+    expect(policy, contains('anonymous app-session starts'));
+    expect(policy, contains('since first use for aggregate retention'));
+    expect(policy, contains('Quick Pop and Quick'));
+    expect(policy, contains('Table; elapsed time'));
+    expect(policy, contains('room codes, Firebase UID'));
+    expect(policy, contains('raw error'));
+    expect(policy, contains('inicios de sesión anónimos'));
+    expect(policy, contains('UID de Firebase'));
+
+    expect(hostedPolicy, contains('sesiones anónimas y días'));
+    expect(hostedPolicy, contains('Quick Pop y Quick'));
+    expect(hostedPolicy, contains('anonymous sessions and days since first'));
+    expect(hostedPolicy, contains('room codes, Firebase identifiers'));
   });
 }

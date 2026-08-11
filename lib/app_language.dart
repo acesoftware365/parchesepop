@@ -97,7 +97,7 @@ String appTranslate(BuildContext context, String source) =>
 const _legacyPrivacyDescription =
     'El prototipo guarda localmente el perfil, las monedas, las compras cosméticas y las preferencias. Antes de publicar se documentarán el servicio de cuenta, analíticas, publicidad y cualquier dato que salga del dispositivo.';
 const _privacyDescription =
-    'La aplicación guarda localmente el perfil, las monedas, las compras cosméticas y las preferencias. Si activas la analítica anónima, Google Analytics recopila eventos de partidas, reanudación, tutorial, anuncios voluntarios, monedas y tienda para mejorar el juego. No enviamos el nombre, el correo, los mensajes, la bandera ni el avatar.';
+    'La aplicación guarda localmente el perfil, las monedas, las compras cosméticas y las preferencias. Si activas la analítica anónima, Google Analytics recopila sesiones y retención por día, pasos de Quick Pop y Quick Table, partidas, reanudación, tutorial, anuncios voluntarios, monedas y tienda para mejorar el juego. No enviamos el nombre, el correo, los mensajes, la bandera, el avatar ni los códigos de sala.';
 
 String translateForLanguage(String source, String languageCode) {
   if (source == _legacyPrivacyDescription) source = _privacyDescription;
@@ -741,6 +741,7 @@ const _english = <String, String>{
   'Sala cerrada': 'Room closed',
   'SALA ONLINE': 'ONLINE ROOM',
   'La sala ya no está disponible.': 'The room is no longer available.',
+  'Ya no estás en la sala.': 'You are no longer in the room.',
   'Código copiado.': 'Code copied.',
   '¿EXPULSAR JUGADOR?': 'REMOVE PLAYER?',
   'EXPULSAR': 'REMOVE',
@@ -795,6 +796,9 @@ const _english = <String, String>{
       'The host did not respond in time. Try again.',
   'La solicitud para entrar fue cancelada.':
       'The request to join was canceled.',
+  'La operación tardó demasiado. Revisa tu conexión e inténtalo otra vez.':
+      'The operation took too long. Check your connection and try again.',
+  'La operación fue cancelada.': 'The operation was canceled.',
   'No pudimos completar la acción online. Inténtalo otra vez.':
       'We could not complete the online action. Try again.',
   'La invitación de sala no es válida.': 'The room invitation is invalid.',
@@ -817,9 +821,14 @@ const _english = <String, String>{
   'Abriendo la partida…': 'Opening the match…',
   'Conectando la mesa…': 'Connecting the table…',
   'Conectando con Parchís Pop…': 'Connecting to Parchís Pop…',
+  'Preparando la búsqueda online…': 'Preparing the online search…',
   'Buscando un jugador online…': 'Searching for an online player…',
   'Jugador encontrado · preparando la mesa…':
       'Player found · preparing the table…',
+  'Sincronizando la mesa con el otro jugador…':
+      'Syncing the table with the other player…',
+  'Confirmando la partida con el otro jugador…':
+      'Confirming the match with the other player…',
   'Luego jugarás contra CPU automáticamente':
       'Then you will automatically play against the CPU',
   'ONLINE · LISTO': 'ONLINE · READY',
@@ -844,6 +853,10 @@ const _english = <String, String>{
       'We found a player, but could not open the table. Try again.',
   'No pudimos iniciar Quick Pop online. Inténtalo otra vez.':
       'We could not start Quick Pop online. Try again.',
+  'No pudimos confirmar la partida online.':
+      'We could not confirm the online match.',
+  'Revisa tu conexión y vuelve para buscar otra partida. Para no separar a los jugadores, aquí no iniciaremos una partida contra CPU.':
+      'Check your connection and go back to search for another match. To keep both players together, we will not start a CPU match from here.',
   'El modo online necesita conexión con un servidor seguro. Mientras lo terminamos, puedes probar Quick Pop contra el CPU.':
       'Online play requires a secure server connection. While we finish it, you can try Quick Pop against the CPU.',
   'PROBAR QUICK POP': 'TRY QUICK POP',
@@ -1345,15 +1358,15 @@ const _english = <String, String>{
   'Publicidad': 'Advertising',
   'Opciones de privacidad de anuncios': 'Ad privacy options',
   'Analítica anónima': 'Anonymous analytics',
-  'Ayuda a mejorar el juego sin enviar tu nombre ni correo':
-      'Helps improve the game without sending your name or email',
+  'Mide sesiones, retención y pasos online de Quick Pop y Quick Table, sin enviar nombre, correo ni códigos de sala':
+      'Measures sessions, retention, and Quick Pop and Quick Table online steps without sending names, email, or room codes',
   'No se pudo guardar la preferencia de analítica.':
       'The analytics preference could not be saved.',
   'Eliminar cuenta y datos': 'Delete account and data',
   'Eliminar cuenta y datos de invitado': 'Delete guest account and data',
   'Eliminar datos': 'Delete data',
   _privacyDescription:
-      'The app stores the profile, coins, cosmetic purchases, and preferences locally. If you enable anonymous analytics, Google Analytics collects match, resume, tutorial, optional-ad, currency, and shop events to improve the game. We do not send the name, email, messages, flag, or avatar.',
+      'The app stores the profile, coins, cosmetic purchases, and preferences locally. If you enable anonymous analytics, Google Analytics collects sessions and day-based retention, Quick Pop and Quick Table steps, match, resume, tutorial, optional-ad, currency, and shop events to improve the game. We do not send the name, email, messages, flag, avatar, or room codes.',
   'Parchís Pop es un juego de entretenimiento. Las monedas de esta versión son virtuales, no tienen valor monetario y no otorgan ventajas competitivas.':
       'Parchís Pop is an entertainment game. Coins in this version are virtual, have no monetary value, and do not provide competitive advantages.',
   'Parchís Pop es un juego de entretenimiento. Las monedas de esta versión son de prueba, no tienen valor monetario y no otorgan ventajas competitivas.':

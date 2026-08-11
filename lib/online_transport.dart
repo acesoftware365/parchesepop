@@ -60,6 +60,28 @@ abstract interface class OnlineRealtimeStore {
   Future<int> serverNowMs();
 }
 
+/// Optional ordered-query boundary used by the production Firebase adapter.
+///
+/// In-memory stores intentionally keep the minimal API above. Firebase uses
+/// this capability so Security Rules can enforce that Quick Pop downloads only
+/// active queue entries instead of treating rules as post-download filters.
+abstract interface class OnlineRealtimeQueryStore {
+  Future<Object?> readOrderedChildren(
+    String path, {
+    required String orderByChild,
+    required num startAt,
+    required int limitToFirst,
+  });
+}
+
+/// Production adapters may need to defer exact opponent reads until the
+/// deterministic claim root exists. Firebase rules use the claim metadata to
+/// authorize that read; deterministic in-memory stores can continue to read
+/// both ticket records while exercising the same transport logic.
+abstract interface class OnlineRealtimeExactReadPolicy {
+  bool get opponentTicketExactReadRequiresClaim;
+}
+
 /// Optional lifecycle implemented by realtime adapters that own sockets or
 /// subscriptions. Account deletion uses it to stop every authenticated
 /// listener before the Firebase identity disappears.
@@ -224,6 +246,7 @@ final class OnlineTransportClient {
   static const Duration _roomReservationLifetime = Duration(minutes: 2);
   static const Duration _quickClaimHandshakeGrace = Duration(milliseconds: 250);
   static const Duration _quickServerDeadlineRetry = Duration(milliseconds: 250);
+  static const int _quickQueueReadLimit = 64;
 
   final OnlineRealtimeStore store;
   final OnlineTransportIdentity identity;
@@ -373,7 +396,10 @@ final class OnlineTransportClient {
 
     try {
       await store.update(onlineTransportRoot, <String, Object?>{
-        'rooms/$roomId': room.toJson(),
+        'rooms/$roomId': <String, Object?>{
+          ...room.toJson(),
+          'creationState': 'initializing',
+        },
         ..._accountResourceRootUpdates(<String, Object?>{
           'rooms/$roomId': <String, Object?>{
             'roomId': roomId,
@@ -390,17 +416,24 @@ final class OnlineTransportClient {
           },
         }, nowMs: now),
       });
-      await _activateRoomCode(reservation);
-      await _syncPublicRoom(room);
       await _connectRoomPresence(
         roomId: roomId,
         nowMs: now,
         connectionId: connectionId,
       );
+      // A room is not joinable or discoverable until its host presence is
+      // fully armed. This removes the publication window in which a guest
+      // could target a room whose creator is about to fail.
+      await _activateRoomCode(reservation);
+      await _syncPublicRoom(room);
+      await store.set('$_roomsPath/$roomId/creationState', 'ready');
       return room;
-    } catch (_) {
-      await _releaseRoomCode(reservation);
-      rethrow;
+    } catch (error, stackTrace) {
+      await _rollbackFailedRoomCreation(
+        roomId: roomId,
+        reservation: reservation,
+      );
+      Error.throwWithStackTrace(error, stackTrace);
     }
   }
 
@@ -456,14 +489,30 @@ final class OnlineTransportClient {
       roomCode: code,
       uid: identity.uid,
       displayName: identity.displayName,
+      attemptId: _stableId(
+        'join|$roomId|${identity.uid}|$now|${_random.nextInt(0x7fffffff)}',
+        prefix: 'join_',
+      ),
       requestedAtMs: now,
     );
-    await store.update(onlineTransportRoot, <String, Object?>{
-      'joinRequests/$roomId/${identity.uid}': request.toJson(),
-      ..._accountResourceRootUpdates(<String, Object?>{
-        'joinRequests/$roomId': request.toJson(),
-      }, nowMs: now),
-    });
+    final fencePath = _joinFencePath(request);
+    await store.set(fencePath, _joinFenceJson(request));
+    try {
+      await store.update(onlineTransportRoot, <String, Object?>{
+        'joinRequests/$roomId/${identity.uid}': request.toJson(),
+        ..._accountResourceRootUpdates(<String, Object?>{
+          'joinRequests/$roomId': request.toJson(),
+        }, nowMs: now),
+      });
+    } catch (error, stackTrace) {
+      try {
+        await _removeJoinFenceIfMatching(request);
+      } catch (_) {
+        // Preserve the publication failure. A fence without a matching
+        // top-level request is inert and can be replaced by the next attempt.
+      }
+      Error.throwWithStackTrace(error, stackTrace);
+    }
     _pendingJoinRequests[roomId] = request;
     return request;
   }
@@ -590,9 +639,14 @@ final class OnlineTransportClient {
       // a room-root transaction.
       final map = onlineMap(raw);
       final members = onlineMap(map['members']);
+      final joinFences = onlineMap(map['joinFences']);
       final occupied = room.members.values.map((member) => member.seat).toSet();
       var admitted = 0;
       for (final request in requests) {
+        // The room-local fence participates in this room-root transaction.
+        // Cancelling it at the child path forces Firebase to rerun this
+        // updater and makes a stale request snapshot inadmissible.
+        if (!_joinFenceMatches(joinFences[request.uid], request)) continue;
         if (members.containsKey(request.uid)) continue;
         if (members.length >= LobbySeatColor.values.length) break;
         final seat = LobbySeatColor.values.firstWhere(
@@ -617,12 +671,27 @@ final class OnlineTransportClient {
       map['updatedAt'] = now;
       return OnlineStoreTransactionDecision.commit(map);
     });
-    final admittedRoom = OnlineRoomRecord.fromJson(result.value);
+    var admittedRoom = OnlineRoomRecord.fromJson(result.value);
     for (final request in requests) {
-      if (admittedRoom.members.containsKey(request.uid)) {
-        await store.set('$_joinRequestsPath/$cleanRoomId/${request.uid}', null);
+      final member = admittedRoom.members[request.uid];
+      if (!_memberMatchesJoinRequest(member, request)) continue;
+      final fence = await store.read(_joinFencePath(request));
+      final liveRequest = await store.read(
+        '$_joinRequestsPath/$cleanRoomId/${request.uid}',
+      );
+      if (!_joinFenceMatches(fence, request) ||
+          !_joinRequestMatches(liveRequest, request)) {
+        // Defense in depth for stores that do not implement Firebase's
+        // parent/child transaction retry semantics. Production Firebase
+        // already linearizes the fence deletion against the transaction.
+        admittedRoom = await _removeCancelledAdmissionAsHost(
+          admittedRoom,
+          request,
+        );
       }
+      await _removeTopLevelJoinRequestIfMatching(request);
     }
+    admittedRoom = (await readRoom(cleanRoomId)) ?? admittedRoom;
     await _syncPublicRoom(admittedRoom);
     return admittedRoom;
   }
@@ -666,7 +735,6 @@ final class OnlineTransportClient {
           connectionId: _newConnectionId(room.id, now),
         );
         await _updateAccountResources(<String, Object?>{
-          'joinRequests/${request.roomId}': null,
           'rooms/${room.id}': <String, Object?>{
             'roomId': room.id,
             'role': room.hostUid == identity.uid ? 'host' : 'member',
@@ -680,6 +748,7 @@ final class OnlineTransportClient {
               ? <String, Object?>{'roomId': room.id, 'indexedAt': now}
               : null,
         }, nowMs: now);
+        await _finishSuccessfulJoin(request);
         _pendingJoinRequests.remove(request.roomId);
         return (await readRoom(room.id))!;
       }
@@ -699,37 +768,182 @@ final class OnlineTransportClient {
     }
   }
 
-  Future<void> _discardJoinRequest(OnlineRoomJoinRequestRecord request) async {
-    var removed = false;
+  String _joinFencePath(OnlineRoomJoinRequestRecord request) =>
+      '$_roomsPath/${request.roomId}/joinFences/${request.uid}';
+
+  Map<String, Object?> _joinFenceJson(OnlineRoomJoinRequestRecord request) =>
+      <String, Object?>{
+        'uid': request.uid,
+        'attemptId': request.attemptId,
+        'requestedAt': request.requestedAtMs,
+      };
+
+  bool _joinFenceMatches(Object? raw, OnlineRoomJoinRequestRecord request) {
+    final fence = onlineMap(raw);
+    return fence['uid'] == request.uid &&
+        fence['attemptId'] == request.attemptId &&
+        fence['requestedAt'] == request.requestedAtMs;
+  }
+
+  bool _joinRequestMatches(Object? raw, OnlineRoomJoinRequestRecord request) {
+    if (raw == null) return false;
     try {
-      final now = await store.serverNowMs();
-      await store.update(onlineTransportRoot, <String, Object?>{
-        'joinRequests/${request.roomId}/${request.uid}': null,
-        ..._accountResourceRootUpdates(<String, Object?>{
-          'joinRequests/${request.roomId}': null,
-        }, nowMs: now),
-      });
-      removed = true;
-    } catch (_) {
-      // The room or request may already have been removed concurrently.
-    } finally {
+      final current = OnlineRoomJoinRequestRecord.fromJson(
+        raw,
+        uid: request.uid,
+      );
+      return current.roomId == request.roomId &&
+          current.roomCode == request.roomCode &&
+          current.attemptId == request.attemptId &&
+          current.requestedAtMs == request.requestedAtMs;
+    } on FormatException {
+      return false;
+    }
+  }
+
+  bool _memberMatchesJoinRequest(
+    OnlineRoomMemberRecord? member,
+    OnlineRoomJoinRequestRecord request,
+  ) =>
+      member != null &&
+      member.uid == request.uid &&
+      member.displayName == request.displayName &&
+      member.joinedAtMs == request.requestedAtMs;
+
+  Future<_JoinFenceRemoval> _removeJoinFenceIfMatching(
+    OnlineRoomJoinRequestRecord request,
+  ) async {
+    final result = await store.transaction(_joinFencePath(request), (raw) {
+      if (raw == null) return const OnlineStoreTransactionDecision.abort();
+      if (!_joinFenceMatches(raw, request)) {
+        return const OnlineStoreTransactionDecision.abort();
+      }
+      return const OnlineStoreTransactionDecision.commit(null);
+    });
+    if (result.committed) return _JoinFenceRemoval.removed;
+    return result.value == null
+        ? _JoinFenceRemoval.absent
+        : _JoinFenceRemoval.mismatched;
+  }
+
+  Future<void> _removeTopLevelJoinRequestIfMatching(
+    OnlineRoomJoinRequestRecord request,
+  ) async {
+    await store.transaction(
+      '$_joinRequestsPath/${request.roomId}/${request.uid}',
+      (raw) {
+        if (!_joinRequestMatches(raw, request)) {
+          return const OnlineStoreTransactionDecision.abort();
+        }
+        return const OnlineStoreTransactionDecision.commit(null);
+      },
+    );
+  }
+
+  Future<void> _removeAccountJoinRequestIfMatching(
+    OnlineRoomJoinRequestRecord request,
+  ) async {
+    await store.transaction(
+      '$_accountResourcesPath/joinRequests/${request.roomId}',
+      (raw) {
+        if (!_joinRequestMatches(raw, request)) {
+          return const OnlineStoreTransactionDecision.abort();
+        }
+        return const OnlineStoreTransactionDecision.commit(null);
+      },
+    );
+  }
+
+  Future<void> _finishSuccessfulJoin(
+    OnlineRoomJoinRequestRecord request,
+  ) async {
+    await _removeTopLevelJoinRequestIfMatching(request);
+    await _removeAccountJoinRequestIfMatching(request);
+    await _removeJoinFenceIfMatching(request);
+  }
+
+  Future<void> _removeCancelledOwnMembership(
+    OnlineRoomJoinRequestRecord request,
+  ) async {
+    final room = await readRoom(request.roomId);
+    final member = room?.members[request.uid];
+    final ownsCancelledMembership = _memberMatchesJoinRequest(member, request);
+    final waitingMembership =
+        ownsCancelledMembership && room?.status == RoomStatus.waiting;
+    final lease = _presenceLeases.remove(request.roomId);
+    if (lease != null) await lease.cancel();
+
+    final updates = <String, Object?>{
+      '$onlineAccountResourcesNode/${identity.uid}/rooms/${request.roomId}':
+          null,
+      '$onlineAccountResourcesNode/${identity.uid}/presence/${request.roomId}':
+          null,
+    };
+    if (waitingMembership) {
+      updates
+        ..['rooms/${request.roomId}/presence/${request.uid}'] = null
+        ..['rooms/${request.roomId}/members/${request.uid}'] = null;
+    }
+    if (waitingMembership || room == null || member == null) {
+      await store.update(onlineTransportRoot, updates);
+    } else if (ownsCancelledMembership && lease != null) {
+      // The lobby advanced concurrently. Preserve immutable membership and
+      // publish a disconnect instead of attempting an illegal late removal.
+      await connectRoomPresence(
+        request.roomId,
+      ).then((replacement) => replacement.disconnect());
+    }
+  }
+
+  Future<OnlineRoomRecord> _removeCancelledAdmissionAsHost(
+    OnlineRoomRecord fallback,
+    OnlineRoomJoinRequestRecord request,
+  ) async {
+    final now = await store.serverNowMs();
+    final result = await store.transaction('$_roomsPath/${request.roomId}', (
+      raw,
+    ) {
+      if (raw == null) return const OnlineStoreTransactionDecision.abort();
+      final room = OnlineRoomRecord.fromJson(raw);
+      _requireHost(room);
+      final map = onlineMap(raw);
+      final member = room.members[request.uid];
+      if (room.status != RoomStatus.waiting ||
+          !_memberMatchesJoinRequest(member, request)) {
+        return const OnlineStoreTransactionDecision.abort();
+      }
+      final members = onlineMap(map['members'])..remove(request.uid);
+      final presence = onlineMap(map['presence'])..remove(request.uid);
+      final joinFences = onlineMap(map['joinFences'])..remove(request.uid);
+      map
+        ..['members'] = members
+        ..['presence'] = presence
+        ..['joinFences'] = joinFences
+        ..['revision'] = room.revision + 1
+        ..['updatedAt'] = now;
+      return OnlineStoreTransactionDecision.commit(map);
+    });
+    if (result.value == null) return fallback;
+    return OnlineRoomRecord.fromJson(result.value);
+  }
+
+  Future<void> _discardJoinRequest(OnlineRoomJoinRequestRecord request) async {
+    final fenceResult = await _removeJoinFenceIfMatching(request);
+    if (fenceResult != _JoinFenceRemoval.mismatched) {
+      await _removeCancelledOwnMembership(request);
+    }
+    await _removeTopLevelJoinRequestIfMatching(request);
+    await _removeAccountJoinRequestIfMatching(request);
+    final pending = _pendingJoinRequests[request.roomId];
+    if (pending?.attemptId == request.attemptId) {
       _pendingJoinRequests.remove(request.roomId);
     }
-    if (!removed) return;
   }
 
   Future<void> cancelRoomJoinRequest(
     OnlineRoomJoinRequestRecord request,
   ) async {
     await _discardJoinRequest(request);
-    final room = await readRoom(request.roomId);
-    if (room == null || !room.members.containsKey(identity.uid)) return;
-    try {
-      await leaveRoom(room.id);
-    } on OnlineTransportException {
-      // A simultaneous close or game start still leaves onDisconnect armed.
-      await _presenceLeases.remove(room.id)?.disconnect();
-    }
   }
 
   Future<OnlineRoomRecord> joinRoomByCode(
@@ -898,7 +1112,15 @@ final class OnlineTransportClient {
   Future<QuickPopQueueTicket> enqueueQuickPop({
     required String mode,
     String matchFormat = 'quickPop',
+    Duration searchWindow = quickPopSearchWindow,
   }) async {
+    if (searchWindow <= Duration.zero || searchWindow > quickPopSearchWindow) {
+      throw ArgumentError.value(
+        searchWindow,
+        'searchWindow',
+        'Quick Pop search budget must be between 1 ms and 5 seconds.',
+      );
+    }
     final queueKey = _queueKey(mode, matchFormat);
     final now = await store.serverNowMs();
     final ticketId = _stableId(
@@ -911,7 +1133,7 @@ final class OnlineTransportClient {
       displayName: identity.displayName,
       queueKey: queueKey,
       joinedAtMs: now,
-      deadlineAtMs: now + quickPopSearchWindow.inMilliseconds,
+      deadlineAtMs: now + searchWindow.inMilliseconds,
     );
     await store.update(onlineTransportRoot, <String, Object?>{
       'quickQueues/$queueKey/${identity.uid}': ticket.toJson(),
@@ -947,10 +1169,24 @@ final class OnlineTransportClient {
       }
     }
 
-    final queue = onlineMap(
-      await store.read('$_quickQueuesPath/${ticket.queueKey}'),
-    );
-    final pair = _deterministicPairFor(current, queue);
+    now = await store.serverNowMs();
+    final _QuickPopPair? pair;
+    if (now >= current.deadlineAtMs) {
+      // Queue enumeration is intentionally unavailable after this player's
+      // search expires. An already attached, verified claim may still finish
+      // through exact-record reads while the peer's overlapping window is
+      // open; otherwise CPU fallback can be committed immediately.
+      pair = await _readAttachedClaimPair(current);
+      if (pair == null) return _finalizeCpuOrLateHuman(current, now);
+    } else {
+      final queue = onlineMap(
+        await _readActiveQuickQueue(
+          ticket.queueKey,
+          startAtJoinedAtMs: current.joinedAtMs,
+        ),
+      );
+      pair = _deterministicPairFor(current, queue);
+    }
     if (pair != null) {
       final claimId = _sharedQuickClaimId(pair.first, pair.second);
       // A claim permanently binds this ticket to one opponent. Re-pairing a
@@ -962,16 +1198,25 @@ final class OnlineTransportClient {
       // intentionally reject a first claim attachment. An already attached
       // handshake may still finish as a human match.
       final canAttachClaim =
-          current.claimId == claimId || now < current.deadlineAtMs;
+        current.claimId == claimId || now < current.deadlineAtMs;
       if (compatibleClaim && canAttachClaim) {
+        // Firebase exact reads are authorized by the claim root, so use the
+        // ordered snapshot's claim markers until that root exists. In-memory
+        // stores do not have that rules race and retain the direct check used
+        // by the deterministic transport tests.
+        final pairAttached = store is OnlineRealtimeExactReadPolicy &&
+                (store as OnlineRealtimeExactReadPolicy)
+                    .opponentTicketExactReadRequiresClaim
+            ? pair.first.claimId == claimId && pair.second.claimId == claimId
+            : await _pairTicketsAttachedToClaim(pair, claimId);
         current = await _attachClaimToOwnedTicket(current, claimId);
-        final pairAttached = await _pairTicketsAttachedToClaim(pair, claimId);
         var claimReady = false;
         if (pair.leader.uid == identity.uid) {
-          // Claim creation rules require both queue tickets to advertise the
-          // same claim first. A leader that polls before its follower simply
-          // waits for the follower's next poll instead of attempting a write
-          // that Firebase must reject.
+          // The claim validator is the authoritative check that both queue
+          // tickets advertise this claim. Do not read the opponent ticket
+          // before creating the claim: Firebase rules intentionally permit an
+          // exact opponent read only after the claim root exists, so that
+          // pre-claim read would race the leader's own claim transaction.
           if (pairAttached) {
             claimReady = await _ensureLeaderClaim(pair, claimId, now);
           }
@@ -1031,6 +1276,23 @@ final class OnlineTransportClient {
     return _finalizeCpuOrLateHuman(current, now);
   }
 
+  Future<Object?> _readActiveQuickQueue(
+    String queueKey, {
+    required int startAtJoinedAtMs,
+  }) {
+    final path = '$_quickQueuesPath/$queueKey';
+    final currentStore = store;
+    if (currentStore is OnlineRealtimeQueryStore) {
+      return (currentStore as OnlineRealtimeQueryStore).readOrderedChildren(
+        path,
+        orderByChild: 'activeUntil',
+        startAt: startAtJoinedAtMs,
+        limitToFirst: _quickQueueReadLimit,
+      );
+    }
+    return currentStore.read(path);
+  }
+
   Future<QuickPopQueueTicket> _readOwnedTicket(
     QuickPopQueueTicket expected,
   ) async {
@@ -1083,13 +1345,590 @@ final class OnlineTransportClient {
         return OnlineStoreTransactionDecision.abort();
       }
       final map = onlineMap(current.toJson());
-      map['state'] = QuickPopTicketState.cancelled.name;
+      map
+        ..['state'] = QuickPopTicketState.cancelled.name
+        ..['activeUntil'] = 0;
       return OnlineStoreTransactionDecision.commit(map);
     });
     // Keep the durable queue locator until the cancelled record itself is
     // removed (account deletion or retention). Dropping the index first would
     // create an undiscoverable record if the app terminated between writes.
     _ownedQuickTickets.remove(ticket.queueKey);
+  }
+
+  /// Publishes this device's prepared-and-synchronized acknowledgement and
+  /// tries to commit the candidate room from `starting` to `inGame`.
+  ///
+  /// Returning `true` means both human clients reached a playable sync state
+  /// before their shared server deadline. Returning `false` means the peer is
+  /// not ready yet; callers may poll while their local tap deadline remains.
+  Future<bool> synchronizeQuickPopLaunch({
+    required QuickPopQueueTicket ticket,
+    required QuickPopResolution resolution,
+  }) async {
+    final context = _quickPopLaunchContext(ticket, resolution);
+    final claimPath =
+        '$_quickClaimsPath/${context.queueKey}/${context.claimId}';
+    final readyAt = await store.serverNowMs();
+    final readyPath = '$claimPath/launchReady/${identity.uid}';
+    final ready = <String, Object?>{
+      'uid': identity.uid,
+      'ticketId': ticket.ticketId,
+      'readyAt': readyAt,
+    };
+    final readyResult = await store.transaction(readyPath, (raw) {
+      if (raw != null) return const OnlineStoreTransactionDecision.abort();
+      return OnlineStoreTransactionDecision.commit(ready);
+    });
+    if (!readyResult.committed) {
+      final existing = onlineMap(readyResult.value);
+      if (existing['uid'] != identity.uid ||
+          existing['ticketId'] != ticket.ticketId) {
+        throw const OnlineTransportException(
+          OnlineTransportErrorCode.invalidQueueTicket,
+          'The Quick Pop launch acknowledgement is inconsistent.',
+        );
+      }
+    }
+
+    final claim = onlineMap(await store.read(claimPath));
+    _validateQuickPopLaunchClaim(claim, context, resolution);
+    final firstUid = claim['firstUid']! as String;
+    final secondUid = claim['secondUid']! as String;
+    final readyMap = onlineMap(claim['launchReady']);
+    if (!_validQuickPopLaunchReady(
+          readyMap[firstUid],
+          uid: firstUid,
+          ticketId: claim['firstTicketId']! as String,
+        ) ||
+        !_validQuickPopLaunchReady(
+          readyMap[secondUid],
+          uid: secondUid,
+          ticketId: claim['secondTicketId']! as String,
+        )) {
+      return false;
+    }
+
+    final room = await readRoom(resolution.roomId);
+    if (room == null) return false;
+    if (room.status == RoomStatus.closed) {
+      throw const OnlineTransportException(
+        OnlineTransportErrorCode.invalidQueueTicket,
+        'The other Quick Pop player left before launch.',
+      );
+    }
+    if (room.status == RoomStatus.inGame) return true;
+    if (room.status != RoomStatus.starting) return false;
+    // The two launch-ready markers are validated against each ticket's
+    // original five-second deadline by Firebase Rules. The actual status
+    // transition may arrive a little later because preparing the replicated
+    // engine and opening presence sockets is asynchronous; rejecting it on a
+    // second client-side deadline check would turn a verified human match into
+    // CPU merely because the network handshake crossed that boundary.
+    if (room.presenceFor(firstUid) != LobbyPresence.connected ||
+        room.presenceFor(secondUid) != LobbyPresence.connected) {
+      return false;
+    }
+    if (room.hostUid != identity.uid) return false;
+    await store.transaction('$_roomsPath/${resolution.roomId}/status', (raw) {
+      if (raw == RoomStatus.inGame.name) {
+        return const OnlineStoreTransactionDecision.abort();
+      }
+      if (raw != RoomStatus.starting.name) {
+        return const OnlineStoreTransactionDecision.abort();
+      }
+      return OnlineStoreTransactionDecision.commit(RoomStatus.inGame.name);
+    });
+    return await _readQuickPopStatus(
+          '$_roomsPath/${resolution.roomId}/status',
+        ) ==
+        RoomStatus.inGame;
+  }
+
+  /// Resolves the provisional Quick Pop launch into one authoritative result.
+  ///
+  /// `inGame` alone is not enough to navigate: one client may observe that
+  /// pre-deadline commit while the other is concurrently cancelling at its
+  /// local five-second boundary. Each participant therefore publishes a
+  /// one-shot settlement commitment at its own boundary. Human play is final
+  /// only after both commitments exist and a fresh room-status read still
+  /// says `inGame`.
+  ///
+  /// If the peer does not settle within [peerWait], this client races the
+  /// missing commitment with an atomic close. Firebase rules serialize that
+  /// race: close wins and both use CPU, or the second commitment wins and both
+  /// use the human room. A hung/offline store returns [unavailable] after the
+  /// bounded [operationTimeout]; it never guesses CPU after a human commit may
+  /// exist, because doing so would recreate the split this barrier prevents.
+  Future<QuickPopLaunchSettlement> settleQuickPopLaunch({
+    required QuickPopQueueTicket ticket,
+    required QuickPopResolution resolution,
+    Duration peerWait = quickPopSettlementPeerWait,
+    Duration operationTimeout = quickPopSettlementOperationTimeout,
+  }) {
+    if (peerWait <= Duration.zero || operationTimeout <= Duration.zero) {
+      throw ArgumentError('Quick Pop settlement durations must be positive.');
+    }
+    final context = _quickPopLaunchContext(ticket, resolution);
+    return _settleQuickPopLaunch(
+      ticket: ticket,
+      resolution: resolution,
+      context: context,
+      peerWait: peerWait,
+    ).timeout(
+      operationTimeout,
+      onTimeout: () => QuickPopLaunchSettlement.unavailable,
+    );
+  }
+
+  Future<QuickPopLaunchSettlement> _settleQuickPopLaunch({
+    required QuickPopQueueTicket ticket,
+    required QuickPopResolution resolution,
+    required ({String queueKey, String claimId}) context,
+    required Duration peerWait,
+  }) async {
+    final claimPath =
+        '$_quickClaimsPath/${context.queueKey}/${context.claimId}';
+    var claim = onlineMap(await store.read(claimPath));
+    _validateQuickPopLaunchClaim(claim, context, resolution);
+    final sharedDeadline = await _quickPopSharedDeadline(claim, context);
+    final beforeDeadline = await store.serverNowMs();
+    if (beforeDeadline < sharedDeadline) {
+      await _delay(Duration(milliseconds: sharedDeadline - beforeDeadline));
+    }
+
+    claim = onlineMap(await store.read(claimPath));
+    _validateQuickPopLaunchClaim(claim, context, resolution);
+
+    final statusPath = '$_roomsPath/${resolution.roomId}/status';
+    if (_quickPopLaunchWasAborted(claim)) {
+      return _closeAndResolveQuickPopSettlement(
+        statusPath: statusPath,
+        claimPath: claimPath,
+        context: context,
+        resolution: resolution,
+      );
+    }
+    final status = await _readQuickPopStatus(statusPath);
+    if (status == RoomStatus.starting) {
+      return _closeAndResolveQuickPopSettlement(
+        statusPath: statusPath,
+        claimPath: claimPath,
+        context: context,
+        resolution: resolution,
+      );
+    }
+    if (status == RoomStatus.closed) {
+      return QuickPopLaunchSettlement.fallback;
+    }
+    if (status != RoomStatus.inGame) {
+      return QuickPopLaunchSettlement.unavailable;
+    }
+
+    final settledAt = await store.serverNowMs();
+    final settledPath = '$claimPath/launchSettled/${identity.uid}';
+    final settlement = <String, Object?>{
+      'uid': identity.uid,
+      'ticketId': ticket.ticketId,
+      'settledAt': settledAt,
+    };
+    late final OnlineStoreTransactionResult settledResult;
+    try {
+      settledResult = await store.transaction(settledPath, (raw) {
+        if (raw != null) return const OnlineStoreTransactionDecision.abort();
+        return OnlineStoreTransactionDecision.commit(settlement);
+      });
+    } catch (_) {
+      // A peer can close the provisional room after our `inGame` read but
+      // before this exact-ticket acknowledgement reaches Firebase. Resolve
+      // that expected write-vs-close race authoritatively instead of turning a
+      // known cancellation into an ambiguous network result.
+      final racedStatus = await _readQuickPopStatus(statusPath);
+      final racedClaim = onlineMap(await store.read(claimPath));
+      _validateQuickPopLaunchClaim(racedClaim, context, resolution);
+      if (racedStatus == RoomStatus.closed ||
+          _quickPopLaunchWasAborted(racedClaim)) {
+        return QuickPopLaunchSettlement.fallback;
+      }
+      rethrow;
+    }
+    if (!settledResult.committed) {
+      final existing = onlineMap(settledResult.value);
+      if (existing['uid'] != identity.uid ||
+          existing['ticketId'] != ticket.ticketId) {
+        throw const OnlineTransportException(
+          OnlineTransportErrorCode.invalidQueueTicket,
+          'The Quick Pop settlement acknowledgement is inconsistent.',
+        );
+      }
+    }
+
+    final stopwatch = Stopwatch()..start();
+    while (stopwatch.elapsed < peerWait) {
+      final snapshot = await _quickPopSettlementSnapshot(
+        statusPath: statusPath,
+        claimPath: claimPath,
+        context: context,
+        resolution: resolution,
+      );
+      if (snapshot.status == RoomStatus.closed) {
+        return QuickPopLaunchSettlement.fallback;
+      }
+      if (snapshot.aborted) {
+        return _closeAndResolveQuickPopSettlement(
+          statusPath: statusPath,
+          claimPath: claimPath,
+          context: context,
+          resolution: resolution,
+        );
+      }
+      if (snapshot.status == RoomStatus.inGame && snapshot.bothSettled) {
+        // The second read is intentional. It closes the observation-vs-cancel
+        // interleaving before either client may navigate.
+        final finalStatus = await _readQuickPopStatus(statusPath);
+        return finalStatus == RoomStatus.inGame
+            ? QuickPopLaunchSettlement.human
+            : finalStatus == RoomStatus.closed
+            ? QuickPopLaunchSettlement.fallback
+            : QuickPopLaunchSettlement.unavailable;
+      }
+      final remaining = peerWait - stopwatch.elapsed;
+      if (remaining <= Duration.zero) break;
+      const interval = Duration(milliseconds: 100);
+      await _delay(remaining < interval ? remaining : interval);
+    }
+
+    // Missing peer settlement: atomically close provisional play. If the peer
+    // commitment won this exact race, rules deny the close and the fresh reads
+    // below observe the now-stable human result instead.
+    return _closeAndResolveQuickPopSettlement(
+      statusPath: statusPath,
+      claimPath: claimPath,
+      context: context,
+      resolution: resolution,
+    );
+  }
+
+  Future<QuickPopLaunchSettlement> _closeAndResolveQuickPopSettlement({
+    required String statusPath,
+    required String claimPath,
+    required ({String queueKey, String claimId}) context,
+    required QuickPopResolution resolution,
+  }) async {
+    try {
+      await _closeQuickPopStatus(statusPath);
+    } catch (_) {
+      // Firebase rules reject this close when the peer's second exact-ticket
+      // settlement wins the same transaction race. A rejection is not itself
+      // a terminal result: always re-read both authoritative records below so
+      // unrelated failures become `unavailable` instead of being mistaken for
+      // either a human launch or a CPU fallback.
+    }
+    final finalSnapshot = await _quickPopSettlementSnapshot(
+      statusPath: statusPath,
+      claimPath: claimPath,
+      context: context,
+      resolution: resolution,
+    );
+    if (finalSnapshot.status == RoomStatus.closed || finalSnapshot.aborted) {
+      return QuickPopLaunchSettlement.fallback;
+    }
+    if (finalSnapshot.status == RoomStatus.inGame &&
+        finalSnapshot.bothSettled) {
+      return QuickPopLaunchSettlement.human;
+    }
+    return QuickPopLaunchSettlement.unavailable;
+  }
+
+  Future<({RoomStatus? status, bool bothSettled, bool aborted})>
+  _quickPopSettlementSnapshot({
+    required String statusPath,
+    required String claimPath,
+    required ({String queueKey, String claimId}) context,
+    required QuickPopResolution resolution,
+  }) async {
+    final status = await _readQuickPopStatus(statusPath);
+    final claim = onlineMap(await store.read(claimPath));
+    _validateQuickPopLaunchClaim(claim, context, resolution);
+    return (
+      status: status,
+      bothSettled: _bothQuickPopParticipantsSettled(claim),
+      aborted: _quickPopLaunchWasAborted(claim),
+    );
+  }
+
+  Future<RoomStatus?> _readQuickPopStatus(String statusPath) async {
+    final raw = await store.read(statusPath);
+    if (raw is! String) return null;
+    for (final status in RoomStatus.values) {
+      if (status.name == raw) return status;
+    }
+    return null;
+  }
+
+  Future<void> _closeQuickPopStatus(String statusPath) async {
+    await store.transaction(statusPath, (current) {
+      if (current != RoomStatus.starting.name &&
+          current != RoomStatus.inGame.name) {
+        return const OnlineStoreTransactionDecision.abort();
+      }
+      return OnlineStoreTransactionDecision.commit(RoomStatus.closed.name);
+    });
+  }
+
+  /// Marks an unresolved Quick Pop launch as abandoned. A participant may
+  /// also close a provisionally committed `inGame` room until both devices
+  /// have published their final settlement commitment.
+  Future<void> abandonQuickPopLaunch({
+    required QuickPopQueueTicket ticket,
+    required QuickPopResolution resolution,
+  }) async {
+    final context = _quickPopLaunchContext(ticket, resolution);
+    await _publishQuickPopLaunchAbort(
+      ticket: ticket,
+      resolution: resolution,
+      context: context,
+    );
+    await _closeAbandonedQuickPopRoom(context: context, resolution: resolution);
+  }
+
+  /// Used by room bootstrap to avoid creating a room after either device has
+  /// already honored its local five-second fallback.
+  Future<bool> isQuickPopLaunchAbandoned({
+    required QuickPopQueueTicket ticket,
+    required QuickPopResolution resolution,
+  }) async {
+    final context = _quickPopLaunchContext(ticket, resolution);
+    final claim = onlineMap(
+      await store.read(
+        '$_quickClaimsPath/${context.queueKey}/${context.claimId}',
+      ),
+    );
+    _validateQuickPopLaunchClaim(claim, context, resolution);
+    if (_quickPopLaunchWasAborted(claim)) return true;
+    final room = await readRoom(resolution.roomId);
+    return room?.status == RoomStatus.closed;
+  }
+
+  /// Immutable metadata attached to a candidate Quick Pop room. Firebase
+  /// rules use it to authorize the single `starting -> inGame|closed` launch
+  /// decision against the exact matched tickets.
+  Future<Map<String, Object?>> quickPopLaunchMetadata({
+    required QuickPopQueueTicket ticket,
+    required QuickPopResolution resolution,
+  }) async {
+    final context = _quickPopLaunchContext(ticket, resolution);
+    final claim = onlineMap(
+      await store.read(
+        '$_quickClaimsPath/${context.queueKey}/${context.claimId}',
+      ),
+    );
+    _validateQuickPopLaunchClaim(claim, context, resolution);
+    return <String, Object?>{
+      'queueKey': context.queueKey,
+      'claimId': context.claimId,
+      'firstUid': claim['firstUid'],
+      'firstTicketId': claim['firstTicketId'],
+      'secondUid': claim['secondUid'],
+      'secondTicketId': claim['secondTicketId'],
+      'sharedDeadlineAt': await _quickPopSharedDeadline(claim, context),
+    };
+  }
+
+  ({String queueKey, String claimId}) _quickPopLaunchContext(
+    QuickPopQueueTicket ticket,
+    QuickPopResolution resolution,
+  ) {
+    _validateTicketOwner(ticket);
+    final queueKey = resolution.queueKey ?? ticket.queueKey;
+    final claimId = resolution.claimId ?? ticket.claimId;
+    if (resolution.kind != QuickPopResolutionKind.human ||
+        resolution.ticketId != ticket.ticketId ||
+        resolution.opponentUid == null ||
+        queueKey != ticket.queueKey ||
+        claimId == null ||
+        claimId.isEmpty) {
+      throw const OnlineTransportException(
+        OnlineTransportErrorCode.invalidQueueTicket,
+        'Quick Pop launch requires a verified human claim.',
+      );
+    }
+    return (
+      queueKey: _validatedSegment(queueKey, 'queueKey'),
+      claimId: _validatedSegment(claimId, 'claimId'),
+    );
+  }
+
+  void _validateQuickPopLaunchClaim(
+    Map<String, Object?> claim,
+    ({String queueKey, String claimId}) context,
+    QuickPopResolution resolution,
+  ) {
+    final firstUid = claim['firstUid'];
+    final secondUid = claim['secondUid'];
+    final participant = firstUid == identity.uid || secondUid == identity.uid;
+    final opponentMatches =
+        (firstUid == identity.uid && secondUid == resolution.opponentUid) ||
+        (secondUid == identity.uid && firstUid == resolution.opponentUid);
+    final claimResolution = onlineMap(claim['resolution']);
+    if (claim['claimId'] != context.claimId ||
+        claim['queueKey'] != context.queueKey ||
+        !participant ||
+        !opponentMatches ||
+        claimResolution['kind'] != QuickPopResolutionKind.human.name ||
+        claimResolution['roomId'] != resolution.roomId) {
+      throw const OnlineTransportException(
+        OnlineTransportErrorCode.invalidQueueTicket,
+        'The Quick Pop launch claim does not match the resolved pair.',
+      );
+    }
+  }
+
+  bool _validQuickPopLaunchReady(
+    Object? raw, {
+    required String uid,
+    required String ticketId,
+  }) {
+    final map = onlineMap(raw);
+    return map['uid'] == uid &&
+        map['ticketId'] == ticketId &&
+        map['readyAt'] is num;
+  }
+
+  bool _bothQuickPopParticipantsSettled(Map<String, Object?> claim) {
+    final firstUid = claim['firstUid'];
+    final secondUid = claim['secondUid'];
+    final firstTicketId = claim['firstTicketId'];
+    final secondTicketId = claim['secondTicketId'];
+    if (firstUid is! String ||
+        secondUid is! String ||
+        firstTicketId is! String ||
+        secondTicketId is! String) {
+      return false;
+    }
+    final settled = onlineMap(claim['launchSettled']);
+    return _validQuickPopLaunchSettled(
+          settled[firstUid],
+          uid: firstUid,
+          ticketId: firstTicketId,
+        ) &&
+        _validQuickPopLaunchSettled(
+          settled[secondUid],
+          uid: secondUid,
+          ticketId: secondTicketId,
+        );
+  }
+
+  bool _quickPopLaunchWasAborted(Map<String, Object?> claim) =>
+      onlineMap(claim['launchAborted']).isNotEmpty;
+
+  Future<void> _publishQuickPopLaunchAbort({
+    required QuickPopQueueTicket ticket,
+    required QuickPopResolution resolution,
+    required ({String queueKey, String claimId}) context,
+  }) async {
+    final claimPath =
+        '$_quickClaimsPath/${context.queueKey}/${context.claimId}';
+    final claim = onlineMap(await store.read(claimPath));
+    _validateQuickPopLaunchClaim(claim, context, resolution);
+    if (_bothQuickPopParticipantsSettled(claim)) return;
+    final abortedAt = await store.serverNowMs();
+    final path = '$claimPath/launchAborted/${identity.uid}';
+    final abort = <String, Object?>{
+      'uid': identity.uid,
+      'ticketId': ticket.ticketId,
+      'abortedAt': abortedAt,
+    };
+    final result = await store.transaction(path, (raw) {
+      if (raw != null) return const OnlineStoreTransactionDecision.abort();
+      return OnlineStoreTransactionDecision.commit(abort);
+    });
+    if (!result.committed) {
+      final existing = onlineMap(result.value);
+      if (existing['uid'] != identity.uid ||
+          existing['ticketId'] != ticket.ticketId) {
+        throw const OnlineTransportException(
+          OnlineTransportErrorCode.invalidQueueTicket,
+          'The Quick Pop cancellation marker is inconsistent.',
+        );
+      }
+    }
+  }
+
+  bool _validQuickPopLaunchSettled(
+    Object? raw, {
+    required String uid,
+    required String ticketId,
+  }) {
+    final map = onlineMap(raw);
+    return map['uid'] == uid &&
+        map['ticketId'] == ticketId &&
+        map['settledAt'] is num;
+  }
+
+  Future<int> _quickPopSharedDeadline(
+    Map<String, Object?> claim,
+    ({String queueKey, String claimId}) context,
+  ) async {
+    final firstUid = claim['firstUid']! as String;
+    final secondUid = claim['secondUid']! as String;
+    final firstRaw = await store.read(
+      '$_quickQueuesPath/${context.queueKey}/$firstUid',
+    );
+    final secondRaw = await store.read(
+      '$_quickQueuesPath/${context.queueKey}/$secondUid',
+    );
+    final first = QuickPopQueueTicket.fromJson(firstRaw, uid: firstUid);
+    final second = QuickPopQueueTicket.fromJson(secondRaw, uid: secondUid);
+    if (first.ticketId != claim['firstTicketId'] ||
+        second.ticketId != claim['secondTicketId']) {
+      throw const OnlineTransportException(
+        OnlineTransportErrorCode.invalidQueueTicket,
+        'The Quick Pop launch tickets no longer match the claim.',
+      );
+    }
+    return min(first.deadlineAtMs, second.deadlineAtMs);
+  }
+
+  Future<void> _closeAbandonedQuickPopRoom({
+    required ({String queueKey, String claimId}) context,
+    required QuickPopResolution resolution,
+  }) async {
+    final room = await readRoom(resolution.roomId);
+    if (room == null) return;
+    if (room.status == RoomStatus.closed) {
+      await _presenceLeases.remove(room.id)?.disconnect();
+      return;
+    }
+    if ((room.status != RoomStatus.starting &&
+            room.status != RoomStatus.inGame) ||
+        room.matchFormat != 'quickPop') {
+      return;
+    }
+    final raw = onlineMap(await store.read('$_roomsPath/${room.id}'));
+    final launch = onlineMap(raw['quickPopLaunch']);
+    if (launch['queueKey'] != context.queueKey ||
+        launch['claimId'] != context.claimId ||
+        (launch['firstUid'] != identity.uid &&
+            launch['secondUid'] != identity.uid)) {
+      throw const OnlineTransportException(
+        OnlineTransportErrorCode.invalidRoomStatus,
+        'The Quick Pop room launch metadata is inconsistent.',
+      );
+    }
+    final statusPath = '$_roomsPath/${room.id}/status';
+    await store.transaction(statusPath, (current) {
+      if (current != RoomStatus.starting.name &&
+          current != RoomStatus.inGame.name) {
+        return const OnlineStoreTransactionDecision.abort();
+      }
+      return OnlineStoreTransactionDecision.commit(RoomStatus.closed.name);
+    });
+    // A peer settlement can win the exact transaction race. Only tear down
+    // this room lease after a fresh authoritative read confirms cancellation.
+    if (await _readQuickPopStatus(statusPath) == RoomStatus.closed) {
+      await _presenceLeases.remove(room.id)?.disconnect();
+    }
   }
 
   Future<bool> _markStoredPresenceDisconnected(OnlineRoomRecord room) async {
@@ -1325,6 +2164,49 @@ final class OnlineTransportClient {
     return OnlineRoomRecord.fromJson(result.value);
   }
 
+  Future<void> _rollbackFailedRoomCreation({
+    required String roomId,
+    required _RoomCodeReservation reservation,
+  }) async {
+    final presencePath = '$_roomsPath/$roomId/presence/${identity.uid}';
+
+    Future<void> bestEffort(Future<void> Function() operation) async {
+      try {
+        await operation();
+      } catch (_) {
+        // Rollback must attempt every independently owned artifact and must
+        // never replace the original create-room failure.
+      }
+    }
+
+    final lease = _presenceLeases.remove(roomId);
+    if (lease != null) await bestEffort(lease.cancel);
+    await bestEffort(() => store.cancelOnDisconnect(presencePath));
+    await bestEffort(() => _releaseRoomCode(reservation));
+
+    final rollback = <String, Object?>{
+      'publicRooms/$roomId': null,
+      'rooms/$roomId': null,
+      '$onlineAccountResourcesNode/${identity.uid}/rooms/$roomId': null,
+      '$onlineAccountResourcesNode/${identity.uid}/presence/$roomId': null,
+      '$onlineAccountResourcesNode/${identity.uid}/hostedRooms/$roomId': null,
+    };
+    await bestEffort(() => store.update(onlineTransportRoot, rollback));
+
+    // Keep the fallback operations independent. Firebase applies the root
+    // update atomically, while a custom adapter may fail only one child.
+    await bestEffort(() => store.set('$_publicRoomsPath/$roomId', null));
+    await bestEffort(() => store.set(presencePath, null));
+    await bestEffort(() => store.set('$_roomsPath/$roomId', null));
+    await bestEffort(
+      () => store.update(_accountResourcesPath, <String, Object?>{
+        'rooms/$roomId': null,
+        'presence/$roomId': null,
+        'hostedRooms/$roomId': null,
+      }),
+    );
+  }
+
   Future<OnlinePresenceLease> _connectRoomPresence({
     required String roomId,
     required int nowMs,
@@ -1344,7 +2226,17 @@ final class OnlineTransportClient {
       connectionId: connectionId,
     );
     await store.setOnDisconnect(path, disconnected.toJson());
-    await store.set(path, connected.toJson());
+    try {
+      await store.set(path, connected.toJson());
+    } catch (error, stackTrace) {
+      try {
+        await store.cancelOnDisconnect(path);
+      } catch (_) {
+        // The enclosing create/join cleanup will retry cancellation. Preserve
+        // the presence write error so callers receive the real failure.
+      }
+      Error.throwWithStackTrace(error, stackTrace);
+    }
     final lease = OnlinePresenceLease._(
       store: store,
       roomId: roomId,
@@ -1526,6 +2418,70 @@ final class OnlineTransportClient {
     return null;
   }
 
+  Future<_QuickPopPair?> _readAttachedClaimPair(
+    QuickPopQueueTicket current,
+  ) async {
+    final claimId = current.claimId;
+    if (claimId == null) return null;
+    final claim = onlineMap(
+      await store.read('$_quickClaimsPath/${current.queueKey}/$claimId'),
+    );
+    if (claim.isEmpty) return null;
+
+    final firstUid = claim['firstUid'];
+    final firstTicketId = claim['firstTicketId'];
+    final secondUid = claim['secondUid'];
+    final secondTicketId = claim['secondTicketId'];
+    final currentIsFirst =
+        firstUid == current.uid && firstTicketId == current.ticketId;
+    final currentIsSecond =
+        secondUid == current.uid && secondTicketId == current.ticketId;
+    if (claim['claimId'] != claimId ||
+        claim['queueKey'] != current.queueKey ||
+        (!currentIsFirst && !currentIsSecond)) {
+      throw const OnlineTransportException(
+        OnlineTransportErrorCode.invalidQueueTicket,
+        'The attached Quick Pop claim does not match this ticket.',
+      );
+    }
+
+    final opponentUid = currentIsFirst ? secondUid : firstUid;
+    final opponentTicketId = currentIsFirst ? secondTicketId : firstTicketId;
+    if (opponentUid is! String || opponentTicketId is! String) {
+      throw const OnlineTransportException(
+        OnlineTransportErrorCode.invalidQueueTicket,
+        'The attached Quick Pop claim has invalid opponent metadata.',
+      );
+    }
+    final rawOpponent = await store.read(
+      '$_quickQueuesPath/${current.queueKey}/$opponentUid',
+    );
+    if (rawOpponent == null) return null;
+    final opponent = QuickPopQueueTicket.fromJson(
+      rawOpponent,
+      uid: opponentUid,
+    );
+    if (opponent.ticketId != opponentTicketId ||
+        opponent.queueKey != current.queueKey ||
+        opponent.claimId != claimId) {
+      throw const OnlineTransportException(
+        OnlineTransportErrorCode.invalidQueueTicket,
+        'The attached Quick Pop opponent ticket does not match the claim.',
+      );
+    }
+
+    final pair = currentIsFirst
+        ? _QuickPopPair(first: current, second: opponent)
+        : _QuickPopPair(first: opponent, second: current);
+    if (!_matchesClaimMetadata(claim, pair: pair, claimId: claimId)) {
+      throw const OnlineTransportException(
+        OnlineTransportErrorCode.invalidQueueTicket,
+        'The attached Quick Pop claim metadata is inconsistent.',
+      );
+    }
+    return pair;
+  }
+
   Future<QuickPopQueueTicket> _attachClaimToOwnedTicket(
     QuickPopQueueTicket expected,
     String claimId,
@@ -1608,6 +2564,14 @@ final class OnlineTransportClient {
           'The deterministic Quick Pop claim belongs to another leader.',
         );
       }
+      if (store is OnlineRealtimeExactReadPolicy &&
+          (store as OnlineRealtimeExactReadPolicy)
+              .opponentTicketExactReadRequiresClaim) {
+        // A follower may not have published its claim attachment yet. The
+        // leader retries on the next poll; reading the opponent ticket here
+        // would be rejected by the exact-read rule until the claim exists.
+        return false;
+      }
       if (!await _pairTicketsAttachedToClaim(pair, claimId)) return false;
       rethrow;
     }
@@ -1653,18 +2617,6 @@ final class OnlineTransportClient {
       );
     }
     return true;
-  }
-
-  Future<bool> _pairTicketsAttachedToClaim(
-    _QuickPopPair pair,
-    String claimId,
-  ) async {
-    final first = await _readQueueTicket(pair.first);
-    final second = await _readQueueTicket(pair.second);
-    return first?.state == QuickPopTicketState.waiting &&
-        second?.state == QuickPopTicketState.waiting &&
-        first?.claimId == claimId &&
-        second?.claimId == claimId;
   }
 
   Future<void> _removeOwnClaimAcceptance(QuickPopQueueTicket ticket) async {
@@ -1746,6 +2698,22 @@ final class OnlineTransportClient {
     }
   }
 
+  Future<bool> _pairTicketsAttachedToClaim(
+    _QuickPopPair pair,
+    String claimId,
+  ) async {
+    final first = await _readQueueTicket(pair.first);
+    final second = await _readQueueTicket(pair.second);
+    return first != null &&
+        second != null &&
+        first.state == QuickPopTicketState.waiting &&
+        second.state == QuickPopTicketState.waiting &&
+        first.claimId == claimId &&
+        second.claimId == claimId &&
+        first.ticketId == pair.first.ticketId &&
+        second.ticketId == pair.second.ticketId;
+  }
+
   Future<QuickPopQueueTicket?> _readQueueTicket(
     QuickPopQueueTicket expected,
   ) async {
@@ -1801,6 +2769,7 @@ final class OnlineTransportClient {
       }
       final map = onlineMap(current.toJson())
         ..['state'] = QuickPopTicketState.matched.name
+        ..['activeUntil'] = 0
         ..['roomId'] = resolution.roomId
         ..['opponentUid'] = opponentUid;
       return OnlineStoreTransactionDecision.commit(map);
@@ -1829,6 +2798,7 @@ final class OnlineTransportClient {
       if (current.resolved) return OnlineStoreTransactionDecision.abort();
       final map = onlineMap(current.toJson())
         ..['state'] = QuickPopTicketState.cpuFallback.name
+        ..['activeUntil'] = 0
         ..['roomId'] = _cpuQuickRoomId(current)
         ..remove('opponentUid');
       return OnlineStoreTransactionDecision.commit(map);
@@ -1901,6 +2871,8 @@ final class OnlineTransportClient {
         kind: QuickPopResolutionKind.human,
         opponentUid: ticket.opponentUid,
         resolvedAtMs: resolvedAtMs,
+        queueKey: ticket.queueKey,
+        claimId: ticket.claimId,
       ),
       QuickPopTicketState.cpuFallback => QuickPopResolution(
         ticketId: ticket.ticketId,
@@ -1963,6 +2935,8 @@ final class OnlineTransportClient {
     return '$prefix${digest.substring(0, 24)}';
   }
 }
+
+enum _JoinFenceRemoval { removed, absent, mismatched }
 
 final class _QuickPopPair {
   const _QuickPopPair({required this.first, required this.second});

@@ -391,7 +391,10 @@ class OnlineGameSyncClient extends ChangeNotifier {
     );
     try {
       if (isHost) {
-        if (!_initialized) await _initializeHost();
+        if (!_initialized) {
+          await _initializeHost();
+          _ensureStartActive();
+        }
         _attachHostEngineListener();
         _resumeHostTransitionsIfNeeded();
         _commandSubscription = transport.store
@@ -400,22 +403,37 @@ class OnlineGameSyncClient extends ChangeNotifier {
         // Advertise the host as connected only after its authority and command
         // consumer are ready. This keeps returning guests from racing input
         // against a host that has not restored the durable checkpoint yet.
-        _presenceLease = await transport.connectRoomPresence(roomId);
+        final lease = await transport.connectRoomPresence(roomId);
+        if (_disposed || !_started) {
+          await lease.disconnect();
+          _ensureStartActive();
+        }
+        _presenceLease = lease;
         _presenceSubscription = transport.store
             .watch(_presencePath)
             .listen(_handlePresenceSnapshot, onError: _handleStreamError);
       } else {
-        _presenceLease = await transport.connectRoomPresence(roomId);
+        final lease = await transport.connectRoomPresence(roomId);
+        if (_disposed || !_started) {
+          await lease.disconnect();
+          _ensureStartActive();
+        }
+        _presenceLease = lease;
         await _readAndApplyMatchDocument(required: true);
+        _ensureStartActive();
         _matchSubscription = transport.store
             .watch(matchPath)
             .listen(_handleMatchSnapshot, onError: _handleStreamError);
         _presenceSubscription = transport.store
             .watch(_presencePath)
             .listen(_handleGuestPresenceSnapshot, onError: _handleStreamError);
-        _handleGuestPresenceSnapshot(await transport.store.read(_presencePath));
+        final presence = await transport.store.read(_presencePath);
+        _ensureStartActive();
+        _handleGuestPresenceSnapshot(presence);
         await _waitForLocalAuthorityReconnect();
+        _ensureStartActive();
       }
+      _ensureStartActive();
       _safeChatSubscription = transport.store
           .watch(_safeChatPath)
           .listen(_handleSafeChatSnapshot, onError: _handleSafeChatStreamError);
@@ -1353,6 +1371,14 @@ class OnlineGameSyncClient extends ChangeNotifier {
     if (_disposed) {
       throw const OnlineGameSyncException(
         'The online match controller has been disposed.',
+      );
+    }
+  }
+
+  void _ensureStartActive() {
+    if (_disposed || !_started) {
+      throw const OnlineGameSyncException(
+        'The online match start was cancelled before it completed.',
       );
     }
   }

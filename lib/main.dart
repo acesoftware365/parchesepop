@@ -38,6 +38,7 @@ import 'orientation_policy.dart';
 import 'player_auth.dart';
 import 'player_progression.dart';
 import 'progress_hub.dart';
+import 'quick_pop_search_deadline.dart';
 import 'safe_chat.dart';
 import 'tutorial_controller.dart';
 import 'tutorial_scenario.dart';
@@ -48,6 +49,10 @@ Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
   await enableFlexibleOrientation();
   final analytics = await initializeGameAnalytics();
+  await recordAppSessionAnalytics(
+    analytics,
+    anonymousSessionId: _newAnalyticsReference('session'),
+  );
   final adsController = createAppAdsController();
   final availability = await AppAvailabilityService.load();
   runApp(
@@ -2541,11 +2546,30 @@ class PlayHome extends StatelessWidget {
   }
 
   Future<void> _startOnline(BuildContext context) async {
+    unawaited(
+      analytics.logEvent(
+        const OnlineFlowEvent(
+          experience: OnlineExperience.quickTable,
+          stage: OnlineFlowStage.entryOpened,
+        ),
+      ),
+    );
     final choice = await showDialog<_QuickTableEntryChoice>(
       context: context,
       builder: (_) => const _QuickTableEntryDialog(),
     );
-    if (!context.mounted || choice == null) return;
+    if (!context.mounted) return;
+    if (choice == null) {
+      unawaited(
+        analytics.logEvent(
+          const OnlineFlowEvent(
+            experience: OnlineExperience.quickTable,
+            stage: OnlineFlowStage.entryCancelled,
+          ),
+        ),
+      );
+      return;
+    }
     if (choice == _QuickTableEntryChoice.local) {
       await _startLocalTable(context);
       return;
@@ -2611,17 +2635,37 @@ class PlayHome extends StatelessWidget {
   }
 
   Future<void> _showQuickPopEntry(BuildContext context) async {
-    final choice = await showDialog<_QuickPopEntryChoice>(
+    unawaited(
+      analytics.logEvent(
+        const OnlineFlowEvent(
+          experience: OnlineExperience.quickPop,
+          stage: OnlineFlowStage.entryOpened,
+        ),
+      ),
+    );
+    final selection = await showDialog<_QuickPopEntrySelection>(
       context: context,
       builder: (_) => const _QuickPopEntryDialog(),
     );
-    if (!context.mounted || choice == null) return;
-    switch (choice) {
+    if (!context.mounted) return;
+    if (selection == null) {
+      unawaited(
+        analytics.logEvent(
+          const OnlineFlowEvent(
+            experience: OnlineExperience.quickPop,
+            stage: OnlineFlowStage.entryCancelled,
+          ),
+        ),
+      );
+      return;
+    }
+    switch (selection.choice) {
       case _QuickPopEntryChoice.online:
         await Navigator.push<void>(
           context,
           MaterialPageRoute(
             builder: (_) => _QuickPopOnlineSearchScreen(
+              searchStopwatch: selection.stopwatch!,
               profile: profile,
               wallet: wallet,
               progression: appFeatureRollout.retentionRewards
@@ -2857,6 +2901,7 @@ class _QuickTableOnlineShell extends StatefulWidget {
     required this.analytics,
     required this.onPlayLocal,
     this.initialRoomCode,
+    this.isRematch = false,
   });
 
   final PlayerProfile profile;
@@ -2866,6 +2911,7 @@ class _QuickTableOnlineShell extends StatefulWidget {
   final GameAnalytics analytics;
   final VoidCallback onPlayLocal;
   final RoomCode? initialRoomCode;
+  final bool isRematch;
 
   @override
   State<_QuickTableOnlineShell> createState() => _QuickTableOnlineShellState();
@@ -2879,6 +2925,21 @@ class _QuickTableOnlineShellState extends State<_QuickTableOnlineShell> {
   bool joiningInvite = false;
   bool joinedFromInvite = false;
   bool launchingGame = false;
+  bool inviteJoinAttemptStarted = false;
+  bool inviteJoinTerminalLogged = false;
+  DateTime? inviteJoinStartedAt;
+
+  MatchLaunchSource get launchSource =>
+      widget.isRematch ? MatchLaunchSource.rematch : MatchLaunchSource.home;
+
+  int get inviteJoinElapsedMilliseconds {
+    final startedAt = inviteJoinStartedAt;
+    if (startedAt == null) return 0;
+    return onlineSearchElapsedMilliseconds(
+      startedAt: startedAt,
+      now: DateTime.now(),
+    );
+  }
 
   @override
   void initState() {
@@ -2891,6 +2952,9 @@ class _QuickTableOnlineShellState extends State<_QuickTableOnlineShell> {
     gameReadySubscription = null;
     controller?.dispose();
     controller = null;
+    inviteJoinAttemptStarted = false;
+    inviteJoinTerminalLogged = false;
+    inviteJoinStartedAt = null;
     if (mounted) {
       setState(() {
         error = null;
@@ -2911,12 +2975,46 @@ class _QuickTableOnlineShellState extends State<_QuickTableOnlineShell> {
       gameReadySubscription = roomController.gameReady.listen(
         (lobby) => unawaited(_openReadyGame(roomController, lobby)),
         onError: (Object caught, StackTrace stackTrace) {
+          unawaited(
+            widget.analytics.logEvent(
+              OnlineFlowEvent(
+                experience: OnlineExperience.quickTable,
+                stage: OnlineFlowStage.connectionFailed,
+                launchSource: launchSource,
+                failureReason: _onlineFlowFailureReason(caught),
+              ),
+            ),
+          );
           if (mounted) setState(() => error = caught);
         },
       );
       if (widget.initialRoomCode case final roomCode?) {
+        inviteJoinAttemptStarted = true;
+        inviteJoinStartedAt = DateTime.now();
+        unawaited(
+          widget.analytics.logEvent(
+            OnlineFlowEvent(
+              experience: OnlineExperience.quickTable,
+              stage: OnlineFlowStage.joinStarted,
+              launchSource: launchSource,
+              joinMethod: OnlineJoinMethod.invitation,
+            ),
+          ),
+        );
         await roomController.joinRoomByCode(roomCode);
         if (!mounted) return;
+        inviteJoinTerminalLogged = true;
+        unawaited(
+          widget.analytics.logEvent(
+            OnlineFlowEvent(
+              experience: OnlineExperience.quickTable,
+              stage: OnlineFlowStage.roomJoined,
+              launchSource: launchSource,
+              elapsedMilliseconds: inviteJoinElapsedMilliseconds,
+              joinMethod: OnlineJoinMethod.invitation,
+            ),
+          ),
+        );
         setState(() {
           joiningInvite = false;
           joinedFromInvite = true;
@@ -2925,7 +3023,26 @@ class _QuickTableOnlineShellState extends State<_QuickTableOnlineShell> {
         setState(() {});
       }
     } catch (caught) {
-      if (!mounted) return;
+      if (!mounted || inviteJoinTerminalLogged) return;
+      inviteJoinTerminalLogged = true;
+      unawaited(
+        widget.analytics.logEvent(
+          OnlineFlowEvent(
+            experience: OnlineExperience.quickTable,
+            stage: inviteJoinAttemptStarted
+                ? OnlineFlowStage.joinFailed
+                : OnlineFlowStage.connectionFailed,
+            launchSource: launchSource,
+            elapsedMilliseconds: inviteJoinAttemptStarted
+                ? inviteJoinElapsedMilliseconds
+                : null,
+            joinMethod: inviteJoinAttemptStarted
+                ? OnlineJoinMethod.invitation
+                : null,
+            failureReason: _onlineFlowFailureReason(caught),
+          ),
+        ),
+      );
       setState(() {
         error = caught;
         joiningInvite = false;
@@ -2963,6 +3080,7 @@ class _QuickTableOnlineShellState extends State<_QuickTableOnlineShell> {
             onlineSession: prepared.session,
             onlineGameSync: prepared.sync,
             analytics: widget.analytics,
+            isRematch: widget.isRematch,
             onOnlineRematch: (gameContext) {
               Navigator.of(gameContext).pushAndRemoveUntil(
                 MaterialPageRoute<void>(
@@ -2973,6 +3091,7 @@ class _QuickTableOnlineShellState extends State<_QuickTableOnlineShell> {
                     tutorial: widget.tutorial,
                     analytics: widget.analytics,
                     onPlayLocal: widget.onPlayLocal,
+                    isRematch: true,
                   ),
                 ),
                 (route) => route.isFirst,
@@ -2983,6 +3102,16 @@ class _QuickTableOnlineShellState extends State<_QuickTableOnlineShell> {
       );
     } catch (caught) {
       prepared?.sync.dispose();
+      unawaited(
+        widget.analytics.logEvent(
+          OnlineFlowEvent(
+            experience: OnlineExperience.quickTable,
+            stage: OnlineFlowStage.matchOpenFailed,
+            launchSource: launchSource,
+            failureReason: _onlineFlowFailureReason(caught),
+          ),
+        ),
+      );
       if (mounted) {
         setState(() {
           error = caught;
@@ -3013,6 +3142,20 @@ class _QuickTableOnlineShellState extends State<_QuickTableOnlineShell> {
 
   @override
   void dispose() {
+    if (inviteJoinAttemptStarted && !inviteJoinTerminalLogged) {
+      inviteJoinTerminalLogged = true;
+      unawaited(
+        widget.analytics.logEvent(
+          OnlineFlowEvent(
+            experience: OnlineExperience.quickTable,
+            stage: OnlineFlowStage.joinCancelled,
+            launchSource: launchSource,
+            elapsedMilliseconds: inviteJoinElapsedMilliseconds,
+            joinMethod: OnlineJoinMethod.invitation,
+          ),
+        ),
+      );
+    }
     unawaited(gameReadySubscription?.cancel());
     final roomController = controller;
     if (roomController != null) {
@@ -3111,11 +3254,17 @@ class _QuickTableOnlineShellState extends State<_QuickTableOnlineShell> {
       );
     }
     if (joinedFromInvite) {
-      return RoomLobbyScreen(controller: roomController);
+      return RoomLobbyScreen(
+        controller: roomController,
+        analytics: widget.analytics,
+        launchSource: launchSource,
+      );
     }
     return QuickTableHubScreen(
       controller: roomController,
       onPlayLocal: _playLocal,
+      analytics: widget.analytics,
+      launchSource: launchSource,
     );
   }
 }
@@ -3191,6 +3340,60 @@ QuickPopOnlineFailurePresentation describeQuickPopOnlineFailure(Object error) {
   );
 }
 
+OnlineFlowFailureReason _onlineFlowFailureReason(Object error) {
+  if (error is FirebaseException) {
+    return switch (_safeOnlineDiagnosticSegment(error.code)) {
+      'network-request-failed' ||
+      'network-error' ||
+      'disconnected' ||
+      'unavailable' => OnlineFlowFailureReason.network,
+      'permission-denied' ||
+      'permission_denied' => OnlineFlowFailureReason.permission,
+      'operation-not-allowed' ||
+      'app-not-authorized' ||
+      'invalid-api-key' => OnlineFlowFailureReason.configuration,
+      _ => OnlineFlowFailureReason.unknown,
+    };
+  }
+  if (error is OnlineTransportException) {
+    return switch (error.code) {
+      OnlineTransportErrorCode.joinTimedOut => OnlineFlowFailureReason.timeout,
+      OnlineTransportErrorCode.joinCancelled =>
+        OnlineFlowFailureReason.cancelled,
+      OnlineTransportErrorCode.roomFull => OnlineFlowFailureReason.roomFull,
+      OnlineTransportErrorCode.roomNotFound ||
+      OnlineTransportErrorCode.roomClosed => OnlineFlowFailureReason.roomClosed,
+      OnlineTransportErrorCode.invalidIdentity ||
+      OnlineTransportErrorCode.invalidPathSegment ||
+      OnlineTransportErrorCode.invalidQueueTicket =>
+        OnlineFlowFailureReason.invalidInput,
+      OnlineTransportErrorCode.roomCodeUnavailable ||
+      OnlineTransportErrorCode.duplicateSeat ||
+      OnlineTransportErrorCode.unknownParticipant ||
+      OnlineTransportErrorCode.notHost ||
+      OnlineTransportErrorCode.invalidRoomStatus =>
+        OnlineFlowFailureReason.unavailable,
+    };
+  }
+  if (error is LobbyException) {
+    return switch (error.code) {
+      LobbyErrorCode.invalidRoomCode ||
+      LobbyErrorCode.invalidParticipant => OnlineFlowFailureReason.invalidInput,
+      LobbyErrorCode.roomFull => OnlineFlowFailureReason.roomFull,
+      LobbyErrorCode.roomNotJoinable => OnlineFlowFailureReason.roomClosed,
+      _ => OnlineFlowFailureReason.unavailable,
+    };
+  }
+  if (error is RoomInviteFormatException) {
+    return OnlineFlowFailureReason.invalidInput;
+  }
+  if (error is OnlineGameSyncException ||
+      error is OnlineQuickTablePreparationException) {
+    return OnlineFlowFailureReason.synchronization;
+  }
+  return OnlineFlowFailureReason.unknown;
+}
+
 String _safeOnlineDiagnosticSegment(String value) {
   final sanitized = value
       .toLowerCase()
@@ -3201,18 +3404,22 @@ String _safeOnlineDiagnosticSegment(String value) {
 
 class _QuickPopOnlineSearchScreen extends StatefulWidget {
   const _QuickPopOnlineSearchScreen({
+    required this.searchStopwatch,
     required this.profile,
     required this.wallet,
     required this.progression,
     required this.tutorial,
     required this.analytics,
+    this.isRematch = false,
   });
 
+  final Stopwatch searchStopwatch;
   final PlayerProfile profile;
   final WalletController wallet;
   final PlayerProgressionController? progression;
   final TutorialController? tutorial;
   final GameAnalytics analytics;
+  final bool isRematch;
 
   @override
   State<_QuickPopOnlineSearchScreen> createState() =>
@@ -3221,20 +3428,47 @@ class _QuickPopOnlineSearchScreen extends StatefulWidget {
 
 class _QuickPopOnlineSearchScreenState
     extends State<_QuickPopOnlineSearchScreen> {
-  FirebaseOnlineConnection? connection;
-  QuickPopQueueTicket? ticket;
+  QuickPopDeadlineSearch<
+    FirebaseOnlineConnection,
+    QuickPopQueueTicket,
+    QuickPopResolution,
+    OnlineQuickPopPreparedMatch
+  >?
+  deadlineSearch;
   Timer? countdownTimer;
-  DateTime? localDeadline;
-  Object? error;
   String status = 'Conectando con Parchís Pop…';
   int secondsRemaining = quickPopSearchWindow.inSeconds;
   bool cancelled = false;
-  bool resolved = false;
   bool openingMatch = false;
+  bool navigationCommitted = false;
+  bool searchCancellationLogged = false;
+  bool searchFailureLogged = false;
+  bool playerFoundLogged = false;
+  bool matchOpenFailureLogged = false;
+  bool settlementUnavailableLogged = false;
+  final QuickPopCancelGate cancelGate = QuickPopCancelGate();
+  bool settlementInProgress = false;
+  bool settlementUnavailable = false;
+
+  MatchLaunchSource get launchSource =>
+      widget.isRematch ? MatchLaunchSource.rematch : MatchLaunchSource.home;
+
+  int get searchElapsedMilliseconds =>
+      math.max(0, widget.searchStopwatch.elapsedMilliseconds);
+
+  int get matchmakingWaitSeconds =>
+      onlineMatchmakingWaitSeconds(searchElapsedMilliseconds);
 
   @override
   void initState() {
     super.initState();
+    secondsRemaining = math.max(
+      0,
+      ((quickPopSearchWindow.inMilliseconds -
+                  widget.searchStopwatch.elapsedMilliseconds) /
+              1000)
+          .ceil(),
+    );
     unawaited(_beginSearch());
   }
 
@@ -3242,157 +3476,233 @@ class _QuickPopOnlineSearchScreenState
   void dispose() {
     cancelled = true;
     countdownTimer?.cancel();
-    final currentTicket = ticket;
-    final currentConnection = connection;
-    if (!resolved && currentTicket != null && currentConnection != null) {
-      unawaited(currentConnection.transport.cancelQuickPop(currentTicket));
-    }
+    if (!navigationCommitted) _logSearchCancellation();
+    final currentSearch = deadlineSearch;
+    if (currentSearch != null) unawaited(currentSearch.cancel());
     super.dispose();
   }
 
   Future<void> _beginSearch() async {
-    countdownTimer?.cancel();
-    final previousTicket = ticket;
-    final previousConnection = connection;
-    if (!resolved && previousTicket != null && previousConnection != null) {
-      try {
-        await previousConnection.transport.cancelQuickPop(previousTicket);
-      } catch (_) {
-        // A resolved or expired ticket is already safe to abandon.
-      }
-    }
     if (!mounted) return;
-    setState(() {
-      error = null;
-      status = 'Conectando con Parchís Pop…';
-      secondsRemaining = quickPopSearchWindow.inSeconds;
-      ticket = null;
-      resolved = false;
-      openingMatch = false;
-      cancelled = false;
-    });
-    try {
-      final online = await FirebaseOnlineConnection.connect(
-        displayName: widget.profile.name,
-        avatarId: widget.wallet.equippedProductId(CosmeticCategory.avatar),
-      );
-      if (!mounted || cancelled) return;
-      connection = online;
-      final queued = await online.transport.enqueueQuickPop(
-        mode: GameMode.traditional.name,
-        matchFormat: MatchFormat.quickPop.name,
-      );
-      if (!mounted || cancelled) {
-        await online.transport.cancelQuickPop(queued);
-        return;
-      }
-      ticket = queued;
-      localDeadline = DateTime.now().add(quickPopSearchWindow);
-      setState(() => status = 'Buscando un jugador online…');
-      countdownTimer = Timer.periodic(
-        const Duration(milliseconds: 100),
-        (_) => _refreshCountdown(),
-      );
+    unawaited(
+      widget.analytics.logEvent(
+        OnlineFlowEvent(
+          experience: OnlineExperience.quickPop,
+          stage: OnlineFlowStage.searchStarted,
+          launchSource: launchSource,
+        ),
+      ),
+    );
+    countdownTimer = Timer.periodic(
+      const Duration(milliseconds: 100),
+      (_) => _refreshCountdown(),
+    );
+    late final QuickPopDeadlineSearch<
+      FirebaseOnlineConnection,
+      QuickPopQueueTicket,
+      QuickPopResolution,
+      OnlineQuickPopPreparedMatch
+    >
+    search;
+    search =
+        QuickPopDeadlineSearch<
+          FirebaseOnlineConnection,
+          QuickPopQueueTicket,
+          QuickPopResolution,
+          OnlineQuickPopPreparedMatch
+        >(
+          window: quickPopSearchWindow,
+          elapsed: () => widget.searchStopwatch.elapsed,
+          connect: () => FirebaseOnlineConnection.connect(
+            displayName: widget.profile.name,
+            avatarId: widget.wallet.equippedProductId(CosmeticCategory.avatar),
+          ),
+          enqueue: (online) => online.transport.enqueueQuickPop(
+            mode: GameMode.traditional.name,
+            matchFormat: MatchFormat.quickPop.name,
+            searchWindow: search.remaining,
+          ),
+          resolve: (online, queued) => online.transport.resolveQuickPop(queued),
+          prepare: (online, queued, resolution) async {
+            _logPlayerFound();
+            final prepared = await OnlineQuickPopBootstrap.prepare(
+              transport: online.transport,
+              ticket: queued,
+              resolution: resolution,
+              hostTimeout: search.remaining,
+            );
+            try {
+              await _startOnlineSyncWithRetry(
+                prepared.sync,
+                timeout: search.remaining,
+              );
+              return prepared;
+            } catch (_) {
+              prepared.sync.dispose();
+              rethrow;
+            }
+          },
+          synchronize: (online, queued, resolution, prepared) =>
+              online.transport.synchronizeQuickPopLaunch(
+                ticket: queued,
+                resolution: resolution,
+              ),
+          settle: (online, queued, resolution, prepared) async {
+            final decision = await online.transport.settleQuickPopLaunch(
+              ticket: queued,
+              resolution: resolution,
+              operationTimeout:
+                  search.remaining + quickPopSettlementOperationTimeout,
+            );
+            return switch (decision) {
+              QuickPopLaunchSettlement.human =>
+                QuickPopDeadlineSettlement.human,
+              QuickPopLaunchSettlement.fallback =>
+                QuickPopDeadlineSettlement.fallback,
+              QuickPopLaunchSettlement.unavailable =>
+                QuickPopDeadlineSettlement.unavailable,
+            };
+          },
+          cancelTicket: (online, queued) =>
+              online.transport.cancelQuickPop(queued),
+          abandonResolution: (online, queued, resolution) => online.transport
+              .abandonQuickPopLaunch(ticket: queued, resolution: resolution),
+          disposePrepared: (prepared) => prepared.sync.dispose(),
+          releaseConnection: (online) async => online.release(),
+          isHumanResolution: (resolution) =>
+              resolution.kind == QuickPopResolutionKind.human,
+          onPhaseChanged: _handleSearchPhase,
+          onFailure: _handleSearchFailure,
+          onHuman: _openPreparedHuman,
+          onFallback: (failurePhase, failure) {
+            _openLocalCpuFallback(
+              failureReason: failure == null
+                  ? null
+                  : _onlineFlowFailureReason(failure),
+            );
+          },
+          onUnavailable: _handleSettlementUnavailable,
+        );
+    deadlineSearch = search;
+    await search.start();
+  }
 
-      while (mounted && !cancelled && !resolved) {
-        final result = await online.transport.resolveQuickPop(queued);
-        if (result != null) {
-          resolved = true;
-          countdownTimer?.cancel();
-          await _openResolution(online, result);
-          return;
-        }
-        await Future<void>.delayed(const Duration(milliseconds: 160));
-      }
-    } catch (caught, stackTrace) {
-      countdownTimer?.cancel();
-      final failure = describeQuickPopOnlineFailure(caught);
-      debugPrint(
-        'Quick Pop online failed [${failure.diagnosticCode}] '
-        '(${caught.runtimeType}).',
-      );
-      if (kDebugMode) debugPrintStack(stackTrace: stackTrace);
-      if (!mounted || cancelled) return;
+  void _handleSearchPhase(QuickPopSearchPhase phase) {
+    if (!mounted || cancelled || navigationCommitted) return;
+    final nextStatus = switch (phase) {
+      QuickPopSearchPhase.connecting => 'Conectando con Parchís Pop…',
+      QuickPopSearchPhase.enqueueing => 'Preparando la búsqueda online…',
+      QuickPopSearchPhase.resolving => 'Buscando un jugador online…',
+      QuickPopSearchPhase.preparing =>
+        'Jugador encontrado · preparando la mesa…',
+      QuickPopSearchPhase.synchronizing =>
+        'Sincronizando la mesa con el otro jugador…',
+      QuickPopSearchPhase.settling =>
+        'Confirmando la partida con el otro jugador…',
+    };
+    final nextOpening =
+        phase == QuickPopSearchPhase.preparing ||
+        phase == QuickPopSearchPhase.synchronizing ||
+        phase == QuickPopSearchPhase.settling;
+    if (status != nextStatus || openingMatch != nextOpening) {
       setState(() {
-        error = caught;
-        status = failure.userMessage;
+        status = nextStatus;
+        openingMatch = nextOpening;
+        settlementInProgress = phase == QuickPopSearchPhase.settling;
       });
     }
   }
 
+  void _handleSearchFailure(
+    QuickPopSearchPhase phase,
+    Object caught,
+    StackTrace stackTrace,
+  ) {
+    if (phase == QuickPopSearchPhase.preparing) {
+      _logMatchOpenFailure(caught, stackTrace);
+      return;
+    }
+    if (phase == QuickPopSearchPhase.synchronizing ||
+        phase == QuickPopSearchPhase.settling) {
+      // These failures are not terminal while a shared human launch may have
+      // reached Firebase. The authoritative settlement callback records the
+      // one final outcome after both devices have converged.
+      _debugMatchOpenFailure(caught, stackTrace);
+      return;
+    }
+    _logSearchFailure(phase, caught, stackTrace);
+  }
+
+  void _logPlayerFound() {
+    if (playerFoundLogged || cancelled || navigationCommitted) return;
+    playerFoundLogged = true;
+    unawaited(
+      widget.analytics.logEvent(
+        OnlineFlowEvent(
+          experience: OnlineExperience.quickPop,
+          stage: OnlineFlowStage.playerFound,
+          launchSource: launchSource,
+          elapsedMilliseconds: searchElapsedMilliseconds,
+        ),
+      ),
+    );
+  }
+
+  void _logSearchFailure(
+    QuickPopSearchPhase phase,
+    Object caught,
+    StackTrace stackTrace,
+  ) {
+    if (searchFailureLogged || cancelled || navigationCommitted) return;
+    searchFailureLogged = true;
+    final failure = describeQuickPopOnlineFailure(caught);
+    unawaited(
+      widget.analytics.logEvent(
+        OnlineFlowEvent(
+          experience: OnlineExperience.quickPop,
+          stage: phase == QuickPopSearchPhase.connecting
+              ? OnlineFlowStage.connectionFailed
+              : OnlineFlowStage.searchFailed,
+          launchSource: launchSource,
+          elapsedMilliseconds: searchElapsedMilliseconds,
+          failureReason: _onlineFlowFailureReason(caught),
+        ),
+      ),
+    );
+    debugPrint(
+      'Quick Pop online failed [${failure.diagnosticCode}] '
+      '(${caught.runtimeType}).',
+    );
+    if (kDebugMode) debugPrintStack(stackTrace: stackTrace);
+  }
+
   void _refreshCountdown() {
-    final deadline = localDeadline;
-    if (!mounted || deadline == null || resolved) return;
-    final remainingMs = deadline.difference(DateTime.now()).inMilliseconds;
+    if (!mounted || navigationCommitted) return;
+    final remainingMs =
+        quickPopSearchWindow.inMilliseconds -
+        widget.searchStopwatch.elapsedMilliseconds;
     final next = math.max(0, (remainingMs / 1000).ceil());
     if (next != secondsRemaining) setState(() => secondsRemaining = next);
   }
 
-  Future<void> _openResolution(
-    FirebaseOnlineConnection online,
+  void _openPreparedHuman(
+    FirebaseOnlineConnection _,
     QuickPopResolution resolution,
-  ) async {
-    if (!mounted) return;
-    if (resolution.kind == QuickPopResolutionKind.cpu) {
-      final localPlayer = OnlineParticipant(
-        id: online.user.uid,
-        displayName: widget.profile.name,
-        flag: widget.profile.flag,
-        avatarId:
-            widget.wallet.equippedProductId(CosmeticCategory.avatar) ??
-            'avatar_default',
-        level: widget.profile.level,
-        color: PlayerColor.red,
-        kind: ParticipantKind.local,
-        loadout: CosmeticLoadout(
-          themeId: widget.wallet.equippedProductId(CosmeticCategory.theme),
-          diceId: widget.wallet.equippedProductId(CosmeticCategory.dice),
-          tokensId: widget.wallet.equippedProductId(CosmeticCategory.tokens),
-        ),
-      );
-      final fallbackSession =
-          VirtualProfileFactory(
-            seed: resolution.resolvedAtMs & 0x7fffffff,
-          ).createSession(
-            matchId: resolution.roomId,
-            mode: GameMode.traditional,
-            localPlayer: localPlayer,
-          );
-      Navigator.of(context).pushReplacement(
-        MaterialPageRoute<void>(
-          builder: (_) => GameScreen(
-            opponent: 'Quick Pop · CPU',
-            mode: GameMode.traditional,
-            matchFormat: MatchFormat.quickPop,
-            wallet: widget.wallet,
-            progression: widget.progression,
-            tutorial: widget.tutorial,
-            localProfile: widget.profile,
-            onlineSession: fallbackSession,
-            analytics: widget.analytics,
-            matchmakingWaitSeconds: quickPopSearchWindow.inSeconds,
-          ),
-        ),
-      );
+    OnlineQuickPopPreparedMatch prepared,
+  ) {
+    if (!mounted || cancelled || navigationCommitted) return;
+    final waitSeconds = matchmakingWaitSeconds;
+    if (resolution.kind != QuickPopResolutionKind.human) {
+      prepared.sync.dispose();
+      _openLocalCpuFallback();
       return;
     }
 
-    setState(() {
-      openingMatch = true;
-      status = 'Jugador encontrado · preparando la mesa…';
-    });
-    final prepared = await OnlineQuickPopBootstrap.prepare(
-      transport: online.transport,
-      resolution: resolution,
-    );
-    await _startOnlineSyncWithRetry(prepared.sync);
-    if (!mounted || cancelled) {
-      prepared.sync.dispose();
-      return;
-    }
+    countdownTimer?.cancel();
     final opponent = prepared.session.participants.firstWhere(
       (participant) => participant.kind == ParticipantKind.remoteHuman,
     );
+    navigationCommitted = true;
     Navigator.of(context).pushReplacement(
       MaterialPageRoute<void>(
         builder: (_) => GameScreen(
@@ -3407,16 +3717,20 @@ class _QuickPopOnlineSearchScreenState
           onlineSession: prepared.session,
           onlineGameSync: prepared.sync,
           analytics: widget.analytics,
-          matchmakingWaitSeconds: quickPopSearchWindow.inSeconds,
+          matchmakingWaitSeconds: waitSeconds,
+          isRematch: widget.isRematch,
           onOnlineRematch: (gameContext) {
+            final stopwatch = Stopwatch()..start();
             Navigator.of(gameContext).pushReplacement(
               MaterialPageRoute<void>(
                 builder: (_) => _QuickPopOnlineSearchScreen(
+                  searchStopwatch: stopwatch,
                   profile: widget.profile,
                   wallet: widget.wallet,
                   progression: widget.progression,
                   tutorial: widget.tutorial,
                   analytics: widget.analytics,
+                  isRematch: true,
                 ),
               ),
             );
@@ -3426,25 +3740,167 @@ class _QuickPopOnlineSearchScreenState
     );
   }
 
-  Future<void> _cancelAndLeave() async {
-    if (openingMatch) return;
-    cancelled = true;
+  void _handleSettlementUnavailable(Object? failure) {
+    if (!mounted || cancelled || navigationCommitted) return;
+    _logSettlementUnavailable(failure);
     countdownTimer?.cancel();
-    final currentTicket = ticket;
-    final currentConnection = connection;
-    if (!resolved && currentTicket != null && currentConnection != null) {
-      try {
-        await currentConnection.transport.cancelQuickPop(currentTicket);
-      } catch (_) {
-        // The queue can already have resolved while the player taps Cancel.
-      }
-    }
+    setState(() {
+      settlementInProgress = false;
+      settlementUnavailable = true;
+      openingMatch = false;
+      status = 'No pudimos confirmar la partida online.';
+    });
+  }
+
+  void _logSettlementUnavailable(Object? failure) {
+    if (settlementUnavailableLogged) return;
+    settlementUnavailableLogged = true;
+    unawaited(
+      widget.analytics.logEvent(
+        OnlineFlowEvent(
+          experience: OnlineExperience.quickPop,
+          stage: OnlineFlowStage.settlementUnavailable,
+          launchSource: launchSource,
+          elapsedMilliseconds: searchElapsedMilliseconds,
+          failureReason: failure == null
+              ? OnlineFlowFailureReason.unavailable
+              : _onlineFlowFailureReason(failure),
+        ),
+      ),
+    );
+  }
+
+  void _debugMatchOpenFailure(Object caught, StackTrace stackTrace) {
+    final failure = describeQuickPopOnlineFailure(caught);
+    debugPrint(
+      'Quick Pop match open pending settlement '
+      '[${failure.diagnosticCode}] (${caught.runtimeType}).',
+    );
+    if (kDebugMode) debugPrintStack(stackTrace: stackTrace);
+  }
+
+  void _logMatchOpenFailure(Object caught, StackTrace stackTrace) {
+    if (matchOpenFailureLogged) return;
+    matchOpenFailureLogged = true;
+    final failure = describeQuickPopOnlineFailure(caught);
+    unawaited(
+      widget.analytics.logEvent(
+        OnlineFlowEvent(
+          experience: OnlineExperience.quickPop,
+          stage: OnlineFlowStage.matchOpenFailed,
+          launchSource: launchSource,
+          elapsedMilliseconds: searchElapsedMilliseconds,
+          failureReason: _onlineFlowFailureReason(caught),
+        ),
+      ),
+    );
+    debugPrint(
+      'Quick Pop match open failed [${failure.diagnosticCode}] '
+      '(${caught.runtimeType}).',
+    );
+    if (kDebugMode) debugPrintStack(stackTrace: stackTrace);
+  }
+
+  void _openLocalCpuFallback({OnlineFlowFailureReason? failureReason}) {
+    if (!mounted || cancelled || navigationCommitted) return;
+    navigationCommitted = true;
+    countdownTimer?.cancel();
+    final elapsedMilliseconds = math.min(
+      searchElapsedMilliseconds,
+      quickPopSearchWindow.inMilliseconds,
+    );
+    final waitSeconds = onlineMatchmakingWaitSeconds(elapsedMilliseconds);
+    unawaited(
+      widget.analytics.logEvent(
+        OnlineFlowEvent(
+          experience: OnlineExperience.quickPop,
+          stage: OnlineFlowStage.cpuFallback,
+          launchSource: launchSource,
+          elapsedMilliseconds: elapsedMilliseconds,
+          failureReason: failureReason,
+        ),
+      ),
+    );
+    final matchId = _newAnalyticsReference('quick_pop_cpu');
+    final seed = DateTime.now().microsecondsSinceEpoch & 0x7fffffff;
+    final localPlayer = OnlineParticipant(
+      id: '${matchId}_local',
+      displayName: widget.profile.name,
+      flag: widget.profile.flag,
+      avatarId:
+          widget.wallet.equippedProductId(CosmeticCategory.avatar) ??
+          'avatar_default',
+      level: widget.profile.level,
+      color: PlayerColor.red,
+      kind: ParticipantKind.local,
+      loadout: CosmeticLoadout(
+        themeId: widget.wallet.equippedProductId(CosmeticCategory.theme),
+        diceId: widget.wallet.equippedProductId(CosmeticCategory.dice),
+        tokensId: widget.wallet.equippedProductId(CosmeticCategory.tokens),
+      ),
+    );
+    final fallbackSession = VirtualProfileFactory(seed: seed).createSession(
+      matchId: matchId,
+      mode: GameMode.traditional,
+      localPlayer: localPlayer,
+    );
+    Navigator.of(context).pushReplacement(
+      PageRouteBuilder<void>(
+        transitionDuration: Duration.zero,
+        reverseTransitionDuration: Duration.zero,
+        pageBuilder: (_, _, _) => GameScreen(
+          opponent: 'Quick Pop · CPU',
+          mode: GameMode.traditional,
+          matchFormat: MatchFormat.quickPop,
+          wallet: widget.wallet,
+          progression: widget.progression,
+          tutorial: widget.tutorial,
+          localProfile: widget.profile,
+          onlineSession: fallbackSession,
+          analytics: widget.analytics,
+          matchmakingWaitSeconds: waitSeconds,
+          isRematch: widget.isRematch,
+        ),
+      ),
+    );
+  }
+
+  Future<void> _cancelAndLeave() async {
+    if (settlementInProgress || !cancelGate.tryStart()) return;
+    // Close every local exit synchronously before the first await. This keeps
+    // double taps and a system-back + button race to exactly one cancellation
+    // and one Navigator.pop.
+    cancelled = true;
+    if (mounted) setState(() {});
+    countdownTimer?.cancel();
+    _logSearchCancellation();
+    final currentSearch = deadlineSearch;
+    if (currentSearch != null) await currentSearch.cancel();
     if (mounted) Navigator.pop(context);
+  }
+
+  void _logSearchCancellation() {
+    if (searchCancellationLogged ||
+        navigationCommitted ||
+        deadlineSearch?.outcome != QuickPopDeadlineOutcome.searching) {
+      return;
+    }
+    searchCancellationLogged = true;
+    unawaited(
+      widget.analytics.logEvent(
+        OnlineFlowEvent(
+          experience: OnlineExperience.quickPop,
+          stage: OnlineFlowStage.searchCancelled,
+          launchSource: launchSource,
+          elapsedMilliseconds: searchElapsedMilliseconds,
+        ),
+      ),
+    );
   }
 
   @override
   Widget build(BuildContext context) => PopScope(
-    canPop: error != null,
+    canPop: false,
     onPopInvokedWithResult: (didPop, result) {
       if (!didPop) unawaited(_cancelAndLeave());
     },
@@ -3470,92 +3926,14 @@ class _QuickPopOnlineSearchScreenState
                       ),
                     ],
                   ),
-                  child: Column(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      Container(
-                        width: 82,
-                        height: 82,
-                        decoration: const BoxDecoration(
-                          color: Color(0xFF7257E9),
-                          shape: BoxShape.circle,
-                        ),
-                        child: error == null
-                            ? Padding(
-                                padding: const EdgeInsets.all(20),
-                                child: CircularProgressIndicator(
-                                  strokeWidth: 7,
-                                  color: Colors.white,
-                                  value: openingMatch
-                                      ? null
-                                      : 1 -
-                                            (secondsRemaining /
-                                                quickPopSearchWindow.inSeconds),
-                                ),
-                              )
-                            : const Icon(
-                                Icons.cloud_off_rounded,
-                                color: Colors.white,
-                                size: 44,
-                              ),
-                      ),
-                      const SizedBox(height: 18),
-                      const PopText(
-                        'QUICK POP ONLINE',
-                        textAlign: TextAlign.center,
-                        style: TextStyle(
-                          color: PopColors.navy,
-                          fontSize: 25,
-                          fontWeight: FontWeight.w900,
-                        ),
-                      ),
-                      const SizedBox(height: 8),
-                      PopText(
-                        status,
-                        key: const ValueKey('quick-pop-search-status'),
-                        textAlign: TextAlign.center,
-                        style: const TextStyle(
-                          color: Color(0xFF667085),
-                          fontWeight: FontWeight.w700,
-                        ),
-                      ),
-                      if (error == null && !openingMatch) ...[
-                        const SizedBox(height: 16),
-                        PopText(
-                          '$secondsRemaining',
-                          key: const ValueKey('quick-pop-countdown'),
-                          style: const TextStyle(
-                            color: Color(0xFF7257E9),
-                            fontSize: 42,
-                            height: 1,
-                            fontWeight: FontWeight.w900,
-                          ),
-                        ),
-                        const SizedBox(height: 5),
-                        const PopText(
-                          'Luego jugarás contra CPU automáticamente',
-                          textAlign: TextAlign.center,
-                          style: TextStyle(
-                            color: Color(0xFF667085),
-                            fontSize: 12,
-                            fontWeight: FontWeight.w700,
-                          ),
-                        ),
-                      ],
-                      const SizedBox(height: 20),
-                      if (error != null) ...[
-                        FilledButton.icon(
-                          onPressed: _beginSearch,
-                          icon: const Icon(Icons.refresh_rounded),
-                          label: const PopText('INTENTAR DE NUEVO'),
-                        ),
-                        const SizedBox(height: 6),
-                      ],
-                      TextButton(
-                        onPressed: openingMatch ? null : _cancelAndLeave,
-                        child: PopText(error == null ? 'CANCELAR' : 'VOLVER'),
-                      ),
-                    ],
+                  child: QuickPopOnlineSearchStatusPanel(
+                    status: status,
+                    secondsRemaining: secondsRemaining,
+                    openingMatch: openingMatch,
+                    settlementUnavailable: settlementUnavailable,
+                    onExit: cancelGate.started || settlementInProgress
+                        ? null
+                        : _cancelAndLeave,
                   ),
                 ),
               ),
@@ -3567,7 +3945,125 @@ class _QuickPopOnlineSearchScreenState
   );
 }
 
+@visibleForTesting
+class QuickPopOnlineSearchStatusPanel extends StatelessWidget {
+  const QuickPopOnlineSearchStatusPanel({
+    required this.status,
+    required this.secondsRemaining,
+    required this.openingMatch,
+    required this.settlementUnavailable,
+    required this.onExit,
+    super.key,
+  });
+
+  final String status;
+  final int secondsRemaining;
+  final bool openingMatch;
+  final bool settlementUnavailable;
+  final VoidCallback? onExit;
+
+  @override
+  Widget build(BuildContext context) => Column(
+    mainAxisSize: MainAxisSize.min,
+    children: [
+      Container(
+        width: 82,
+        height: 82,
+        decoration: const BoxDecoration(
+          color: Color(0xFF7257E9),
+          shape: BoxShape.circle,
+        ),
+        child: settlementUnavailable
+            ? const Icon(
+                Icons.cloud_off_rounded,
+                key: ValueKey('quick-pop-reconnect-icon'),
+                color: Colors.white,
+                size: 42,
+              )
+            : Padding(
+                padding: const EdgeInsets.all(20),
+                child: CircularProgressIndicator(
+                  strokeWidth: 7,
+                  color: Colors.white,
+                  value: openingMatch
+                      ? null
+                      : 1 - (secondsRemaining / quickPopSearchWindow.inSeconds),
+                ),
+              ),
+      ),
+      const SizedBox(height: 18),
+      const PopText(
+        'QUICK POP ONLINE',
+        textAlign: TextAlign.center,
+        style: TextStyle(
+          color: PopColors.navy,
+          fontSize: 25,
+          fontWeight: FontWeight.w900,
+        ),
+      ),
+      const SizedBox(height: 8),
+      PopText(
+        status,
+        key: const ValueKey('quick-pop-search-status'),
+        textAlign: TextAlign.center,
+        style: const TextStyle(
+          color: Color(0xFF667085),
+          fontWeight: FontWeight.w700,
+        ),
+      ),
+      if (settlementUnavailable) ...[
+        const SizedBox(height: 16),
+        const PopText(
+          'Revisa tu conexión y vuelve para buscar otra partida. Para no separar a los jugadores, aquí no iniciaremos una partida contra CPU.',
+          key: ValueKey('quick-pop-settlement-unavailable-help'),
+          textAlign: TextAlign.center,
+          style: TextStyle(
+            color: Color(0xFF667085),
+            fontSize: 12,
+            fontWeight: FontWeight.w700,
+          ),
+        ),
+      ] else if (!openingMatch) ...[
+        const SizedBox(height: 16),
+        PopText(
+          '$secondsRemaining',
+          key: const ValueKey('quick-pop-countdown'),
+          style: const TextStyle(
+            color: Color(0xFF7257E9),
+            fontSize: 42,
+            height: 1,
+            fontWeight: FontWeight.w900,
+          ),
+        ),
+        const SizedBox(height: 5),
+        const PopText(
+          'Luego jugarás contra CPU automáticamente',
+          textAlign: TextAlign.center,
+          style: TextStyle(
+            color: Color(0xFF667085),
+            fontSize: 12,
+            fontWeight: FontWeight.w700,
+          ),
+        ),
+      ],
+      const SizedBox(height: 20),
+      TextButton(
+        key: const ValueKey('quick-pop-search-exit'),
+        onPressed: onExit,
+        child: PopText(settlementUnavailable ? 'VOLVER' : 'CANCELAR'),
+      ),
+    ],
+  );
+}
+
 enum _QuickPopEntryChoice { online, cpu }
+
+class _QuickPopEntrySelection {
+  const _QuickPopEntrySelection(this.choice, {this.stopwatch});
+
+  final _QuickPopEntryChoice choice;
+  final Stopwatch? stopwatch;
+}
 
 class _QuickPopEntryDialog extends StatelessWidget {
   const _QuickPopEntryDialog();
@@ -3641,8 +4137,13 @@ class _QuickPopEntryDialog extends StatelessWidget {
             const SizedBox(height: 18),
             FilledButton.icon(
               key: const ValueKey('quick-pop-online-start'),
-              onPressed: () =>
-                  Navigator.pop(context, _QuickPopEntryChoice.online),
+              onPressed: () => Navigator.pop(
+                context,
+                _QuickPopEntrySelection(
+                  _QuickPopEntryChoice.online,
+                  stopwatch: Stopwatch()..start(),
+                ),
+              ),
               icon: const Icon(Icons.public_rounded),
               label: const PopText('JUGAR ONLINE · BUSCAR 5 S'),
               style: FilledButton.styleFrom(
@@ -3657,7 +4158,10 @@ class _QuickPopEntryDialog extends StatelessWidget {
             const SizedBox(height: 8),
             OutlinedButton.icon(
               key: const ValueKey('quick-pop-local-preview'),
-              onPressed: () => Navigator.pop(context, _QuickPopEntryChoice.cpu),
+              onPressed: () => Navigator.pop(
+                context,
+                const _QuickPopEntrySelection(_QuickPopEntryChoice.cpu),
+              ),
               icon: const Icon(Icons.smart_toy_rounded),
               label: const PopText('JUGAR AHORA CONTRA CPU'),
             ),
@@ -24855,6 +25359,12 @@ class _SettingsScreenState extends State<SettingsScreen> {
     try {
       await (analytics as AnalyticsPrivacyControl)
           .setAnalyticsCollectionEnabled(value);
+      if (value) {
+        await recordAppSessionAnalytics(
+          analytics,
+          anonymousSessionId: _newAnalyticsReference('session'),
+        );
+      }
       if (mounted) setState(() => anonymousAnalytics = value);
     } catch (_) {
       if (!mounted) return;
@@ -25193,7 +25703,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                               onChanged: _setAnonymousAnalytics,
                               title: const PopText('Analítica anónima'),
                               subtitle: const PopText(
-                                'Ayuda a mejorar el juego sin enviar tu nombre ni correo',
+                                'Mide sesiones, retención y pasos online de Quick Pop y Quick Table, sin enviar nombre, correo ni códigos de sala',
                               ),
                               secondary: const Icon(Icons.insights_rounded),
                             ),

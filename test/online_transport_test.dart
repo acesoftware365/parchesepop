@@ -26,6 +26,78 @@ OnlineTransportClient _client(
 Matcher _transportError(OnlineTransportErrorCode code) =>
     isA<OnlineTransportException>().having((error) => error.code, 'code', code);
 
+final class _RecordingQueryStore
+    implements OnlineRealtimeStore, OnlineRealtimeQueryStore {
+  _RecordingQueryStore(this.delegate);
+
+  final InMemoryOnlineRealtimeStore delegate;
+  int orderedReadCount = 0;
+  String? orderedReadPath;
+  String? orderedReadChild;
+  num? orderedReadStartAt;
+  int? orderedReadLimit;
+
+  @override
+  Future<Object?> read(String path) => delegate.read(path);
+
+  @override
+  Future<Object?> readOrderedChildren(
+    String path, {
+    required String orderByChild,
+    required num startAt,
+    required int limitToFirst,
+  }) async {
+    orderedReadCount++;
+    orderedReadPath = path;
+    orderedReadChild = orderByChild;
+    orderedReadStartAt = startAt;
+    orderedReadLimit = limitToFirst;
+    final children = onlineMap(await delegate.read(path));
+    final ordered =
+        children.entries
+            .where((entry) {
+              final value = onlineMap(entry.value)[orderByChild];
+              return value is num && value >= startAt;
+            })
+            .toList(growable: false)
+          ..sort((left, right) {
+            final leftValue = onlineMap(left.value)[orderByChild] as num;
+            final rightValue = onlineMap(right.value)[orderByChild] as num;
+            return leftValue.compareTo(rightValue);
+          });
+    return <String, Object?>{
+      for (final entry in ordered.take(limitToFirst)) entry.key: entry.value,
+    };
+  }
+
+  @override
+  Stream<Object?> watch(String path) => delegate.watch(path);
+
+  @override
+  Future<void> set(String path, Object? value) => delegate.set(path, value);
+
+  @override
+  Future<void> update(String path, Map<String, Object?> values) =>
+      delegate.update(path, values);
+
+  @override
+  Future<OnlineStoreTransactionResult> transaction(
+    String path,
+    OnlineStoreTransactionUpdater updater,
+  ) => delegate.transaction(path, updater);
+
+  @override
+  Future<void> setOnDisconnect(String path, Object? value) =>
+      delegate.setOnDisconnect(path, value);
+
+  @override
+  Future<void> cancelOnDisconnect(String path) =>
+      delegate.cancelOnDisconnect(path);
+
+  @override
+  Future<int> serverNowMs() => delegate.serverNowMs();
+}
+
 final class _DelayedClaimCreationStore implements OnlineRealtimeStore {
   _DelayedClaimCreationStore(this.delegate, {this.rejectAfterRelease = false});
 
@@ -140,11 +212,12 @@ final class _RejectFirstCpuFallbackStore implements OnlineRealtimeStore {
 }
 
 final class _RejectExpiredClaimedWaitingRewriteStore
-    implements OnlineRealtimeStore {
+    implements OnlineRealtimeStore, OnlineRealtimeQueryStore {
   _RejectExpiredClaimedWaitingRewriteStore(this.delegate);
 
   final OnlineRealtimeStore delegate;
   int rejectedRewrites = 0;
+  int orderedReadCount = 0;
 
   bool _isQuickQueueTicket(String path) {
     final prefix = '$onlineTransportRoot/quickQueues/';
@@ -154,6 +227,32 @@ final class _RejectExpiredClaimedWaitingRewriteStore
 
   @override
   Future<Object?> read(String path) => delegate.read(path);
+
+  @override
+  Future<Object?> readOrderedChildren(
+    String path, {
+    required String orderByChild,
+    required num startAt,
+    required int limitToFirst,
+  }) async {
+    orderedReadCount++;
+    final children = onlineMap(await delegate.read(path));
+    final ordered =
+        children.entries
+            .where((entry) {
+              final value = onlineMap(entry.value)[orderByChild];
+              return value is num && value >= startAt;
+            })
+            .toList(growable: false)
+          ..sort((left, right) {
+            final leftValue = onlineMap(left.value)[orderByChild] as num;
+            final rightValue = onlineMap(right.value)[orderByChild] as num;
+            return leftValue.compareTo(rightValue);
+          });
+    return <String, Object?>{
+      for (final entry in ordered.take(limitToFirst)) entry.key: entry.value,
+    };
+  }
 
   @override
   Stream<Object?> watch(String path) => delegate.watch(path);
@@ -194,6 +293,108 @@ final class _RejectExpiredClaimedWaitingRewriteStore
   @override
   Future<void> setOnDisconnect(String path, Object? value) =>
       delegate.setOnDisconnect(path, value);
+
+  @override
+  Future<void> cancelOnDisconnect(String path) =>
+      delegate.cancelOnDisconnect(path);
+
+  @override
+  Future<int> serverNowMs() => delegate.serverNowMs();
+}
+
+final class _DelayedAdmissionCommitStore implements OnlineRealtimeStore {
+  _DelayedAdmissionCommitStore(this.delegate);
+
+  final InMemoryOnlineRealtimeStore delegate;
+  final Completer<void> transactionPrepared = Completer<void>();
+  final Completer<void> releaseCommit = Completer<void>();
+  String? delayedRoomPath;
+  bool _delayed = false;
+
+  @override
+  Future<Object?> read(String path) => delegate.read(path);
+
+  @override
+  Stream<Object?> watch(String path) => delegate.watch(path);
+
+  @override
+  Future<void> set(String path, Object? value) => delegate.set(path, value);
+
+  @override
+  Future<void> update(String path, Map<String, Object?> values) =>
+      delegate.update(path, values);
+
+  @override
+  Future<OnlineStoreTransactionResult> transaction(
+    String path,
+    OnlineStoreTransactionUpdater updater,
+  ) async {
+    if (!_delayed && path == delayedRoomPath) {
+      _delayed = true;
+      final staleValue = await delegate.read(path);
+      final staleDecision = updater(staleValue);
+      transactionPrepared.complete();
+      await releaseCommit.future;
+      return delegate.transaction(path, (_) => staleDecision);
+    }
+    return delegate.transaction(path, updater);
+  }
+
+  @override
+  Future<void> setOnDisconnect(String path, Object? value) =>
+      delegate.setOnDisconnect(path, value);
+
+  @override
+  Future<void> cancelOnDisconnect(String path) =>
+      delegate.cancelOnDisconnect(path);
+
+  @override
+  Future<int> serverNowMs() => delegate.serverNowMs();
+}
+
+final class _FailAfterPublicRoomPublicationStore
+    implements OnlineRealtimeStore {
+  _FailAfterPublicRoomPublicationStore(this.delegate);
+
+  final InMemoryOnlineRealtimeStore delegate;
+  String? publishedRoomId;
+  String? presencePath;
+  bool _failed = false;
+
+  @override
+  Future<Object?> read(String path) => delegate.read(path);
+
+  @override
+  Stream<Object?> watch(String path) => delegate.watch(path);
+
+  @override
+  Future<void> set(String path, Object? value) async {
+    await delegate.set(path, value);
+    final prefix = '$onlineTransportRoot/publicRooms/';
+    if (!_failed && path.startsWith(prefix) && value != null) {
+      _failed = true;
+      publishedRoomId = path.substring(prefix.length);
+      throw StateError('simulated failure after public room publication');
+    }
+  }
+
+  @override
+  Future<void> update(String path, Map<String, Object?> values) =>
+      delegate.update(path, values);
+
+  @override
+  Future<OnlineStoreTransactionResult> transaction(
+    String path,
+    OnlineStoreTransactionUpdater updater,
+  ) => delegate.transaction(path, updater);
+
+  @override
+  Future<void> setOnDisconnect(String path, Object? value) async {
+    if (path.contains('/rooms/') && path.contains('/presence/')) {
+      presencePath = path;
+    }
+    await delegate.setOnDisconnect(path, value);
+  }
 
   @override
   Future<void> cancelOnDisconnect(String path) =>
@@ -273,6 +474,89 @@ void main() {
         expect(secondPointer['roomId'], secondRoom.id);
         expect(firstPointer['state'], 'active');
         expect(secondPointer['state'], 'active');
+      },
+    );
+
+    test(
+      'a failure after public creation rolls back every owned artifact',
+      () async {
+        final memory = InMemoryOnlineRealtimeStore(initialNowMs: 1500);
+        final failingStore = _FailAfterPublicRoomPublicationStore(memory);
+        final host = _client(
+          failingStore,
+          'rollback-host',
+          'Rollback Host',
+          codeFactory: (_) => RoomCode.parse('RBCK24'),
+        );
+
+        await expectLater(
+          host.createRoom(
+            visibility: RoomVisibility.public,
+            mode: 'classic',
+            matchFormat: 'quickTable',
+          ),
+          throwsA(
+            isA<StateError>().having(
+              (error) => error.message,
+              'original failure',
+              'simulated failure after public room publication',
+            ),
+          ),
+        );
+
+        final roomId = failingStore.publishedRoomId;
+        final presencePath = failingStore.presencePath;
+        expect(roomId, isNotNull);
+        expect(presencePath, isNotNull);
+        expect(await memory.read('$onlineTransportRoot/rooms/$roomId'), isNull);
+        expect(
+          await memory.read('$onlineTransportRoot/publicRooms/$roomId'),
+          isNull,
+        );
+        expect(
+          await memory.read('$onlineTransportRoot/roomCodes/RBCK24'),
+          isNull,
+        );
+        for (final collection in const <String>[
+          'rooms',
+          'presence',
+          'hostedRooms',
+        ]) {
+          expect(
+            await memory.read(
+              '$onlineTransportRoot/$onlineAccountResourcesNode/'
+              'rollback-host/$collection/$roomId',
+            ),
+            isNull,
+            reason: collection,
+          );
+        }
+        expect(
+          memory.operations,
+          contains(
+            isA<InMemoryStoreOperation>()
+                .having(
+                  (operation) => operation.kind,
+                  'kind',
+                  InMemoryStoreOperationKind.cancel,
+                )
+                .having(
+                  (operation) => operation.path,
+                  'presence hook',
+                  presencePath,
+                ),
+          ),
+        );
+
+        await memory.simulateDisconnect(path: presencePath);
+        expect(await memory.read('$onlineTransportRoot/rooms/$roomId'), isNull);
+
+        final retry = await host.createRoom(
+          visibility: RoomVisibility.private,
+          mode: 'classic',
+          matchFormat: 'quickTable',
+        );
+        expect(retry.code.value, 'RBCK24');
       },
     );
 
@@ -577,6 +861,60 @@ void main() {
       },
     );
 
+    test(
+      'a stale host admission commit is compensated after cancellation',
+      () async {
+        final memory = InMemoryOnlineRealtimeStore(initialNowMs: 6500);
+        final delayedStore = _DelayedAdmissionCommitStore(memory);
+        final host = _client(
+          delayedStore,
+          'race-host',
+          'Host',
+          codeFactory: (_) => RoomCode.parse('RACE24'),
+        );
+        final guest = _client(delayedStore, 'race-guest', 'Guest');
+        final room = await host.createRoom(
+          visibility: RoomVisibility.public,
+          mode: 'classic',
+          matchFormat: 'quickTable',
+        );
+        final request = await guest.requestRoomJoinByCode(room.code.value);
+        delayedStore.delayedRoomPath = '$onlineTransportRoot/rooms/${room.id}';
+
+        final admission = host.admitPendingJoinRequests(room.id);
+        await delayedStore.transactionPrepared.future;
+        await guest.cancelRoomJoinRequest(request);
+        expect(
+          (await host.readRoom(room.id))?.members,
+          isNot(contains(request.uid)),
+        );
+
+        delayedStore.releaseCommit.complete();
+        final afterAdmission = await admission;
+
+        expect(afterAdmission.members, isNot(contains(request.uid)));
+        expect(
+          await memory.read(
+            '$onlineTransportRoot/joinRequests/${room.id}/${request.uid}',
+          ),
+          isNull,
+        );
+        expect(
+          await memory.read(
+            '$onlineTransportRoot/rooms/${room.id}/joinFences/${request.uid}',
+          ),
+          isNull,
+        );
+        expect(
+          await memory.read(
+            '$onlineTransportRoot/rooms/${room.id}/presence/${request.uid}',
+          ),
+          isNull,
+        );
+        expect((await host.listPublicRooms()).single.occupiedSeatCount, 1);
+      },
+    );
+
     test('a guest can detach cleanly after the host closes the room', () async {
       final store = InMemoryOnlineRealtimeStore(initialNowMs: 7000);
       final host = _client(
@@ -606,6 +944,56 @@ void main() {
   });
 
   group('Quick Pop queue', () {
+    test(
+      'production-capable stores query only active Quick Pop tickets',
+      () async {
+        final memory = InMemoryOnlineRealtimeStore(initialNowMs: 1000);
+        final store = _RecordingQueryStore(memory);
+        final client = _client(store, 'query-player', 'Query Player');
+        final ticket = await client.enqueueQuickPop(mode: 'classic');
+
+        expect(await client.resolveQuickPop(ticket), isNull);
+        expect(store.orderedReadCount, 1);
+        expect(
+          store.orderedReadPath,
+          '$onlineTransportRoot/quickQueues/${ticket.queueKey}',
+        );
+        expect(store.orderedReadChild, 'activeUntil');
+        expect(store.orderedReadStartAt, ticket.joinedAtMs);
+        expect(store.orderedReadLimit, 64);
+      },
+    );
+
+    test('ticket visibility is derived from its waiting state', () {
+      const waiting = QuickPopQueueTicket(
+        ticketId: 'ticket_waiting',
+        uid: 'waiting',
+        displayName: 'Waiting',
+        queueKey: 'classic_quickPop',
+        joinedAtMs: 1000,
+        deadlineAtMs: 6000,
+      );
+      const cancelled = QuickPopQueueTicket(
+        ticketId: 'ticket_cancelled',
+        uid: 'cancelled',
+        displayName: 'Cancelled',
+        queueKey: 'classic_quickPop',
+        joinedAtMs: 1000,
+        deadlineAtMs: 6000,
+        state: QuickPopTicketState.cancelled,
+      );
+
+      expect(waiting.toJson()['activeUntil'], 6000);
+      expect(cancelled.toJson()['activeUntil'], 0);
+      expect(
+        () => QuickPopQueueTicket.fromJson(<String, Object?>{
+          ...waiting.toJson(),
+          'activeUntil': 0,
+        }),
+        throwsFormatException,
+      );
+    });
+
     test('two searches receive the same deterministic human room', () async {
       final store = InMemoryOnlineRealtimeStore(initialNowMs: 10_000);
       final first = _client(store, 'first', 'First', seed: 11);
@@ -735,7 +1123,16 @@ void main() {
         // follower's own deadline.
         store.setNowMs(leaderTicket.deadlineAtMs + 1536);
         store.clearOperations();
+        final queueReadsBeforeDeadlineContinuation =
+            guardedLeaderStore.orderedReadCount;
         expect(await leader.resolveQuickPop(leaderTicket), isNull);
+        expect(
+          guardedLeaderStore.orderedReadCount,
+          queueReadsBeforeDeadlineContinuation,
+          reason:
+              'an expired participant must continue an attached claim through '
+              'exact reads instead of enumerating the active queue',
+        );
         final leaderTicketPath =
             '$onlineTransportRoot/quickQueues/${leaderTicket.queueKey}/'
             '${leaderTicket.uid}';

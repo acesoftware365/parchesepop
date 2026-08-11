@@ -36,6 +36,7 @@ final class OnlineQuickPopBootstrap {
 
   static Future<OnlineQuickPopPreparedMatch> prepare({
     required OnlineTransportClient transport,
+    required QuickPopQueueTicket ticket,
     required QuickPopResolution resolution,
     GameMode mode = GameMode.traditional,
     Duration hostTimeout = const Duration(seconds: 12),
@@ -49,26 +50,56 @@ final class OnlineQuickPopBootstrap {
     }
     final localUid = transport.identity.uid;
     final opponentUid = resolution.opponentUid!;
-    if (opponentUid == localUid) {
+    if (opponentUid == localUid ||
+        ticket.uid != localUid ||
+        ticket.ticketId != resolution.ticketId ||
+        resolution.queueKey != ticket.queueKey ||
+        resolution.claimId == null) {
       throw const OnlineGameSyncException(
-        'A Quick Pop opponent must be another player.',
+        'A Quick Pop opponent must come from this verified search ticket.',
+      );
+    }
+    if (await transport.isQuickPopLaunchAbandoned(
+      ticket: ticket,
+      resolution: resolution,
+    )) {
+      throw const OnlineGameSyncException(
+        'The Quick Pop launch was abandoned before room preparation.',
       );
     }
     final humanUids = <String>[localUid, opponentUid]..sort();
     final hostUid = humanUids.first;
     final guestUid = humanUids.last;
+    final launchMetadata = await transport.quickPopLaunchMetadata(
+      ticket: ticket,
+      resolution: resolution,
+    );
     final now = await transport.store.serverNowMs();
     final roomCode = _roomCodeFor(resolution.roomId);
 
     if (localUid == hostUid) {
-      final hostName = await _displayNameFor(transport, hostUid);
-      final guestName = await _displayNameFor(transport, guestUid);
+      final hostName = transport.identity.displayName;
+      final guestName = await _verifiedOpponentDisplayName(
+        transport,
+        opponentUid: guestUid,
+        queueKey: ticket.queueKey,
+        claimId: resolution.claimId!,
+        launchMetadata: launchMetadata,
+      );
+      if (await transport.isQuickPopLaunchAbandoned(
+        ticket: ticket,
+        resolution: resolution,
+      )) {
+        throw const OnlineGameSyncException(
+          'The Quick Pop launch was abandoned before room creation.',
+        );
+      }
       final room = OnlineRoomRecord(
         id: resolution.roomId,
         code: roomCode,
         hostUid: hostUid,
         visibility: RoomVisibility.private,
-        status: RoomStatus.inGame,
+        status: RoomStatus.starting,
         mode: mode.name,
         matchFormat: MatchFormat.quickPop.name,
         members: <String, OnlineRoomMemberRecord>{
@@ -129,10 +160,11 @@ final class OnlineQuickPopBootstrap {
         createdAtMs: now,
         updatedAtMs: now,
       );
+      final roomJson = room.toJson()..['quickPopLaunch'] = launchMetadata;
       final creation = await transport.store.transaction(
         '$onlineTransportRoot/rooms/${resolution.roomId}',
         (raw) => raw == null
-            ? OnlineStoreTransactionDecision.commit(room.toJson())
+            ? OnlineStoreTransactionDecision.commit(roomJson)
             : const OnlineStoreTransactionDecision.abort(),
       );
       if (!creation.committed) {
@@ -148,7 +180,24 @@ final class OnlineQuickPopBootstrap {
       humanUids: humanUids,
       timeout: hostTimeout,
       pollInterval: pollInterval,
+      isAbandoned: () => transport.isQuickPopLaunchAbandoned(
+        ticket: ticket,
+        resolution: resolution,
+      ),
     );
+    await _validateLaunchMetadata(
+      transport,
+      roomId: room.id,
+      expected: launchMetadata,
+    );
+    if (await transport.isQuickPopLaunchAbandoned(
+      ticket: ticket,
+      resolution: resolution,
+    )) {
+      throw const OnlineGameSyncException(
+        'The Quick Pop launch was abandoned during room preparation.',
+      );
+    }
     final localMember = room.members[localUid]!;
     final participants = <OnlineParticipant>[
       for (final member in room.members.values)
@@ -202,22 +251,41 @@ final class OnlineQuickPopBootstrap {
     );
   }
 
-  static Future<String> _displayNameFor(
-    OnlineTransportClient transport,
-    String uid,
-  ) async {
-    if (uid == transport.identity.uid) return transport.identity.displayName;
-    final raw = await transport.store.read(
-      '$onlineTransportRoot/profiles/$uid',
-    );
-    if (raw != null) {
-      try {
-        return SyncedOnlineProfile.fromJson(raw, uid: uid).displayName;
-      } on FormatException {
-        // Fall through to the friendly non-identifying label.
-      }
+  static Future<String> _verifiedOpponentDisplayName(
+    OnlineTransportClient transport, {
+    required String opponentUid,
+    required String queueKey,
+    required String claimId,
+    required Map<String, Object?> launchMetadata,
+  }) async {
+    final expectedTicketId = launchMetadata['firstUid'] == opponentUid
+        ? launchMetadata['firstTicketId']
+        : launchMetadata['secondUid'] == opponentUid
+        ? launchMetadata['secondTicketId']
+        : null;
+    if (expectedTicketId is! String || expectedTicketId.isEmpty) {
+      throw const OnlineGameSyncException(
+        'The Quick Pop opponent is missing from the verified launch claim.',
+      );
     }
-    return 'Jugador online';
+    final raw = await transport.store.read(
+      '$onlineTransportRoot/quickQueues/$queueKey/$opponentUid',
+    );
+    try {
+      final map = onlineMap(raw);
+      final opponent = QuickPopQueueTicket.fromJson(raw, uid: opponentUid);
+      if (map['uid'] == opponentUid &&
+          opponent.ticketId == expectedTicketId &&
+          opponent.queueKey == queueKey &&
+          opponent.claimId == claimId) {
+        return opponent.displayName;
+      }
+    } on FormatException {
+      // The generic error below intentionally avoids exposing queue metadata.
+    }
+    throw const OnlineGameSyncException(
+      'The Quick Pop opponent ticket does not match the verified launch claim.',
+    );
   }
 
   static Future<OnlineRoomRecord> _waitForRoom(
@@ -227,6 +295,7 @@ final class OnlineQuickPopBootstrap {
     required List<String> humanUids,
     required Duration timeout,
     required Duration pollInterval,
+    required Future<bool> Function() isAbandoned,
   }) async {
     final startedAt = await transport.store.serverNowMs();
     final expiresAt = startedAt + timeout.inMilliseconds;
@@ -235,6 +304,11 @@ final class OnlineQuickPopBootstrap {
       if (room != null) {
         _validateExistingRoom(room, hostUid, humanUids);
         return room;
+      }
+      if (await isAbandoned()) {
+        throw const OnlineGameSyncException(
+          'The Quick Pop launch was cancelled before the room was ready.',
+        );
       }
       final now = await transport.store.serverNowMs();
       if (now >= expiresAt) {
@@ -256,12 +330,29 @@ final class OnlineQuickPopBootstrap {
     List<String> humanUids,
   ) {
     if (room.hostUid != hostUid ||
-        room.status != RoomStatus.inGame ||
+        (room.status != RoomStatus.starting &&
+            room.status != RoomStatus.inGame) ||
         room.matchFormat != MatchFormat.quickPop.name ||
         !humanUids.every(room.members.containsKey) ||
         room.members.length != PlayerColor.values.length) {
       throw const OnlineGameSyncException(
         'La sala Quick Pop compartida no coincide con el emparejamiento.',
+      );
+    }
+  }
+
+  static Future<void> _validateLaunchMetadata(
+    OnlineTransportClient transport, {
+    required String roomId,
+    required Map<String, Object?> expected,
+  }) async {
+    final raw = onlineMap(
+      await transport.store.read('$onlineTransportRoot/rooms/$roomId'),
+    );
+    final launch = onlineMap(raw['quickPopLaunch']);
+    if (expected.entries.any((entry) => launch[entry.key] != entry.value)) {
+      throw const OnlineGameSyncException(
+        'La sala Quick Pop no contiene el acuerdo de inicio esperado.',
       );
     }
   }

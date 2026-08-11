@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:math';
 
 import 'package:flutter_test/flutter_test.dart';
@@ -8,6 +9,72 @@ import 'package:parchesepop/online_transport_models.dart';
 import 'package:parchesepop/realtime_online_room_controller.dart';
 
 import 'support/in_memory_online_realtime_store.dart';
+
+final class _ControlledRealtimeStore implements OnlineRealtimeStore {
+  _ControlledRealtimeStore(
+    this.delegate, {
+    this.suppressPublicRoomWatch = false,
+    this.publicRoomReadGate,
+    this.presenceRegistrationGate,
+  });
+
+  final InMemoryOnlineRealtimeStore delegate;
+  final bool suppressPublicRoomWatch;
+  final Completer<void>? publicRoomReadGate;
+  final Completer<void>? presenceRegistrationGate;
+  final Completer<void> publicRoomReadStarted = Completer<void>();
+  final Completer<void> presenceRegistrationStarted = Completer<void>();
+
+  String get _publicRoomsPath => '$onlineTransportRoot/publicRooms';
+
+  @override
+  Future<Object?> read(String path) async {
+    if (path == _publicRoomsPath && publicRoomReadGate != null) {
+      if (!publicRoomReadStarted.isCompleted) publicRoomReadStarted.complete();
+      await publicRoomReadGate!.future;
+    }
+    return delegate.read(path);
+  }
+
+  @override
+  Stream<Object?> watch(String path) {
+    if (suppressPublicRoomWatch && path == _publicRoomsPath) {
+      return const Stream<Object?>.empty();
+    }
+    return delegate.watch(path);
+  }
+
+  @override
+  Future<void> set(String path, Object? value) => delegate.set(path, value);
+
+  @override
+  Future<void> update(String path, Map<String, Object?> values) =>
+      delegate.update(path, values);
+
+  @override
+  Future<OnlineStoreTransactionResult> transaction(
+    String path,
+    OnlineStoreTransactionUpdater updater,
+  ) => delegate.transaction(path, updater);
+
+  @override
+  Future<void> setOnDisconnect(String path, Object? value) async {
+    if (presenceRegistrationGate != null && path.contains('/presence/')) {
+      if (!presenceRegistrationStarted.isCompleted) {
+        presenceRegistrationStarted.complete();
+      }
+      await presenceRegistrationGate!.future;
+    }
+    await delegate.setOnDisconnect(path, value);
+  }
+
+  @override
+  Future<void> cancelOnDisconnect(String path) =>
+      delegate.cancelOnDisconnect(path);
+
+  @override
+  Future<int> serverNowMs() => delegate.serverNowMs();
+}
 
 void main() {
   group('RealtimeOnlineRoomController', () {
@@ -295,6 +362,246 @@ void main() {
         await Future<void>.delayed(Duration.zero);
         expect(host.lobby, isNull);
         expect(guest.lobby, isNull);
+      },
+    );
+
+    test(
+      'cancelPendingJoin invalidates and cleans up an in-flight join',
+      () async {
+        final store = InMemoryOnlineRealtimeStore(initialNowMs: 50_000);
+        final hostTransport = OnlineTransportClient(
+          store: store,
+          identity: OnlineTransportIdentity(
+            uid: 'host-cancel',
+            displayName: 'Host',
+          ),
+          random: Random(50),
+        );
+        final room = await hostTransport.createRoom(
+          visibility: RoomVisibility.private,
+          mode: OnlineRoomGameMode.classic.name,
+          matchFormat: 'quickTable',
+        );
+        final pollGate = Completer<void>();
+        final guest = RealtimeOnlineRoomController(
+          transport: OnlineTransportClient(
+            store: store,
+            identity: OnlineTransportIdentity(
+              uid: 'guest-cancel',
+              displayName: 'Guest',
+            ),
+            random: Random(51),
+            delay: (_) => pollGate.future,
+          ),
+        );
+        addTearDown(guest.dispose);
+
+        final join = guest.joinRoomByCode(room.code);
+        await _eventually(() {
+          final root = onlineMap(store.debugSnapshot[onlineTransportRoot]);
+          final requests = onlineMap(root['joinRequests']);
+          return onlineMap(requests[room.id]).containsKey('guest-cancel');
+        });
+        await guest.cancelPendingJoin();
+        pollGate.complete();
+
+        await expectLater(
+          join,
+          throwsA(
+            isA<OnlineTransportException>().having(
+              (error) => error.code,
+              'code',
+              OnlineTransportErrorCode.joinCancelled,
+            ),
+          ),
+        );
+        expect(guest.lobby, isNull);
+        expect(
+          await store.read(
+            '$onlineTransportRoot/joinRequests/${room.id}/guest-cancel',
+          ),
+          isNull,
+        );
+      },
+    );
+
+    test(
+      'public join cancellation survives a pending directory refresh',
+      () async {
+        final store = InMemoryOnlineRealtimeStore(initialNowMs: 60_000);
+        final hostTransport = OnlineTransportClient(
+          store: store,
+          identity: OnlineTransportIdentity(
+            uid: 'public-refresh-host',
+            displayName: 'Host',
+          ),
+          random: Random(60),
+        );
+        final room = await hostTransport.createRoom(
+          visibility: RoomVisibility.public,
+          mode: OnlineRoomGameMode.classic.name,
+          matchFormat: 'quickTable',
+        );
+        final readGate = Completer<void>();
+        final controlledStore = _ControlledRealtimeStore(
+          store,
+          suppressPublicRoomWatch: true,
+          publicRoomReadGate: readGate,
+        );
+        final guest = RealtimeOnlineRoomController(
+          transport: OnlineTransportClient(
+            store: controlledStore,
+            identity: OnlineTransportIdentity(
+              uid: 'public-refresh-guest',
+              displayName: 'Guest',
+            ),
+            random: Random(61),
+          ),
+        );
+        addTearDown(() async {
+          await guest.shutdown();
+          guest.dispose();
+          await hostTransport.closeRoom(room.id);
+        });
+
+        final join = guest.joinPublicRoom(room.id);
+        await controlledStore.publicRoomReadStarted.future;
+        await guest.cancelPendingJoin();
+        readGate.complete();
+
+        await expectLater(
+          join,
+          throwsA(
+            isA<OnlineTransportException>().having(
+              (error) => error.code,
+              'code',
+              OnlineTransportErrorCode.joinCancelled,
+            ),
+          ),
+        );
+        expect(guest.lobby, isNull);
+        final storedRoom = await hostTransport.readRoom(room.id);
+        expect(storedRoom!.members, isNot(contains('public-refresh-guest')));
+        expect(
+          await store.read(
+            '$onlineTransportRoot/joinRequests/${room.id}/public-refresh-guest',
+          ),
+          isNull,
+        );
+      },
+    );
+
+    test('cancel removes membership admitted during a pending poll', () async {
+      final store = InMemoryOnlineRealtimeStore(initialNowMs: 65_000);
+      final hostTransport = OnlineTransportClient(
+        store: store,
+        identity: OnlineTransportIdentity(
+          uid: 'late-admission-host',
+          displayName: 'Host',
+        ),
+        random: Random(65),
+      );
+      final room = await hostTransport.createRoom(
+        visibility: RoomVisibility.private,
+        mode: OnlineRoomGameMode.classic.name,
+        matchFormat: 'quickTable',
+      );
+      final pollGate = Completer<void>();
+      final pollStarted = Completer<void>();
+      final guest = RealtimeOnlineRoomController(
+        transport: OnlineTransportClient(
+          store: store,
+          identity: OnlineTransportIdentity(
+            uid: 'late-admission-guest',
+            displayName: 'Guest',
+          ),
+          random: Random(66),
+          delay: (_) {
+            if (!pollStarted.isCompleted) pollStarted.complete();
+            return pollGate.future;
+          },
+        ),
+      );
+      addTearDown(() async {
+        await guest.shutdown();
+        guest.dispose();
+        await hostTransport.closeRoom(room.id);
+      });
+
+      final join = guest.joinRoomByCode(room.code);
+      await pollStarted.future;
+      await hostTransport.admitPendingJoinRequests(room.id);
+      expect(
+        (await hostTransport.readRoom(room.id))!.members,
+        contains('late-admission-guest'),
+      );
+      await guest.cancelPendingJoin();
+      pollGate.complete();
+
+      await expectLater(
+        join,
+        throwsA(
+          isA<OnlineTransportException>().having(
+            (error) => error.code,
+            'code',
+            OnlineTransportErrorCode.joinCancelled,
+          ),
+        ),
+      );
+      expect(guest.lobby, isNull);
+      expect(
+        (await hostTransport.readRoom(room.id))!.members,
+        isNot(contains('late-admission-guest')),
+      );
+    });
+
+    test(
+      'cancelled late room creation closes every published artifact',
+      () async {
+        final store = InMemoryOnlineRealtimeStore(initialNowMs: 70_000);
+        final presenceGate = Completer<void>();
+        final controlledStore = _ControlledRealtimeStore(
+          store,
+          presenceRegistrationGate: presenceGate,
+        );
+        final controller = RealtimeOnlineRoomController(
+          transport: OnlineTransportClient(
+            store: controlledStore,
+            identity: OnlineTransportIdentity(
+              uid: 'cancel-create-host',
+              displayName: 'Host',
+            ),
+            random: Random(70),
+          ),
+        );
+        addTearDown(() async {
+          await controller.shutdown();
+          controller.dispose();
+        });
+
+        final creation = controller.createRoom(
+          mode: OnlineRoomGameMode.classic,
+          visibility: RoomVisibility.public,
+        );
+        await controlledStore.presenceRegistrationStarted.future;
+        await controller.cancelPendingCreate();
+        presenceGate.complete();
+
+        await expectLater(
+          creation,
+          throwsA(isA<OnlineRoomOperationCancelledException>()),
+        );
+        expect(controller.lobby, isNull);
+        expect(controller.roomRecord, isNull);
+        final rooms = onlineMap(await store.read('$onlineTransportRoot/rooms'));
+        expect(rooms, hasLength(1));
+        final room = OnlineRoomRecord.fromJson(rooms.values.single);
+        expect(room.status, RoomStatus.closed);
+        expect(await controller.transport.listPublicRooms(), isEmpty);
+        expect(
+          await store.read('$onlineTransportRoot/roomCodes/${room.code.value}'),
+          isNull,
+        );
       },
     );
   });

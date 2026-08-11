@@ -23,6 +23,10 @@ void main() {
       'ESCRIBE EL CÓDIGO DE LA SALA': 'ENTER THE ROOM CODE',
       'ENTRAR A LA SALA': 'JOIN ROOM',
       'SALA ONLINE': 'ONLINE ROOM',
+      'Ya no estás en la sala.': 'You are no longer in the room.',
+      'La operación tardó demasiado. Revisa tu conexión e inténtalo otra vez.':
+          'The operation took too long. Check your connection and try again.',
+      'La operación fue cancelada.': 'The operation was canceled.',
       'MARCAR LISTO': 'MARK READY',
       'INICIAR TIRADA': 'START OPENING ROLL',
       'TIRADA PARA COMENZAR': 'ROLL TO START',
@@ -73,6 +77,8 @@ void main() {
       'Borrando cuenta de forma segura…': 'Deleting account securely…',
       'No se completó el borrado': 'Deletion was not completed',
       'Intentar de nuevo': 'Try again',
+      'Mide sesiones, retención y pasos online de Quick Pop y Quick Table, sin enviar nombre, correo ni códigos de sala':
+          'Measures sessions, retention, and Quick Pop and Quick Table online steps without sending names, email, or room codes',
     };
 
     for (final entry in staticCopy.entries) {
@@ -134,6 +140,21 @@ void main() {
 
     expect(translateForLanguage(detailedSpanish, 'en'), detailedEnglish);
     expect(translateForLanguage(summarySpanish, 'en'), summaryEnglish);
+  });
+
+  test('Quick Pop search phases are translated completely', () {
+    expect(
+      translateForLanguage('Preparando la búsqueda online…', 'en'),
+      'Preparing the online search…',
+    );
+    expect(
+      translateForLanguage('Sincronizando la mesa con el otro jugador…', 'en'),
+      'Syncing the table with the other player…',
+    );
+    expect(
+      translateForLanguage('Confirmando la partida con el otro jugador…', 'en'),
+      'Confirming the match with the other player…',
+    );
   });
 
   testWidgets('Progress Hub follows the English AppLanguageScope', (

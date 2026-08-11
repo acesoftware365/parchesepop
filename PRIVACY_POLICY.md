@@ -37,10 +37,18 @@ may include:
   in-game chat.
 
 Other players in the same room can see the player information, game state, and
-preapproved messages needed to play the match. If a host marks a room public,
-the app may show a limited room listing to other players. If a real player is
-not found for Quick Pop within the displayed search period, the game may start
-with computer-controlled opponents.
+preapproved messages needed to play the match. During an active Quick Pop
+search, other players actively searching in the same matchmaking queue can see
+the anonymous Firebase identifier, display name, ticket identifiers, and timing
+or status fields in that queue entry so the clients can choose and verify a
+match. After that search window, a player cannot list the queue; access is
+limited to their own ticket and the exact opponent ticket linked to their
+verified match claim. Only the two players named by a resulting match claim can
+read that claim, and each synced profile is readable only by its owner. If a
+host marks a room
+public, the app may show a limited room listing to other players. If a real
+player is not found for Quick Pop within the displayed search period, the game
+may start with computer-controlled opponents.
 
 Parchís Pop also uses Firebase Remote Config to obtain service-availability,
 minimum-version, update-message, and update-link settings. Google Firebase SDKs
@@ -53,11 +61,15 @@ activity needed to provide and secure these services.
 Anonymous analytics collection is off by default. You may enable or disable it
 at any time from **Settings > Anonymous analytics**. When enabled, Parchís Pop
 uses Google Firebase Analytics to understand how the game is used and improve
-its design. Analytics events may include match starts and completions,
-abandonment and resume events, selected modes, tutorial progress, optional-ad
-choices, currency rewards, and shop interactions. The game does not
-intentionally include your display name, email, chat messages, flag, or avatar
-in these analytics events.
+its design. Analytics events may include anonymous app-session starts and days
+since first use for aggregate retention metrics; entry, search, creation, join,
+invitation, cancellation, failure, and success steps in Quick Pop and Quick
+Table; elapsed time and broad failure categories; match starts and completions;
+abandonment and resume events; selected modes; tutorial progress; optional-ad
+choices; currency rewards; and shop interactions. The exact first-use timestamp
+remains on the device. The game does not intentionally include your display
+name, email, chat messages, flag, avatar, room codes, Firebase UID, or raw error
+text in these analytics events.
 
 Google may process technical information such as device identifiers, app
 instance information, approximate location derived from IP address, operating
@@ -118,12 +130,14 @@ this local information, deletes the anonymous Firebase Authentication identity,
 and removes the player's online profile, active matchmaking ticket, pending
 join request, presence, and removable waiting-room membership when available.
 
-Resolved matches, immutable chat, and shared room records can contain state
-belonging to other players and may remain for service integrity, abuse
-prevention, diagnostics, or legal requirements until they are deleted or
-anonymized under the service retention process. An older online identity created
-before direct account deletion was available may also require verified backend
-cleanup. To request deletion of retained or legacy server-side data, email
+Resolved matchmaking tickets and claims, resolved matches, immutable chat, and
+shared room records can contain state belonging to other players and may remain
+for service integrity, abuse prevention, diagnostics, or legal requirements
+until they are deleted or anonymized under the service retention process.
+Access to retained matchmaking records remains restricted to their owner or the
+verified participants as applicable. An older online identity created before
+direct account deletion was available may also require verified backend cleanup.
+To request deletion of retained or legacy server-side data, email
 **sales@liisgo.com**. We may ask for limited information needed to locate and
 verify the relevant records; never send a password.
 
@@ -208,11 +222,20 @@ las partidas. Los datos online pueden incluir:
   de la partida.
 
 Los demás jugadores de la misma sala pueden ver la información del jugador, el
-estado de la partida y los mensajes preaprobados necesarios para jugar. Si el
-anfitrión marca una sala como pública, la aplicación puede mostrar un listado
-limitado de la sala a otros jugadores. Si Quick Pop no encuentra un jugador real
-durante el período de búsqueda mostrado, la partida puede comenzar con
-oponentes controlados por computadora.
+estado de la partida y los mensajes preaprobados necesarios para jugar. Durante
+una búsqueda activa de Quick Pop, los demás jugadores que estén buscando
+activamente en la misma cola pueden ver el identificador anónimo de Firebase,
+nombre visible, identificadores del ticket y campos de tiempo o estado de esa
+entrada para que los clientes puedan elegir y verificar un emparejamiento.
+Después de esa ventana de búsqueda, un jugador no puede enumerar la cola; el
+acceso queda limitado a su propio ticket y al ticket exacto del rival vinculado
+a su acuerdo verificado. Solo los dos jugadores indicados en el acuerdo
+resultante pueden leer ese acuerdo, y cada perfil
+sincronizado es legible únicamente por su propietario. Si el anfitrión marca una
+sala como pública, la aplicación puede mostrar un listado limitado de la sala a
+otros jugadores. Si Quick Pop no encuentra un jugador real durante el período
+de búsqueda mostrado, la partida puede comenzar con oponentes controlados por
+computadora.
 
 Parchís Pop también utiliza Firebase Remote Config para obtener ajustes sobre
 disponibilidad del servicio, versión mínima, mensaje y enlace de actualización.
@@ -227,10 +250,15 @@ La recopilación de analíticas anónimas está apagada por defecto. Puedes
 activarla o desactivarla en cualquier momento desde **Ajustes > Analítica
 anónima**. Cuando está activa, Parchís Pop utiliza Google Firebase Analytics
 para comprender cómo se usa el juego y mejorar su diseño. Los eventos pueden
-incluir inicio y final de partidas, abandono y reanudación, modos elegidos,
-avance del tutorial, decisiones sobre anuncios opcionales, premios de monedas e
-interacciones con la tienda. El juego no incluye intencionalmente tu nombre
-visible, correo, mensajes, bandera ni avatar en estos eventos.
+incluir inicios de sesión anónimos y días desde el primer uso para métricas
+agregadas de retención; pasos de entrada, búsqueda, creación, unión, invitación,
+cancelación, fallo y éxito en Quick Pop y Quick Table; tiempo transcurrido y
+categorías generales de fallo; inicio y final de partidas; abandono y
+reanudación; modos elegidos; avance del tutorial; decisiones sobre anuncios
+opcionales; premios de monedas e interacciones con la tienda. La fecha exacta
+del primer uso permanece en el dispositivo. El juego no incluye
+intencionalmente tu nombre visible, correo, mensajes, bandera, avatar, códigos
+de sala, UID de Firebase ni textos de error sin filtrar en estos eventos.
 
 Google puede procesar información técnica, como identificadores del dispositivo,
 información de la instancia de la aplicación, ubicación aproximada derivada de
@@ -296,13 +324,16 @@ también elimina la identidad anónima de Firebase Authentication y, cuando est�
 disponibles, el perfil online, la búsqueda activa, la solicitud pendiente de
 entrada, la presencia y la membresía removible de una sala en espera.
 
-Las partidas resueltas, el chat inmutable y los registros de salas compartidas
-pueden contener estado de otros jugadores y conservarse para mantener la
-integridad del servicio, prevenir abusos, realizar diagnósticos o cumplir
-obligaciones legales hasta que se eliminen o anonimicen según el proceso de
-retención. Una identidad online antigua, creada antes de que existiera el
-borrado directo, también puede requerir una limpieza verificada del servidor.
-Para solicitar la eliminación de datos retenidos o antiguos, escribe a
+Los tickets y acuerdos de emparejamiento resueltos, las partidas resueltas, el
+chat inmutable y los registros de salas compartidas pueden contener estado de
+otros jugadores y conservarse para mantener la integridad del servicio,
+prevenir abusos, realizar diagnósticos o cumplir obligaciones legales hasta que
+se eliminen o anonimicen según el proceso de retención. El acceso a los
+registros de emparejamiento conservados sigue limitado a su propietario o a los
+participantes verificados, según corresponda. Una identidad online antigua,
+creada antes de que existiera el borrado directo, también puede requerir una
+limpieza verificada del servidor. Para solicitar la eliminación de datos
+retenidos o antiguos, escribe a
 **sales@liisgo.com**. Podemos pedir información limitada para localizar y
 verificar los registros; nunca envíes una contraseña.
 

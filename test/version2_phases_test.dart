@@ -214,6 +214,73 @@ void main() {
     await _unmount(tester);
   });
 
+  testWidgets('online startup is playable locally by five seconds', (
+    tester,
+  ) async {
+    _useMobileViewport(tester);
+    final wallet = await WalletController.create(initialBalance: 10000);
+    final progression = await PlayerProgressionController.create();
+    final auth = await LocalPlayerAuthGateway.create();
+    addTearDown(auth.dispose);
+    addTearDown(wallet.dispose);
+    addTearDown(progression.dispose);
+    for (final productId in const [
+      'theme_neon_rush',
+      'dice_ice_crystal',
+      'tokens_robot',
+      'avatar_ninja',
+    ]) {
+      expect(await wallet.purchase(productId), PurchaseResult.purchased);
+      expect(await wallet.equip(productId), EquipResult.equipped);
+    }
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: HomeScreen(
+          profile: PlayerProfile.guest,
+          onProfileChanged: (_) {},
+          wallet: wallet,
+          progression: progression,
+          authGateway: auth,
+        ),
+      ),
+    );
+    await _pumpUntil(
+      tester,
+      () => find
+          .byKey(const ValueKey('home-mode-quick-pop'))
+          .evaluate()
+          .isNotEmpty,
+    );
+    await tester.tap(find.byKey(const ValueKey('home-mode-quick-pop')));
+    await tester.pump();
+    await tester.tap(find.byKey(const ValueKey('quick-pop-online-start')));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 4999));
+    if (find.byType(GameScreen).evaluate().isEmpty) {
+      await tester.pump(const Duration(milliseconds: 1));
+    }
+    await tester.pump();
+
+    final screen = tester.widget<GameScreen>(find.byType(GameScreen));
+    final local = screen.onlineSession!.localParticipant;
+    expect(screen.matchFormat, MatchFormat.quickPop);
+    expect(screen.onlineGameSync, isNull);
+    expect(screen.wallet, same(wallet));
+    expect(screen.progression, same(progression));
+    expect(local.avatarId, 'avatar_ninja');
+    expect(local.loadout.themeId, 'theme_neon_rush');
+    expect(local.loadout.diceId, 'dice_ice_crystal');
+    expect(local.loadout.tokensId, 'tokens_robot');
+    expect(
+      find.byKey(const ValueKey('dice-roll-target')).hitTestable(),
+      findsOneWidget,
+    );
+    expect(find.text('INTENTAR DE NUEVO'), findsNothing);
+    expect(tester.takeException(), isNull);
+    await _unmount(tester);
+  });
+
   testWidgets('a short phone keeps the playable tutorial reachable', (
     tester,
   ) async {

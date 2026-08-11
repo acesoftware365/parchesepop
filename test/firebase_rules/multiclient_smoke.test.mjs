@@ -63,6 +63,7 @@ const queueTicket = (uid, displayName, queueKey, joinedAt) => ({
   queueKey,
   joinedAt,
   deadlineAt: joinedAt + 5000,
+  activeUntil: joinedAt + 5000,
   state: 'waiting',
 });
 
@@ -103,10 +104,6 @@ test('Firebase multi-client online smoke', async (t) => {
 
     const resolutionPath =
       `onlineV2/quickClaims/${queueKey}/${claimId}/resolution`;
-    const secondObservedResolution = waitForValue(
-      pathRef(secondUid, resolutionPath),
-      (value) => value?.kind === 'human',
-    );
 
     await Promise.all([
       assertSucceeds(
@@ -128,6 +125,10 @@ test('Firebase multi-client online smoke', async (t) => {
         }),
       ),
     ]);
+    const secondObservedResolution = waitForValue(
+      pathRef(secondUid, resolutionPath),
+      (value) => value?.kind === 'human',
+    );
 
     await assertSucceeds(
       set(pathRef(firstUid, `onlineV2/quickClaims/${queueKey}/${claimId}`), {
@@ -190,6 +191,7 @@ test('Firebase multi-client online smoke', async (t) => {
       assertSucceeds(
         update(pathRef(firstUid, `onlineV2/quickQueues/${queueKey}/${firstUid}`), {
           state: 'matched',
+          activeUntil: 0,
           roomId,
           opponentUid: secondUid,
         }),
@@ -197,6 +199,7 @@ test('Firebase multi-client online smoke', async (t) => {
       assertSucceeds(
         update(pathRef(secondUid, `onlineV2/quickQueues/${queueKey}/${secondUid}`), {
           state: 'matched',
+          activeUntil: 0,
           roomId,
           opponentUid: firstUid,
         }),
@@ -208,7 +211,7 @@ test('Firebase multi-client online smoke', async (t) => {
       code: 'QCK234',
       hostUid: firstUid,
       visibility: 'private',
-      status: 'inGame',
+      status: 'starting',
       mode: 'traditional',
       matchFormat: 'quickPop',
       members: {
@@ -226,18 +229,188 @@ test('Firebase multi-client online smoke', async (t) => {
       revision: 0,
       createdAt: startedAt,
       updatedAt: Date.now(),
+      quickPopLaunch: {
+        queueKey,
+        claimId,
+        firstUid,
+        firstTicketId: first.ticketId,
+        secondUid,
+        secondTicketId: second.ticketId,
+        sharedDeadlineAt: first.deadlineAt,
+      },
     };
     await assertSucceeds(
       set(pathRef(firstUid, `onlineV2/rooms/${roomId}`), room),
     );
+    await assertSucceeds(
+      set(pathRef(firstUid, `onlineV2/rooms/${roomId}/match`), {
+        schemaVersion: 1,
+        authorityModel: 'activeHostV1',
+        roomId,
+        matchId: roomId,
+        hostUid: firstUid,
+        hostLocalColor: 'red',
+        authorityRevision: 0,
+        stateRevision: 0,
+        checkpoint: { phase: 'playing' },
+        authorityCheckpoint: { revision: 0 },
+        createdAt: startedAt,
+        updatedAt: Date.now(),
+      }),
+    );
+    await Promise.all([
+      assertSucceeds(
+        set(
+          pathRef(
+            firstUid,
+            `onlineV2/quickClaims/${queueKey}/${claimId}/launchReady/${firstUid}`,
+          ),
+          { uid: firstUid, ticketId: first.ticketId, readyAt: Date.now() },
+        ),
+      ),
+      assertSucceeds(
+        set(
+          pathRef(
+            secondUid,
+            `onlineV2/quickClaims/${queueKey}/${claimId}/launchReady/${secondUid}`,
+          ),
+          { uid: secondUid, ticketId: second.ticketId, readyAt: Date.now() },
+        ),
+      ),
+    ]);
+    const secondObservedLaunch = waitForValue(
+      pathRef(secondUid, `onlineV2/rooms/${roomId}/status`),
+      (value) => value === 'inGame',
+    );
+    await assertSucceeds(
+      set(pathRef(firstUid, `onlineV2/rooms/${roomId}/status`), 'inGame'),
+    );
+    assert.equal(await secondObservedLaunch, 'inGame');
+    assert.ok(
+      Date.now() - startedAt < 5000,
+      'the provisional human commit must occur before five seconds',
+    );
+    await delay(Math.max(0, first.deadlineAt - Date.now() + 50));
+    await Promise.all([
+      assertSucceeds(
+        set(
+          pathRef(
+            firstUid,
+            `onlineV2/quickClaims/${queueKey}/${claimId}/launchSettled/${firstUid}`,
+          ),
+          { uid: firstUid, ticketId: first.ticketId, settledAt: Date.now() },
+        ),
+      ),
+      assertSucceeds(
+        set(
+          pathRef(
+            secondUid,
+            `onlineV2/quickClaims/${queueKey}/${claimId}/launchSettled/${secondUid}`,
+          ),
+          { uid: secondUid, ticketId: second.ticketId, settledAt: Date.now() },
+        ),
+      ),
+    ]);
     const secondRoom = await assertSucceeds(
       get(pathRef(secondUid, `onlineV2/rooms/${roomId}`)),
     );
     assert.equal(secondRoom.val().members[secondUid].seat, 'green');
-    assert.ok(
-      Date.now() - startedAt < 5000,
-      'human Quick Pop must resolve before its five-second deadline',
+    assert.equal(secondRoom.val().status, 'inGame');
+    await assertFails(
+      set(pathRef(secondUid, `onlineV2/rooms/${roomId}/status`), 'closed'),
     );
+    await clearAndVerifyIsolation();
+  });
+
+  await t.test('Quick Pop peer cancellation revokes a provisional commit', async () => {
+    await environment.clearDatabase();
+    const now = Date.now();
+    const queueKey = 'traditional_quickPop';
+    const firstUid = 'cancel_a';
+    const secondUid = 'cancel_b';
+    const claimId = 'cancel_claim';
+    const roomId = 'cancel_room';
+    const first = queueTicket(firstUid, 'Ana', queueKey, now);
+    const second = queueTicket(secondUid, 'Beto', queueKey, now);
+    const claimPath = `onlineV2/quickClaims/${queueKey}/${claimId}`;
+    const statusPath = `onlineV2/rooms/${roomId}/status`;
+    await environment.withSecurityRulesDisabled(async (context) => {
+      await set(ref(context.database(), `onlineV2/quickQueues/${queueKey}/${firstUid}`), {
+        ...first,
+        state: 'matched',
+        activeUntil: 0,
+        claimId,
+        roomId,
+        opponentUid: secondUid,
+      });
+      await set(ref(context.database(), `onlineV2/quickQueues/${queueKey}/${secondUid}`), {
+        ...second,
+        state: 'matched',
+        activeUntil: 0,
+        claimId,
+        roomId,
+        opponentUid: firstUid,
+      });
+      await set(ref(context.database(), claimPath), {
+        claimId,
+        queueKey,
+        leaderUid: firstUid,
+        firstUid,
+        firstTicketId: first.ticketId,
+        secondUid,
+        secondTicketId: second.ticketId,
+        createdAt: now,
+        resolution: {
+          kind: 'human',
+          roomId,
+          resolvedAt: now,
+          firstUid,
+          secondUid,
+        },
+      });
+      await set(ref(context.database(), `onlineV2/rooms/${roomId}`), {
+        id: roomId,
+        code: 'CAN234',
+        hostUid: firstUid,
+        visibility: 'private',
+        status: 'inGame',
+        mode: 'traditional',
+        matchFormat: 'quickPop',
+        members: {
+          [firstUid]: member(firstUid, 'Ana', 'red', now, true),
+          [secondUid]: member(secondUid, 'Beto', 'green', now, true),
+        },
+        presence: {
+          [firstUid]: presence(firstUid, now),
+          [secondUid]: presence(secondUid, now),
+        },
+        revision: 0,
+        createdAt: now,
+        updatedAt: now,
+        quickPopLaunch: {
+          queueKey,
+          claimId,
+          firstUid,
+          firstTicketId: first.ticketId,
+          secondUid,
+          secondTicketId: second.ticketId,
+          sharedDeadlineAt: first.deadlineAt,
+        },
+      });
+    });
+    const firstObservedClose = waitForValue(
+      pathRef(firstUid, statusPath),
+      (value) => value === 'closed',
+    );
+    await assertSucceeds(
+      set(pathRef(secondUid, `${claimPath}/launchAborted/${secondUid}`), {
+        uid: secondUid,
+        ticketId: second.ticketId,
+        abortedAt: Date.now(),
+      }),
+    );
+    await assertSucceeds(set(pathRef(secondUid, statusPath), 'closed'));
+    assert.equal(await firstObservedClose, 'closed');
     await clearAndVerifyIsolation();
   });
 
@@ -253,6 +426,7 @@ test('Firebase multi-client online smoke', async (t) => {
     await assertFails(
       update(pathRef(uid, ticketPath), {
         state: 'cpuFallback',
+        activeUntil: 0,
         roomId: 'smoke_cpu_room',
       }),
     );
@@ -266,6 +440,7 @@ test('Firebase multi-client online smoke', async (t) => {
     await assertSucceeds(
       update(pathRef(uid, ticketPath), {
         state: 'cpuFallback',
+        activeUntil: 0,
         roomId: 'smoke_cpu_room',
       }),
     );
@@ -304,14 +479,25 @@ test('Firebase multi-client online smoke', async (t) => {
       updatedAt: now,
     };
     await assertSucceeds(set(pathRef(uids[0], roomPath), initialRoom));
+    initialRoom.joinFences = {};
 
     for (let index = 1; index < uids.length; index += 1) {
+      const fence = {
+        uid: uids[index],
+        attemptId: `join_attempt_${index}`,
+        requestedAt: now + index,
+      };
+      initialRoom.joinFences[uids[index]] = fence;
+      await assertSucceeds(
+        set(pathRef(uids[index], `${roomPath}/joinFences/${uids[index]}`), fence),
+      );
       await assertSucceeds(
         set(pathRef(uids[index], `onlineV2/joinRequests/${roomId}/${uids[index]}`), {
           roomId,
           roomCode: code,
           uid: uids[index],
           displayName: names[index],
+          attemptId: fence.attemptId,
           requestedAt: now + index,
         }),
       );

@@ -13,7 +13,11 @@ const String parchesePopRealtimeDatabaseUrl =
 
 /// Firebase Realtime Database adapter for the transport's small storage API.
 final class FirebaseOnlineRealtimeStore
-    implements OnlineRealtimeStore, OnlineRealtimeStoreLifecycle {
+    implements
+        OnlineRealtimeStore,
+        OnlineRealtimeQueryStore,
+        OnlineRealtimeExactReadPolicy,
+        OnlineRealtimeStoreLifecycle {
   FirebaseOnlineRealtimeStore({
     required FirebaseDatabase database,
     DateTime Function()? localNow,
@@ -25,12 +29,33 @@ final class FirebaseOnlineRealtimeStore
   final Set<StreamSubscription<DatabaseEvent>> _watchSubscriptions = {};
   bool _shutDown = false;
 
+  /// Exact opponent-ticket reads are authorized only after the deterministic
+  /// Quick Pop claim exists in Realtime Database. The transport uses this
+  /// capability marker to avoid a pre-claim read/transaction race in the
+  /// production security rules; in-memory stores keep the direct check used by
+  /// the deterministic unit tests.
+  @override
+  bool get opponentTicketExactReadRequiresClaim => true;
+
   DatabaseReference _reference(String path) =>
       path.isEmpty ? _database.ref() : _database.ref(path);
 
   @override
   Future<Object?> read(String path) async =>
       onlineValue((await _reference(path).get()).value);
+
+  @override
+  Future<Object?> readOrderedChildren(
+    String path, {
+    required String orderByChild,
+    required num startAt,
+    required int limitToFirst,
+  }) async {
+    final query = _reference(
+      path,
+    ).orderByChild(orderByChild).startAt(startAt).limitToFirst(limitToFirst);
+    return onlineValue((await query.get()).value);
+  }
 
   @override
   Stream<Object?> watch(String path) {
@@ -263,6 +288,14 @@ final class FirebaseOnlineConnection {
   final User user;
   final SyncedOnlineProfile profile;
   final OnlineTransportClient transport;
+
+  /// Stops retaining a connection that never reached a playable online room.
+  ///
+  /// The transport itself has no open listener to close here. Queue cleanup is
+  /// performed by the caller before releasing the connection.
+  void release() {
+    _activeConnections.remove(this);
+  }
 
   /// Initializes Firebase if needed, keeps an existing account when one is
   /// signed in, or creates a temporary anonymous account for a guest.

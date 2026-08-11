@@ -51,6 +51,7 @@ final class RealtimeOnlineRoomController extends ChangeNotifier
   String? _roomError;
   bool _disposed = false;
   bool _drainingOpeningRollRequests = false;
+  int _createAttempt = 0;
   int _joinAttempt = 0;
   OnlineRoomJoinRequestRecord? _pendingJoinRequest;
   int _roomEpoch = 0;
@@ -138,53 +139,190 @@ final class RealtimeOnlineRoomController extends ChangeNotifier
     required RoomVisibility visibility,
   }) async {
     _ensureActive();
+    final attempt = ++_createAttempt;
     await transport.syncProfile();
+    _throwIfCreateCancelled(attempt);
     final room = await transport.createRoom(
       visibility: visibility,
       mode: mode.name,
       matchFormat: 'quickTable',
     );
-    await _attachRoom(room);
+    if (_createCancelled(attempt)) {
+      await _cleanupCancelledCreate(room);
+      throw const OnlineRoomOperationCancelledException();
+    }
+    try {
+      await _attachRoom(room);
+    } catch (_) {
+      if (_createCancelled(attempt)) {
+        await _cleanupCancelledCreate(room);
+        throw const OnlineRoomOperationCancelledException();
+      }
+      rethrow;
+    }
+    if (_createCancelled(attempt)) {
+      await _cleanupCancelledCreate(room);
+      throw const OnlineRoomOperationCancelledException();
+    }
+  }
+
+  @override
+  Future<void> cancelPendingCreate() async {
+    _ensureActive();
+    _createAttempt++;
+  }
+
+  bool _createCancelled(int attempt) => _disposed || attempt != _createAttempt;
+
+  void _throwIfCreateCancelled(int attempt) {
+    if (_createCancelled(attempt)) {
+      throw const OnlineRoomOperationCancelledException();
+    }
+  }
+
+  Future<void> _cleanupCancelledCreate(OnlineRoomRecord room) async {
+    if (_roomRecord?.id == room.id) {
+      await _detachRoom(clearState: true);
+    }
+    try {
+      await transport.closeRoom(room.id);
+    } catch (error) {
+      debugPrint(
+        'Late room-create cleanup was incomplete (${error.runtimeType}).',
+      );
+    }
   }
 
   @override
   Future<void> joinRoomByCode(RoomCode roomCode) async {
     _ensureActive();
     final attempt = ++_joinAttempt;
+    await _joinRoomByCode(roomCode, attempt);
+  }
+
+  Future<void> _joinRoomByCode(RoomCode roomCode, int attempt) async {
     await transport.syncProfile();
+    _throwIfJoinCancelled(attempt);
     final request = await transport.requestRoomJoinByCode(roomCode.value);
+    if (_disposed || attempt != _joinAttempt) {
+      await transport.cancelRoomJoinRequest(request);
+      _throwJoinCancelled();
+    }
     _pendingJoinRequest = request;
     try {
-      final room = await transport.waitForRoomAdmission(
-        request,
-        timeout: joinTimeout,
-        cancelled: () => _disposed || attempt != _joinAttempt,
-      );
-      if (_disposed || attempt != _joinAttempt) {
-        await transport.cancelRoomJoinRequest(request);
-        return;
+      late final OnlineRoomRecord room;
+      try {
+        room = await transport.waitForRoomAdmission(
+          request,
+          timeout: joinTimeout,
+          cancelled: () => _disposed || attempt != _joinAttempt,
+        );
+      } on OnlineTransportException catch (error) {
+        if (error.code == OnlineTransportErrorCode.joinCancelled) {
+          await _cleanupCancelledJoinIfAdmitted(request);
+        }
+        rethrow;
       }
-      await _attachRoom(room);
+      if (_disposed || attempt != _joinAttempt) {
+        await _cleanupCancelledJoin(room, request);
+        _throwJoinCancelled();
+      }
+      try {
+        await _attachRoom(room);
+      } catch (_) {
+        if (_disposed || attempt != _joinAttempt) {
+          await _cleanupCancelledJoin(room, request);
+          _throwJoinCancelled();
+        }
+        rethrow;
+      }
+      if (_disposed || attempt != _joinAttempt) {
+        await _cleanupCancelledJoin(room, request);
+        _throwJoinCancelled();
+      }
     } finally {
-      if (attempt == _joinAttempt) _pendingJoinRequest = null;
+      if (identical(_pendingJoinRequest, request)) {
+        _pendingJoinRequest = null;
+      }
     }
   }
 
   @override
   Future<void> joinPublicRoom(String roomId) async {
     _ensureActive();
+    final attempt = ++_joinAttempt;
     var matching = _publicRooms.where((room) => room.roomId == roomId);
     if (matching.isEmpty) {
       await refreshPublicRooms();
+      _throwIfJoinCancelled(attempt);
       matching = _publicRooms.where((room) => room.roomId == roomId);
     }
+    _throwIfJoinCancelled(attempt);
     if (matching.isEmpty) {
       throw const OnlineTransportException(
         OnlineTransportErrorCode.roomNotFound,
         'The selected public room is no longer available.',
       );
     }
-    await joinRoomByCode(matching.single.roomCode);
+    await _joinRoomByCode(matching.single.roomCode, attempt);
+  }
+
+  @override
+  Future<void> cancelPendingJoin() async {
+    _ensureActive();
+    _joinAttempt++;
+    final pendingJoin = _pendingJoinRequest;
+    _pendingJoinRequest = null;
+    if (pendingJoin != null) {
+      await transport.cancelRoomJoinRequest(pendingJoin);
+    }
+  }
+
+  void _throwIfJoinCancelled(int attempt) {
+    if (_disposed || attempt != _joinAttempt) _throwJoinCancelled();
+  }
+
+  Never _throwJoinCancelled() => throw const OnlineTransportException(
+    OnlineTransportErrorCode.joinCancelled,
+    'The room join was cancelled.',
+  );
+
+  Future<void> _cleanupCancelledJoin(
+    OnlineRoomRecord room,
+    OnlineRoomJoinRequestRecord request,
+  ) async {
+    if (_roomRecord?.id == room.id) {
+      await _detachRoom(clearState: true);
+    }
+    try {
+      await transport.cancelRoomJoinRequest(request);
+    } catch (_) {
+      // Admission may already have removed the pending request.
+    }
+    if (!room.members.containsKey(localParticipantId)) return;
+    try {
+      await transport.leaveRoom(room.id);
+    } catch (error) {
+      debugPrint(
+        'Cancelled room-join cleanup was incomplete (${error.runtimeType}).',
+      );
+    }
+  }
+
+  Future<void> _cleanupCancelledJoinIfAdmitted(
+    OnlineRoomJoinRequestRecord request,
+  ) async {
+    try {
+      final room = await transport.readRoom(request.roomId);
+      if (room != null && room.members.containsKey(localParticipantId)) {
+        await _cleanupCancelledJoin(room, request);
+      }
+    } catch (error) {
+      debugPrint(
+        'Cancelled room-join verification was incomplete '
+        '(${error.runtimeType}).',
+      );
+    }
   }
 
   @override
@@ -785,6 +923,7 @@ final class RealtimeOnlineRoomController extends ChangeNotifier
   /// Cancels realtime work deterministically before widget disposal or tests.
   Future<void> shutdown() async {
     if (_disposed) return;
+    _createAttempt++;
     _joinAttempt++;
     final pendingJoin = _pendingJoinRequest;
     _pendingJoinRequest = null;
@@ -840,6 +979,7 @@ final class RealtimeOnlineRoomController extends ChangeNotifier
   void dispose() {
     if (_disposed) return;
     _disposed = true;
+    _createAttempt++;
     _joinAttempt++;
     final pendingJoin = _pendingJoinRequest;
     _pendingJoinRequest = null;

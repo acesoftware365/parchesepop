@@ -344,10 +344,19 @@
         </ul>
         <p>
           Los jugadores de una misma sala ven la información y el estado
-          necesarios para jugar. Una sala pública puede aparecer como un listado
-          limitado para otros jugadores. Si Quick Pop no encuentra una persona
-          durante el período mostrado, puede iniciar con oponentes controlados
-          por computadora.
+          necesarios para jugar. Durante una búsqueda activa de Quick Pop, los
+          demás jugadores que estén buscando activamente en la misma cola pueden
+          ver el identificador anónimo de Firebase, nombre visible,
+          identificadores del ticket y campos de tiempo o estado de esa entrada
+          para elegir y verificar un emparejamiento. Después de esa ventana, un
+          jugador no puede enumerar la cola; el acceso queda limitado a su propio
+          ticket y al ticket exacto del rival vinculado a su acuerdo verificado.
+          Solo los dos jugadores indicados en el acuerdo resultante pueden leer
+          ese acuerdo, y cada perfil sincronizado es legible únicamente por su
+          propietario. Una sala pública puede
+          aparecer como un listado limitado para otros jugadores. Si Quick Pop
+          no encuentra una persona durante el período mostrado, puede iniciar
+          con oponentes controlados por computadora.
         </p>
         <p>
           Firebase Remote Config obtiene ajustes de disponibilidad, versión
@@ -361,10 +370,15 @@
         <p>
           Firebase Analytics está <strong>apagado por defecto</strong>. Puedes
           activarlo o desactivarlo desde <strong>Ajustes &gt; Analítica anónima</strong>.
-          Cuando está activo, los eventos pueden incluir inicio, final, abandono
-          y reanudación de partidas; modo elegido; tutorial; decisiones sobre
-          anuncios opcionales; monedas y tienda. No incluimos intencionalmente tu
-          nombre, correo, mensajes, bandera o avatar en esos eventos.
+          Cuando está activo, los eventos pueden incluir sesiones anónimas y días
+          desde el primer uso para métricas agregadas de retención; pasos de
+          entrada, búsqueda, creación, unión e invitación en Quick Pop y Quick
+          Table; inicio, final, abandono y reanudación de partidas; modo elegido;
+          tutorial; decisiones sobre anuncios opcionales; monedas y tienda. La
+          fecha exacta del primer uso permanece en el dispositivo. No incluimos
+          intencionalmente tu nombre, correo, mensajes, bandera, avatar, códigos
+          de sala, identificadores de Firebase ni textos de errores en esos
+          eventos.
         </p>
 
         <h3>4. Publicidad</h3>
@@ -426,14 +440,16 @@
           la membresía removible de una sala en espera.
         </p>
         <p>
-          Las partidas resueltas, el chat inmutable y los registros de salas
-          compartidas pueden contener estado de otros jugadores y conservarse
-          para mantener la integridad del servicio, prevenir abusos, diagnosticar
-          problemas o cumplir obligaciones legales hasta su eliminación o
-          anonimización. Una identidad online antigua, creada antes de que
-          existiera el borrado directo, también puede requerir una limpieza
-          verificada del servidor. Para solicitar la eliminación de datos
-          retenidos o antiguos, escribe a
+          Los tickets y acuerdos de emparejamiento resueltos, las partidas
+          resueltas, el chat inmutable y los registros de salas compartidas
+          pueden contener estado de otros jugadores y conservarse para mantener
+          la integridad del servicio, prevenir abusos, diagnosticar problemas o
+          cumplir obligaciones legales hasta su eliminación o anonimización. El
+          acceso a los registros de emparejamiento conservados sigue limitado a
+          su propietario o a los participantes verificados, según corresponda.
+          Una identidad online antigua, creada antes de que existiera el borrado
+          directo, también puede requerir una limpieza verificada del servidor.
+          Para solicitar la eliminación de datos retenidos o antiguos, escribe a
           <a href="mailto:sales@liisgo.com">sales@liisgo.com</a>.
           Podemos pedir información limitada para localizar y verificar los
           registros; nunca envíes una contraseña.
@@ -508,10 +524,19 @@
           <li>preapproved quick-chat phrases. Free-form in-game chat is not provided.</li>
         </ul>
         <p>
-          Players in a room see the information and game state needed to play. A
-          public room may appear as a limited listing to other players. If Quick
-          Pop does not find a person during the displayed search period, it may
-          start with computer-controlled opponents.
+          Players in a room see the information and game state needed to play.
+          During an active Quick Pop search, a queue entry is visible to other
+          players actively searching in that same matchmaking queue, including
+          its anonymous Firebase identifier, display name, ticket identifiers,
+          and timing or status fields, so their clients can select and verify a
+          match. After that window, a player cannot list the queue; access is
+          limited to their own ticket and the exact opponent ticket linked to
+          their verified claim. Only the two players named by a resulting match
+          claim can read that claim, and each synced profile is readable only by
+          its owner. A public room may appear
+          as a limited listing to other players. If Quick Pop does not find a
+          person during the displayed search period, it may start with
+          computer-controlled opponents.
         </p>
         <p>
           Firebase Remote Config obtains service availability, minimum-version,
@@ -525,10 +550,14 @@
         <p>
           Firebase Analytics is <strong>off by default</strong>. You can enable
           or disable it from <strong>Settings &gt; Anonymous analytics</strong>.
-          When enabled, events may include match starts, completions, abandonment
-          and resume; mode; tutorial progress; optional-ad choices; coins; and
-          shop interactions. We do not intentionally include your name, email,
-          messages, flag, or avatar in those events.
+          When enabled, events may include anonymous sessions and days since first
+          use for aggregate retention metrics; entry, search, creation, join, and
+          invitation steps in Quick Pop and Quick Table; match starts,
+          completions, abandonment and resume; mode; tutorial progress;
+          optional-ad choices; coins; and shop interactions. The exact first-use
+          timestamp remains on the device. We do not intentionally include your
+          name, email, messages, flag, avatar, room codes, Firebase identifiers,
+          or raw error text in those events.
         </p>
 
         <h3>4. Advertising</h3>
@@ -587,11 +616,14 @@
           and removable waiting-room membership.
         </p>
         <p>
-          Resolved matches, immutable chat, and shared room records can contain
-          state belonging to other players and may remain for service integrity,
-          abuse prevention, diagnostics, or legal requirements until they are
-          deleted or anonymized. An older online identity created before direct
-          deletion was available may also require verified backend cleanup. To
+          Resolved matchmaking tickets and claims, resolved matches, immutable
+          chat, and shared room records can contain state belonging to other
+          players and may remain for service integrity, abuse prevention,
+          diagnostics, or legal requirements until they are deleted or
+          anonymized. Access to retained matchmaking records remains limited to
+          their owner or verified participants, as applicable. An older online
+          identity created before direct deletion was available may also require
+          verified backend cleanup. To
           request deletion of retained or legacy online data, email
           <a href="mailto:sales@liisgo.com">sales@liisgo.com</a>. We may ask for
           limited information needed to locate and verify records; never send a

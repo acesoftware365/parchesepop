@@ -1,6 +1,6 @@
 # Parchís Pop · fases de la versión 2
 
-Versión de aplicación: **2.1.0+10**
+Versión de aplicación: **2.2.1+16**
 Rama: **version-2**
 
 ## 1. Base segura
@@ -53,24 +53,33 @@ Rama: **version-2**
 - Formato independiente de Tradicional/Caos, con guardado compatible y reglas
   versionadas.
 - Automovimiento solo cuando el motor confirma una única jugada legal.
+- En la prueba online controlada busca durante cinco segundos. Si al llegar al
+  límite no existe un compromiso humano compartido, abre la partida local
+  contra CPU. Si el servidor ya pudo comprometer una partida humana pero la
+  conexión no permite confirmar el mismo resultado en ambos dispositivos, la
+  pantalla pide revisar la conexión y volver; nunca adivina un resultado que
+  pueda separar a los dos jugadores.
 
 ## 6. Sistemas avanzados protegidos
 
-- Contrato para que un servidor sea dueño de dados, turnos y movimientos.
-- Comandos validados e idempotentes para la base local del protocolo.
-- Modelos de checkpoints, reconexión, presencia y abandono.
-- Rango y eventos solo aceptan resultados verificados por la autoridad.
-- Guardas contra pago por ventaja, entrada con monedas, premio aleatorio pago
-  y publicidad obligatoria.
+- Quick Pop casual online y Quick Table casual están activos únicamente para
+  QA controlado sobre Firebase.
+- Quick Table permite sala pública o privada, código de seis caracteres,
+  invitación compartible, hasta cuatro jugadores y tirada inicial sincronizada
+  para decidir quién comienza; después continúa el orden hacia la derecha.
+- El protocolo usa comandos validados e idempotentes, checkpoints, presencia,
+  reconexión y abandono. Los participantes automáticos se identifican como
+  **CPU**.
+- Rango, eventos y premios competitivos solo podrán aceptar resultados
+  verificados por una autoridad confiable.
+- Se conservan las guardas contra pago por ventaja, entrada con monedas,
+  premio aleatorio pago y publicidad obligatoria.
 
-Estos sistemas son una base de contrato comprobable, pero permanecen
-desactivados en la interfaz pública. Antes de habilitarlos hay que conectar un
-servidor real, hacer que la autoridad ejecute cada transición, implementar la
-toma efectiva de turnos por CPU y sincronizar por completo Caos (inventario,
-trampas y efectos), además de probar reconexión y continuación extremo a
-extremo.
-La mesa rápida que incluye esta compilación es local y etiqueta claramente a
-los participantes automáticos como **CPU**.
+Antes de presentar estas funciones como online de producción todavía hace
+falta una autoridad confiable del servidor, App Check, moderación,
+observabilidad y endurecimiento operativo. También deben completarse las
+pruebas de reconexión y continuación extremo a extremo, y la sincronización
+autoritaria de todas las variantes de Caos (inventario, trampas y efectos).
 
 Las recompensas diarias locales usan la fecha persistida del dispositivo como
 una protección de mejor esfuerzo. Antes de habilitar rangos, eventos o premios
