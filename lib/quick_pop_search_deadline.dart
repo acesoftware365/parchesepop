@@ -404,7 +404,7 @@ final class QuickPopDeadlineSearch<Connection, Ticket, Resolution, Prepared> {
     // A verified human may have been found just before the search deadline
     // while Firebase is still preparing the shared table. Keep that launch
     // alive for a short, bounded grace period instead of tearing down both
-    // clients at exactly five seconds. If no readiness commit arrives during
+    // clients at exactly the shared search deadline. If no readiness commit arrives during
     // the grace, this method runs again and falls back normally.
     if (_launchCommitState == _QuickPopLaunchCommitState.none &&
         resolution != null &&

@@ -161,7 +161,7 @@ void main() {
       reason: 'Quick Pop must not be duplicated in the secondary menu dock.',
     );
     expect(find.text('QUICK POP'), findsOneWidget);
-    expect(find.text('Casual online · CPU en 5 s'), findsOneWidget);
+    expect(find.text('Partida rápida online'), findsOneWidget);
     expect(find.text('MESA RÁPIDA'), findsOneWidget);
     expect(find.text('Amigos online · crea una sala'), findsOneWidget);
     expect(find.text('CONTRA CPU'), findsOneWidget);
@@ -225,7 +225,7 @@ void main() {
     await _unmount(tester);
   });
 
-  testWidgets('online startup is playable locally by five seconds', (
+  testWidgets('online startup is playable locally by ten seconds', (
     tester,
   ) async {
     _useMobileViewport(tester);
@@ -267,7 +267,7 @@ void main() {
     await tester.pump();
     await tester.tap(find.byKey(const ValueKey('quick-pop-online-start')));
     await tester.pump();
-    await tester.pump(const Duration(milliseconds: 4999));
+    await tester.pump(const Duration(milliseconds: 9999));
     if (find.byType(GameScreen).evaluate().isEmpty) {
       await tester.pump(const Duration(milliseconds: 1));
     }

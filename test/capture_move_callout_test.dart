@@ -290,6 +290,52 @@ void main() {
     await _disposeGame(tester, engine);
   });
 
+  testWidgets('safe landing callout shows a star and SAFE label', (
+    tester,
+  ) async {
+    _usePhoneViewport(tester);
+    final semantics = tester.ensureSemantics();
+    final language = AppLanguageController();
+    addTearDown(language.dispose);
+
+    final engine = GameEngine(matchFormat: MatchFormat.quickPop);
+    final mover = engine.currentPlayer.tokens.first..progress = 3;
+    engine.currentPlayer.tokens.last.progress = 20;
+    engine
+      ..hasRolled = true
+      ..dice = const <int>[4, 2]
+      ..message = 'You rolled 4 and 2.';
+    engine.remainingDice.addAll(const <int>[4, 2]);
+
+    await tester.pumpWidget(
+      AppLanguageScope(
+        controller: language,
+        child: MaterialApp(
+          locale: const Locale('en'),
+          home: GameScreen(
+            opponent: 'Quick Pop • CPU Normal',
+            gameEngine: engine,
+          ),
+        ),
+      ),
+    );
+    await tester.pump(const Duration(milliseconds: 100));
+    await _tapBoardCell(tester, engine.tokenCell(mover)!);
+
+    expect(find.byKey(const ValueKey('move-choice-4')), findsOneWidget);
+    expect(find.byKey(const ValueKey('move-choice-safe-4')), findsOneWidget);
+    expect(find.text('SAFE'), findsOneWidget);
+    expect(
+      find.bySemanticsLabel('Move piece 1, 4 steps and land on a safe square'),
+      findsOneWidget,
+    );
+    _expectCalloutsAccessibleAndInsideBoard(tester);
+    expect(tester.takeException(), isNull);
+
+    semantics.dispose();
+    await _disposeGame(tester, engine);
+  });
+
   testWidgets('home-entry capture identifies the blue piece before moving', (
     tester,
   ) async {

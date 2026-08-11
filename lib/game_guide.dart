@@ -5,7 +5,14 @@ import 'package:flutter/material.dart';
 import 'app_language.dart';
 
 /// The rule sets presented by [GameGuideScreen].
-enum GameGuideMode { traditional, chaos, quickPop }
+enum GameGuideMode {
+  traditional,
+  chaos,
+  quickPop,
+  quickTable,
+  playCpu,
+  passAndPlay,
+}
 
 /// Effects that can be previewed in [TrapPowerLab].
 enum GuideEffect { shield, turbo, glue, setback, prison, bomb }
@@ -47,6 +54,9 @@ class _GameGuideScreenState extends State<GameGuideScreen> {
       GameGuideMode.traditional => traditionalRuleSections,
       GameGuideMode.chaos => [...traditionalRuleSections, ...chaosRuleSections],
       GameGuideMode.quickPop => quickPopRuleSections,
+      GameGuideMode.quickTable => quickTableRuleSections,
+      GameGuideMode.playCpu => playCpuRuleSections,
+      GameGuideMode.passAndPlay => passAndPlayRuleSections,
     };
     return Scaffold(
       backgroundColor: GuidePalette.navy,
@@ -98,6 +108,12 @@ class _GameGuideScreenState extends State<GameGuideScreen> {
                     key: ValueKey('rules-${_mode.name}'),
                     sections: sections,
                   ),
+                ),
+              ),
+              const SliverToBoxAdapter(
+                child: Padding(
+                  padding: EdgeInsets.fromLTRB(16, 18, 16, 4),
+                  child: _PlayModesOverview(),
                 ),
               ),
               SliverToBoxAdapter(
@@ -346,6 +362,272 @@ class GuideRuleSection {
   final String? badge;
 }
 
+class _PlayModeGuideSpec {
+  const _PlayModeGuideSpec({
+    required this.id,
+    required this.title,
+    required this.badge,
+    required this.description,
+    required this.steps,
+    required this.icon,
+    required this.color,
+  });
+
+  final String id;
+  final String title;
+  final String badge;
+  final String description;
+  final List<String> steps;
+  final IconData icon;
+  final Color color;
+}
+
+const _playModeGuideSpecs = <_PlayModeGuideSpec>[
+  _PlayModeGuideSpec(
+    id: 'quick-pop',
+    title: 'QUICK POP',
+    badge: 'ONLINE · 10 S',
+    description:
+        'Partida casual online con 2 fichas. Busca un rival durante 10 segundos; si no aparece, continúa contra el CPU.',
+    steps: [
+      'Toca Quick Pop y comienza la búsqueda.',
+      'Si se conecta alguien, juegan en el mismo tablero.',
+      'A los 10 segundos sin rival, entra el CPU automáticamente.',
+    ],
+    icon: Icons.bolt_rounded,
+    color: GuidePalette.violet,
+  ),
+  _PlayModeGuideSpec(
+    id: 'quick-table',
+    title: 'QUICK TABLE',
+    badge: 'ONLINE · SALA',
+    description:
+        'Crea una sala pública o privada para jugar con amigos en Tradicional o Caos.',
+    steps: [
+      'Crea una sala o entra con un código.',
+      'Comparte la invitación y espera a tus amigos.',
+      'El anfitrión inicia; el dado decide quién comienza.',
+    ],
+    icon: Icons.groups_rounded,
+    color: GuidePalette.blue,
+  ),
+  _PlayModeGuideSpec(
+    id: 'play-cpu',
+    title: 'PLAY CPU',
+    badge: 'LOCAL · CPU',
+    description:
+        'Juega en tu teléfono contra la inteligencia artificial y elige el nivel que prefieras.',
+    steps: [
+      'Elige Tradicional o Caos.',
+      'Selecciona Fácil, Normal o Experto.',
+      'Tira los dados; el CPU juega sus turnos automáticamente.',
+    ],
+    icon: Icons.smart_toy_rounded,
+    color: GuidePalette.red,
+  ),
+  _PlayModeGuideSpec(
+    id: 'pass-and-play',
+    title: 'PASS & PLAY',
+    badge: 'LOCAL · AMIGOS',
+    description:
+        'Juega en el mismo teléfono pasando el dispositivo después de cada turno.',
+    steps: [
+      'Elige Tradicional o Caos y confirma los jugadores.',
+      'Cada persona tira, mueve y termina su turno.',
+      'Pasa el teléfono al siguiente jugador.',
+    ],
+    icon: Icons.swap_horiz_rounded,
+    color: GuidePalette.green,
+  ),
+];
+
+class _PlayModesOverview extends StatelessWidget {
+  const _PlayModesOverview();
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      key: const ValueKey('guide-play-modes'),
+      padding: const EdgeInsets.fromLTRB(14, 14, 14, 16),
+      decoration: BoxDecoration(
+        color: Colors.white.withValues(alpha: .1),
+        borderRadius: BorderRadius.circular(24),
+        border: Border.all(color: Colors.white.withValues(alpha: .2)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Row(
+            children: [
+              Icon(
+                Icons.sports_esports_rounded,
+                color: GuidePalette.yellow,
+                size: 21,
+              ),
+              SizedBox(width: 8),
+              Expanded(
+                child: PopText(
+                  'MODOS DE PARTIDA',
+                  style: TextStyle(
+                    color: Colors.white,
+                    fontSize: 15,
+                    fontWeight: FontWeight.w900,
+                    letterSpacing: 1.1,
+                  ),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 4),
+          const PopText(
+            'Elige si quieres jugar online o localmente y sigue los pasos de tu modo.',
+            style: TextStyle(
+              color: Color(0xFFE8EDFF),
+              fontSize: 12,
+              height: 1.3,
+              fontWeight: FontWeight.w600,
+            ),
+          ),
+          const SizedBox(height: 12),
+          LayoutBuilder(
+            builder: (context, constraints) {
+              final columns = constraints.maxWidth >= 700 ? 2 : 1;
+              final itemWidth =
+                  (constraints.maxWidth - (columns - 1) * 10) / columns;
+              return Wrap(
+                spacing: 10,
+                runSpacing: 10,
+                children: [
+                  for (final spec in _playModeGuideSpecs)
+                    SizedBox(
+                      width: itemWidth,
+                      child: _PlayModeGuideCard(spec: spec),
+                    ),
+                ],
+              );
+            },
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _PlayModeGuideCard extends StatelessWidget {
+  const _PlayModeGuideCard({required this.spec});
+
+  final _PlayModeGuideSpec spec;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      key: ValueKey('guide-play-mode-${spec.id}'),
+      padding: const EdgeInsets.fromLTRB(12, 12, 12, 11),
+      decoration: BoxDecoration(
+        color: GuidePalette.cloud,
+        borderRadius: BorderRadius.circular(19),
+        border: Border.all(color: spec.color, width: 2),
+        boxShadow: const [
+          BoxShadow(
+            color: Color(0x30000000),
+            blurRadius: 8,
+            offset: Offset(0, 4),
+          ),
+        ],
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Container(
+                width: 38,
+                height: 38,
+                decoration: BoxDecoration(
+                  color: spec.color,
+                  borderRadius: BorderRadius.circular(12),
+                ),
+                child: Icon(spec.icon, color: Colors.white, size: 22),
+              ),
+              const SizedBox(width: 9),
+              Expanded(
+                child: PopText(
+                  spec.title,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(
+                    color: GuidePalette.ink,
+                    fontSize: 14,
+                    fontWeight: FontWeight.w900,
+                  ),
+                ),
+              ),
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 4),
+                decoration: BoxDecoration(
+                  color: spec.color.withValues(alpha: .13),
+                  borderRadius: BorderRadius.circular(12),
+                ),
+                child: PopText(
+                  spec.badge,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(
+                    color: Color.lerp(spec.color, Colors.black, .2),
+                    fontSize: 8,
+                    fontWeight: FontWeight.w900,
+                  ),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 9),
+          PopText(
+            spec.description,
+            style: const TextStyle(
+              color: GuidePalette.ink,
+              fontSize: 11.5,
+              height: 1.28,
+              fontWeight: FontWeight.w700,
+            ),
+          ),
+          const SizedBox(height: 8),
+          for (final step in spec.steps)
+            Padding(
+              padding: const EdgeInsets.only(bottom: 4),
+              child: Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Container(
+                    width: 6,
+                    height: 6,
+                    margin: const EdgeInsets.only(top: 5),
+                    decoration: BoxDecoration(
+                      color: spec.color,
+                      shape: BoxShape.circle,
+                    ),
+                  ),
+                  const SizedBox(width: 7),
+                  Expanded(
+                    child: PopText(
+                      step,
+                      style: const TextStyle(
+                        color: GuidePalette.ink,
+                        fontSize: 11,
+                        height: 1.2,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+        ],
+      ),
+    );
+  }
+}
+
 const traditionalRuleSections = <GuideRuleSection>[
   GuideRuleSection(
     icon: Icons.emoji_events_rounded,
@@ -499,6 +781,109 @@ const quickPopRuleSections = <GuideRuleSection>[
       'Se mantienen los seguros, barreras, entradas de color y pasillos de 7 casillas.',
       'Ninguna ficha puede atravesar una barrera.',
       'Quick Pop acorta la partida sin recortar el recorrido original.',
+    ],
+  ),
+];
+
+const quickTableRuleSections = <GuideRuleSection>[
+  GuideRuleSection(
+    icon: Icons.groups_rounded,
+    title: 'Sala online',
+    color: GuidePalette.blue,
+    badge: '2–4 JUGADORES',
+    rules: [
+      'Crea una sala pública o privada y elige Tradicional o Caos.',
+      'Comparte el código o la invitación para que tus amigos entren desde sus dispositivos.',
+      'La sala muestra quién está listo y no empieza hasta que el anfitrión la abra.',
+    ],
+  ),
+  GuideRuleSection(
+    icon: Icons.casino_rounded,
+    title: 'Quién comienza',
+    color: GuidePalette.yellow,
+    badge: 'DADO INICIAL',
+    rules: [
+      'Cuando están listos, cada jugador lanza un dado para decidir el orden.',
+      'El número más alto comienza; si hay empate, solo los empatados vuelven a lanzar.',
+      'Después del primer turno, el juego continúa hacia la derecha.',
+    ],
+  ),
+  GuideRuleSection(
+    icon: Icons.wifi_rounded,
+    title: 'Partida sincronizada',
+    color: GuidePalette.green,
+    rules: [
+      'Todos ven el mismo tablero, los dados y el turno actual en tiempo real.',
+      'Si alguien se desconecta, puede volver a entrar a la sala y continuar su partida.',
+      'El anfitrión puede cerrar la sala antes de comenzar; una partida iniciada conserva sus turnos.',
+    ],
+  ),
+];
+
+const playCpuRuleSections = <GuideRuleSection>[
+  GuideRuleSection(
+    icon: Icons.smart_toy_rounded,
+    title: 'Juega contra el CPU',
+    color: GuidePalette.red,
+    badge: 'LOCAL',
+    rules: [
+      'Juega en este dispositivo contra la inteligencia artificial, sin sala ni conexión.',
+      'Elige Tradicional para las reglas clásicas o Caos para añadir poderes y trampas.',
+      'Tus turnos y los del CPU siguen el mismo tablero y las mismas reglas del modo elegido.',
+    ],
+  ),
+  GuideRuleSection(
+    icon: Icons.tune_rounded,
+    title: 'Elige la dificultad',
+    color: GuidePalette.violet,
+    rules: [
+      'Fácil es ideal para aprender; Normal ofrece una partida equilibrada.',
+      'Experto busca jugadas más competitivas y aprovecha mejor las capturas y barreras.',
+      'Puedes cambiar de dificultad al comenzar una nueva partida.',
+    ],
+  ),
+  GuideRuleSection(
+    icon: Icons.sports_esports_rounded,
+    title: 'Tu turno',
+    color: GuidePalette.blue,
+    rules: [
+      'Tira los dados, toca una ficha y elige el movimiento señalado en el tablero.',
+      'El CPU juega automáticamente cuando termina tu turno.',
+      'La victoria y los bonos conservan las reglas del modo Tradicional o Caos.',
+    ],
+  ),
+];
+
+const passAndPlayRuleSections = <GuideRuleSection>[
+  GuideRuleSection(
+    icon: Icons.swap_horiz_rounded,
+    title: 'Pasa el teléfono',
+    color: GuidePalette.green,
+    badge: 'LOCAL · 2–4',
+    rules: [
+      'Juega con tus amigos en el mismo dispositivo, sin crear una sala ni usar internet.',
+      'Elige Tradicional o Caos y confirma cuántas personas van a jugar.',
+      'El juego indica claramente cuándo debes entregar el teléfono al siguiente jugador.',
+    ],
+  ),
+  GuideRuleSection(
+    icon: Icons.casino_rounded,
+    title: 'Un turno a la vez',
+    color: GuidePalette.blue,
+    rules: [
+      'Cada persona tira los dados, mueve sus fichas y termina su turno antes de pasar el dispositivo.',
+      'El tablero y el visor se mantienen visibles para que el siguiente jugador pueda revisar la jugada.',
+      'Los dobles, capturas, barreras y bonos se aplican igual que en una partida normal.',
+    ],
+  ),
+  GuideRuleSection(
+    icon: Icons.emoji_events_rounded,
+    title: 'Gana quien llega primero',
+    color: GuidePalette.yellow,
+    rules: [
+      'La meta depende del modo: cuatro fichas en Tradicional o dos en Quick Pop.',
+      'El juego celebra al ganador y muestra el resultado al terminar la partida.',
+      'Puedes iniciar otra partida local cuando todos estén listos.',
     ],
   ),
 ];
@@ -759,6 +1144,42 @@ class _ModeSelector extends StatelessWidget {
                 onTap: () => onChanged(GameGuideMode.quickPop),
               ),
             ),
+            SizedBox(
+              width: itemWidth,
+              child: _ModeButton(
+                key: const ValueKey('guide-mode-pass-and-play'),
+                selected: value == GameGuideMode.passAndPlay,
+                icon: Icons.swap_horiz_rounded,
+                title: 'PASS & PLAY',
+                subtitle: 'Pasa el teléfono · 2–4 jugadores',
+                color: GuidePalette.green,
+                onTap: () => onChanged(GameGuideMode.passAndPlay),
+              ),
+            ),
+            SizedBox(
+              width: itemWidth,
+              child: _ModeButton(
+                key: const ValueKey('guide-mode-quick-table'),
+                selected: value == GameGuideMode.quickTable,
+                icon: Icons.groups_rounded,
+                title: 'QUICK TABLE',
+                subtitle: 'Amigos online · crea una sala',
+                color: GuidePalette.blue,
+                onTap: () => onChanged(GameGuideMode.quickTable),
+              ),
+            ),
+            SizedBox(
+              width: itemWidth,
+              child: _ModeButton(
+                key: const ValueKey('guide-mode-play-cpu'),
+                selected: value == GameGuideMode.playCpu,
+                icon: Icons.smart_toy_rounded,
+                title: 'PLAY CPU',
+                subtitle: 'Juega contra el CPU',
+                color: GuidePalette.red,
+                onTap: () => onChanged(GameGuideMode.playCpu),
+              ),
+            ),
           ],
         );
       },
@@ -880,6 +1301,21 @@ class _ModeSummary extends StatelessWidget {
         GuidePalette.green,
         Icons.speed_rounded,
         'Quick Pop: tablero completo, 2 fichas ya en salida y una carrera más corta sin esperar un 5.',
+      ),
+      GameGuideMode.quickTable => (
+        GuidePalette.blue,
+        Icons.groups_rounded,
+        'Quick Table: crea una sala pública o privada y juega online con tus amigos en Tradicional o Caos.',
+      ),
+      GameGuideMode.playCpu => (
+        GuidePalette.red,
+        Icons.smart_toy_rounded,
+        'Play CPU: juega localmente contra la inteligencia artificial y elige la dificultad.',
+      ),
+      GameGuideMode.passAndPlay => (
+        GuidePalette.green,
+        Icons.swap_horiz_rounded,
+        'Pass & Play: comparte un teléfono y pásalo después de cada turno para jugar localmente.',
       ),
     };
     return Container(
@@ -1990,23 +2426,45 @@ class _QuickReference extends StatelessWidget {
             Wrap(
               spacing: 8,
               runSpacing: 8,
-              children: mode == GameGuideMode.quickPop
-                  ? const [
-                      _QuickPill(text: '2 fichas'),
-                      _QuickPill(text: 'Sin 5 de salida'),
-                      _QuickPill(text: 'Captura = +20'),
-                      _QuickPill(text: 'Meta = +10'),
-                      _QuickPill(text: 'Doble = otra tirada'),
-                      _QuickPill(text: 'Meta = número exacto'),
-                    ]
-                  : const [
-                      _QuickPill(text: '5 = SALIDA'),
-                      _QuickPill(text: 'Captura = +20'),
-                      _QuickPill(text: 'Meta = +10'),
-                      _QuickPill(text: 'Doble = otra tirada'),
-                      _QuickPill(text: '3 dobles = penalización'),
-                      _QuickPill(text: 'Meta = número exacto'),
-                    ],
+              children: switch (mode) {
+                GameGuideMode.quickPop => const [
+                  _QuickPill(text: '2 fichas'),
+                  _QuickPill(text: 'Sin 5 de salida'),
+                  _QuickPill(text: 'Captura = +20'),
+                  _QuickPill(text: 'Meta = +10'),
+                  _QuickPill(text: 'Doble = otra tirada'),
+                  _QuickPill(text: 'Meta = número exacto'),
+                ],
+                GameGuideMode.quickTable => const [
+                  _QuickPill(text: 'Sala online'),
+                  _QuickPill(text: 'Código de invitación'),
+                  _QuickPill(text: 'Clásico o Caos'),
+                  _QuickPill(text: 'Dado inicial'),
+                  _QuickPill(text: 'Turnos sincronizados'),
+                ],
+                GameGuideMode.playCpu => const [
+                  _QuickPill(text: 'Partida local'),
+                  _QuickPill(text: 'Fácil · Normal · Experto'),
+                  _QuickPill(text: '5 = SALIDA'),
+                  _QuickPill(text: 'Captura = +20'),
+                  _QuickPill(text: 'Doble = otra tirada'),
+                ],
+                GameGuideMode.passAndPlay => const [
+                  _QuickPill(text: '2–4 jugadores'),
+                  _QuickPill(text: 'Pasa el teléfono'),
+                  _QuickPill(text: 'Clásico o Caos'),
+                  _QuickPill(text: '5 = SALIDA'),
+                  _QuickPill(text: 'Captura = +20'),
+                ],
+                GameGuideMode.traditional || GameGuideMode.chaos => const [
+                  _QuickPill(text: '5 = SALIDA'),
+                  _QuickPill(text: 'Captura = +20'),
+                  _QuickPill(text: 'Meta = +10'),
+                  _QuickPill(text: 'Doble = otra tirada'),
+                  _QuickPill(text: '3 dobles = penalización'),
+                  _QuickPill(text: 'Meta = número exacto'),
+                ],
+              },
             ),
           ],
         ),

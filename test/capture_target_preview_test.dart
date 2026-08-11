@@ -56,6 +56,19 @@ void main() {
       expect(protectedTarget.inNest, isFalse);
     });
 
+    test('safe landing helper identifies a four-step star destination', () {
+      final game = GameEngine();
+      addTearDown(game.dispose);
+      final mover = game.currentPlayer.tokens.first..progress = 3;
+      _makeRollAvailable(game, const [4, 2]);
+
+      // Red progress 3 + 4 reaches global loop index 7, one of the
+      // protected star squares. The preview must not rely on the token's
+      // eventual movement side effects to identify it.
+      expect(game.isSafeLandingFor(mover, 4), isTrue);
+      expect(game.isSafeLandingFor(mover, 2), isFalse);
+    });
+
     test('rival barrier is illegal and never reports either token', () {
       final game = GameEngine();
       addTearDown(game.dispose);

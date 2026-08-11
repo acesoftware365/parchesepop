@@ -1040,6 +1040,37 @@ void main() {
       expect(firstResolution?.roomId, startsWith('quick_'));
     });
 
+    test(
+      'devices starting seven seconds apart still share one human room',
+      () async {
+        final store = InMemoryOnlineRealtimeStore(initialNowMs: 10_000);
+        final first = _client(store, 'first-late', 'First', seed: 111);
+        final second = _client(store, 'second-late', 'Second', seed: 112);
+        final firstTicket = await first.enqueueQuickPop(mode: 'classic');
+        store.advance(const Duration(seconds: 7));
+        final secondTicket = await second.enqueueQuickPop(mode: 'classic');
+
+        expect(
+          firstTicket.deadlineAtMs - firstTicket.joinedAtMs,
+          quickPopSearchWindow.inMilliseconds,
+        );
+        expect(
+          secondTicket.deadlineAtMs - secondTicket.joinedAtMs,
+          quickPopSearchWindow.inMilliseconds,
+        );
+        expect(await first.resolveQuickPop(firstTicket), isNull);
+        expect(await second.resolveQuickPop(secondTicket), isNull);
+        expect(await first.resolveQuickPop(firstTicket), isNull);
+        final secondResolution = await second.resolveQuickPop(secondTicket);
+        final firstResolution = await first.resolveQuickPop(firstTicket);
+        expect(secondResolution?.kind, QuickPopResolutionKind.human);
+        expect(firstResolution?.kind, QuickPopResolutionKind.human);
+        expect(firstResolution?.roomId, secondResolution?.roomId);
+        expect(firstResolution?.opponentUid, secondTicket.uid);
+        expect(secondResolution?.opponentUid, firstTicket.uid);
+      },
+    );
+
     test('follower waits for the exact leader claim before accepting', () async {
       final store = InMemoryOnlineRealtimeStore(initialNowMs: 12_000);
       final delayedLeaderStore = _DelayedClaimCreationStore(store);
@@ -1119,7 +1150,7 @@ void main() {
         expect(await leader.resolveQuickPop(leaderTicket), isNull);
 
         // Reproduce the production timing: the reciprocal acceptance crosses
-        // the network after the leader's five seconds, but still before the
+        // the network after the leader's ten seconds, but still before the
         // follower's own deadline.
         store.setNowMs(leaderTicket.deadlineAtMs + 1536);
         store.clearOperations();
@@ -1303,7 +1334,7 @@ void main() {
     });
 
     test(
-      'CPU fallback begins at exactly five seconds, never earlier',
+      'CPU fallback begins at exactly ten seconds, never earlier',
       () async {
         final store = InMemoryOnlineRealtimeStore(initialNowMs: 20_000);
         final player = _client(store, 'solo', 'Solo', seed: 20);
@@ -1443,7 +1474,7 @@ void main() {
     );
 
     test(
-      'findQuickPop waits a deterministic total of exactly five seconds',
+      'findQuickPop waits a deterministic total of exactly ten seconds',
       () async {
         final store = InMemoryOnlineRealtimeStore(initialNowMs: 0);
         var delayedMs = 0;

@@ -32,6 +32,8 @@ void main() {
   test('privacy copy documents banners and both voluntary rewarded offers', () {
     final policy = File('PRIVACY_POLICY.md').readAsStringSync();
     final mainSource = File('lib/main.dart').readAsStringSync();
+    final reportSource = File('lib/report_issue.dart').readAsStringSync();
+    final hostedPolicy = File('hosting/privacy.html').readAsStringSync();
 
     expect(
       policy,
@@ -46,6 +48,14 @@ void main() {
     expect(mainSource, contains('identidad anónima de Firebase'));
     expect(mainSource, contains('datos online removibles'));
     expect(mainSource, isNot(contains('banners únicamente fuera')));
+    expect(mainSource, contains('report-player-button'));
+    expect(reportSource, contains('sales@liisgo.com'));
+    expect(policy, contains('Reportes de jugadores y problemas'));
+    expect(policy, contains('versión de la aplicación'));
+    expect(policy, contains('sistema operativo'));
+    expect(policy, contains('El correo no se envía automáticamente'));
+    expect(hostedPolicy, contains('Reportes de jugadores y problemas'));
+    expect(hostedPolicy, contains('Player and problem reports'));
   });
 
   test('Android explicitly disables application backup', () {

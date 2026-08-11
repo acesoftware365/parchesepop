@@ -112,8 +112,8 @@ const queueTicket = (uid, ticketId, queueKey, joinedAt) => ({
   displayName: uid === 'leader' ? 'Leader' : 'Follower',
   queueKey,
   joinedAt,
-  deadlineAt: joinedAt + 5000,
-  activeUntil: joinedAt + 5000,
+  deadlineAt: joinedAt + 10000,
+  activeUntil: joinedAt + 10000,
   state: 'waiting',
 });
 
@@ -239,7 +239,7 @@ test('Realtime Database rules enforce the online security contract', async (t) =
       firstTicketId: 'ticket_host',
       secondUid: 'guest',
       secondTicketId: 'ticket_guest',
-      sharedDeadlineAt: now + 5000,
+      sharedDeadlineAt: now + 10000,
     };
     await seed(roomPath, quickPopStarting);
     await assertFails(set(pathRef('host', roomPath), null));
@@ -330,7 +330,7 @@ test('Realtime Database rules enforce the online security contract', async (t) =
         'historical',
         'ticket_historical',
         queueKey,
-        now - 1,
+        now - 12000,
       ),
       displayName: 'Historical',
       state: 'cancelled',
@@ -382,12 +382,12 @@ test('Realtime Database rules enforce the online security contract', async (t) =
     await assertFails(get(pathRef('active', `${queuePath}/peer`)));
 
     await seed(`${queuePath}/expired`, {
-      ...queueTicket('expired', 'ticket_expired_private', queueKey, now - 6000),
+        ...queueTicket('expired', 'ticket_expired_private', queueKey, now - 12000),
       displayName: 'Expired',
     });
     await assertSucceeds(get(pathRef('expired', `${queuePath}/expired`)));
     await assertFails(
-      get(activeQueueQuery('expired', queuePath, now - 6000)),
+      get(activeQueueQuery('expired', queuePath, now - 12000)),
     );
     await assertFails(get(pathRef('expired', `${queuePath}/peer`)));
   });
@@ -682,7 +682,7 @@ test('Realtime Database rules enforce the online security contract', async (t) =
     );
   });
 
-  await t.test('CPU fallback is denied before the five-second deadline', async () => {
+  await t.test('CPU fallback is denied before the ten-second deadline', async () => {
     await environment.clearDatabase();
     const now = Date.now();
     const queueKey = 'chaos_quickPop';
@@ -705,7 +705,7 @@ test('Realtime Database rules enforce the online security contract', async (t) =
     );
 
     const expired = {
-      ...queueTicket('expired', 'ticket_expired', queueKey, now - 5100),
+      ...queueTicket('expired', 'ticket_expired', queueKey, now - 10100),
       displayName: 'Expired',
     };
     await assertSucceeds(
@@ -729,8 +729,8 @@ test('Realtime Database rules enforce the online security contract', async (t) =
     await assertFails(
       set(pathRef('too-long', `onlineV2/quickQueues/${queueKey}/too-long`), {
         ...queueTicket('too-long', 'ticket_too_long', queueKey, now),
-        deadlineAt: now + 5001,
-        activeUntil: now + 5001,
+        deadlineAt: now + 10001,
+        activeUntil: now + 10001,
       }),
     );
     const missingActiveUntil = queueTicket(

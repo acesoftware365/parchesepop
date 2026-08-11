@@ -1598,6 +1598,28 @@ class GameEngine extends ChangeNotifier {
     return token.inNest ? 0 : token.progress + die;
   }
 
+  /// Whether a legal destination lands on one of the protected loop squares.
+  ///
+  /// Home-lane and goal destinations are intentionally not safe-loop
+  /// destinations: the board already communicates those states with its own
+  /// lane/flag visuals. Keeping this helper in the engine lets the board
+  /// callouts and the compact move popup use the exact same rule.
+  bool isSafeLandingFor(
+    GameToken token,
+    int amount, {
+    bool usesAllDice = false,
+  }) {
+    final destination = usesAllDice
+        ? destinationProgressUsingAllDice(token)
+        : destinationProgressFor(token, amount);
+    if (destination == null ||
+        destination < 0 ||
+        destination >= commonPathLength) {
+      return false;
+    }
+    return safeLoopIndices.contains(loopIndex(token.owner, destination));
+  }
+
   Offset? cellForProgress(PlayerColor owner, int progress) {
     if (progress < 0) return null;
     if (progress < commonPathLength) {

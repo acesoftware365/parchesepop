@@ -1133,7 +1133,8 @@ void main() {
         expect(host.revision, 3);
 
         await guest.reconnect();
-        await _eventually(() => !host.canHostDriveParticipant('guest_green'));
+        expect(guest.localParticipantAwaitingNextTurn, isTrue);
+        await _eventually(() => host.canHostDriveParticipant('guest_green'));
         await _eventuallyAsync(
           () async =>
               await _persistedPresence(store, 'guest_green') ==
@@ -1141,22 +1142,29 @@ void main() {
         );
         await _eventually(() => guest.revision == 4);
         expect(guest.engine.dice, const <int>[5, 1]);
-
-        expect(
-          () => host.submitRollFor(
-            'guest_green',
-            actionId: 'host_after_reclaim_001',
-          ),
-          throwsA(isA<OnlineGameSyncException>()),
-        );
-        final humanMove = await guest.submitMove(
+        final blockedMove = await guest.submitMove(
           tokenId: 0,
           die: 5,
-          actionId: 'human_reclaimed_move_001',
+          actionId: 'human_reclaimed_move_too_soon_001',
         );
-        expect(humanMove.status, OnlineCommandStatus.accepted);
-        expect(host.revision, 5);
-        await _eventually(() => guest.revision == 5);
+        expect(
+          blockedMove.rejection,
+          OnlineCommandRejection.participantUnavailable,
+        );
+
+        expect(host.canHostDriveParticipant('guest_green'), isTrue);
+        // Finish the CPU-controlled dice turn. The returning guest is now
+        // connected but must wait for its next turn around the table.
+        host.engine.endTurn();
+        await _eventually(() => !host.canHostDriveParticipant('guest_green'));
+        await _eventually(() => !guest.localParticipantAwaitingNextTurn);
+        final stillWaitingForSeat = await guest.submitRoll(
+          actionId: 'human_reclaimed_roll_before_next_turn_001',
+        );
+        expect(
+          stillWaitingForSeat.rejection,
+          OnlineCommandRejection.notPlayersTurn,
+        );
         expect(_checkpoint(guest.engine), _checkpoint(host.engine));
       },
     );
@@ -1227,10 +1235,18 @@ void main() {
           await _persistedPresence(store, 'guest_green'),
           OnlineParticipantPresence.connected,
         );
-        expect(host.canHostDriveParticipant('guest_green'), isFalse);
+        expect(host.canHostDriveParticipant('guest_green'), isTrue);
 
-        final roll = await guest.submitRoll(actionId: 'roll_after_pause_001');
-        expect(roll.status, OnlineCommandStatus.accepted);
+        expect(guest.localParticipantAwaitingNextTurn, isTrue);
+        final blockedRoll = await guest.submitRoll(
+          actionId: 'roll_after_pause_too_soon_001',
+        );
+        expect(
+          blockedRoll.rejection,
+          OnlineCommandRejection.participantUnavailable,
+        );
+        host.engine.endTurn();
+        await _eventually(() => !guest.localParticipantAwaitingNextTurn);
       },
     );
 

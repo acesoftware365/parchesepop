@@ -53,7 +53,7 @@ Rama: **version-2**
 - Formato independiente de Tradicional/Caos, con guardado compatible y reglas
   versionadas.
 - Automovimiento solo cuando el motor confirma una única jugada legal.
-- En la prueba online controlada busca durante cinco segundos. Si al llegar al
+- En la prueba online controlada busca durante diez segundos. Si al llegar al
   límite no existe un compromiso humano compartido, abre la partida local
   contra CPU. Si el servidor ya pudo comprometer una partida humana pero la
   conexión no permite confirmar el mismo resultado en ambos dispositivos, la
@@ -94,3 +94,18 @@ resultado firmado de cada partida.
    iOS simulador generados desde una copia interna.
 4. Prueba visual en teléfono pequeño y iPhone 17.
 5. Copia del código y bundle Git en el disco externo.
+
+## Cierre QA · 2026-08-11
+
+- Análisis estático limpio y suite Flutter completa aprobada (711 pruebas).
+- Repetición online: 68 pruebas críticas aprobadas; reglas Firebase 21/21;
+  smoke multicliente 5/5, incluido Quick Table con cuatro clientes, ready,
+  opening roll, orden de turnos y cierre.
+- Manual: Traditional y Chaos contra CPU, Quick Pop humano y fallback CPU a
+  los diez segundos, Quick Table privado/público con código e invitación,
+  compartir por Android y Pass & Play en ambos modos.
+- iPhone 13 e iPhone 17 reinstalados y arrancados desde cero.
+
+La publicación de producción todavía requiere ejecutar la misma matriz con
+Firebase/AdMob de producción y cuatro ventanas táctiles desbloqueadas; el APK
+QA enviado no debe publicarse en una tienda.

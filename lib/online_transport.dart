@@ -1118,7 +1118,7 @@ final class OnlineTransportClient {
       throw ArgumentError.value(
         searchWindow,
         'searchWindow',
-        'Quick Pop search budget must be between 1 ms and 5 seconds.',
+        'Quick Pop search budget must be between 1 ms and 10 seconds.',
       );
     }
     final queueKey = _queueKey(mode, matchFormat);
@@ -1198,13 +1198,14 @@ final class OnlineTransportClient {
       // intentionally reject a first claim attachment. An already attached
       // handshake may still finish as a human match.
       final canAttachClaim =
-        current.claimId == claimId || now < current.deadlineAtMs;
+          current.claimId == claimId || now < current.deadlineAtMs;
       if (compatibleClaim && canAttachClaim) {
         // Firebase exact reads are authorized by the claim root, so use the
         // ordered snapshot's claim markers until that root exists. In-memory
         // stores do not have that rules race and retain the direct check used
         // by the deterministic transport tests.
-        final pairAttached = store is OnlineRealtimeExactReadPolicy &&
+        final pairAttached =
+            store is OnlineRealtimeExactReadPolicy &&
                 (store as OnlineRealtimeExactReadPolicy)
                     .opponentTicketExactReadRequiresClaim
             ? pair.first.claimId == claimId && pair.second.claimId == claimId

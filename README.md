@@ -7,7 +7,7 @@ macOS y Windows.
 
 - Modos Tradicional y Caos.
 - Quick Pop de dos fichas por jugador para partidas más cortas: busca a otro
-  jugador online durante cinco segundos. Si al llegar al límite no existe un
+  jugador online durante diez segundos. Si al llegar al límite no existe un
   compromiso humano compartido, abre la partida local contra CPU; si una
   partida humana ya fue comprometida pero la conexión no permite confirmar el
   mismo resultado en ambos dispositivos, muestra una opción honesta para
@@ -43,6 +43,25 @@ pruebas controladas sobre Firebase. El modo clasificado, premios competitivos y
 una publicación social a gran escala todavía requieren autoridad confiable del
 servidor, App Check, moderación y endurecimiento operativo; por eso no se
 anuncian como funciones de producción.
+
+## Verificación QA · 11 de agosto de 2026
+
+- `flutter analyze`: sin problemas.
+- Suite Flutter completa: 711 pruebas aprobadas; repetición de las suites
+  online críticas: 68 aprobadas.
+- Reglas Firebase: 21 aprobadas; smoke multicliente: 5 aprobadas, incluyendo
+  cuatro clientes de Quick Table, preparación, tirada inicial, orden de turnos
+  y cierre.
+- Verificación manual: Traditional CPU, Chaos CPU, Quick Pop contra CPU con
+  fallback de diez segundos, Quick Pop humano entre dos Android, Quick Table
+  privado y público con código/invitación, compartir por Android y Pass & Play
+  Traditional/Chaos.
+- iPhone 13 e iPhone 17: instalación limpia y arranque comprobados.
+
+La integración interactiva de cuatro ventanas físicas y los servicios de
+producción (Firebase/AdMob reales, consentimiento y autoridad de servidor)
+requieren una pasada final en dispositivos desbloqueados y configuración de
+producción antes de publicar en una tienda.
 
 ## Ejecutar
 

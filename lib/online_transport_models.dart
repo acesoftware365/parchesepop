@@ -3,7 +3,14 @@ import 'dart:collection';
 import 'online_lobby.dart';
 
 const String onlineTransportRoot = 'onlineV2';
-const Duration quickPopSearchWindow = Duration(seconds: 5);
+
+/// Shared online matchmaking budget.
+///
+/// Ten seconds gives two devices enough time to authenticate, publish their
+/// queue tickets, complete the verified claim and open the shared room before
+/// either client falls back to CPU. The value is mirrored in Firebase Rules;
+/// keep the protocol and UI on this single contract.
+const Duration quickPopSearchWindow = Duration(seconds: 10);
 const Duration quickPopSettlementPeerWait = Duration(milliseconds: 1200);
 const Duration quickPopSettlementOperationTimeout = Duration(seconds: 2);
 

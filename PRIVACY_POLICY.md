@@ -304,6 +304,18 @@ Para conocer cómo Google maneja los datos, consulta:
 - [Cómo usa Google la información de sitios o aplicaciones que utilizan sus servicios](https://policies.google.com/technologies/partner-sites?hl=es)
 - [Política de privacidad de Google](https://policies.google.com/privacy?hl=es)
 
+## Reportes de jugadores y problemas
+
+Desde **Ajustes > Privacidad y políticas** o desde el indicador de bandera dentro
+de una partida online puedes reportar un nombre inapropiado, trampa o alteración
+del juego, acoso o mensajes inapropiados, un fallo técnico u otro problema. La
+aplicación prepara un correo para **sales@liisgo.com** con el motivo, el nombre
+del jugador reportado cuando corresponda, la versión de la aplicación, el
+sistema operativo y el dispositivo. Puedes añadir una descripción opcional.
+El correo no se envía automáticamente: se abre en tu aplicación de correo y tú
+decides si lo envías. No incluyas contraseñas, códigos de acceso ni información
+personal sensible.
+
 ## Intercambio de información
 
 Parchís Pop no vende información personal. La información puede ser procesada

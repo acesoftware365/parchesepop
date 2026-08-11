@@ -30,6 +30,57 @@ void main() {
     await tester.binding.setSurfaceSize(null);
   });
 
+  testWidgets('guide explains every local and online play mode', (
+    tester,
+  ) async {
+    await tester.binding.setSurfaceSize(const Size(390, 844));
+    await tester.pumpWidget(const MaterialApp(home: GameGuideScreen()));
+    await tester.pumpAndSettle();
+
+    for (final id in const ['quick-table', 'play-cpu', 'pass-and-play']) {
+      expect(find.byKey(ValueKey('guide-mode-$id')), findsOneWidget);
+    }
+    final scrollable = find.byKey(const ValueKey('game-guide-scroll'));
+    final passAndPlay = find.byKey(const ValueKey('guide-mode-pass-and-play'));
+    await tester.ensureVisible(passAndPlay);
+    await tester.drag(scrollable, const Offset(0, 120));
+    await tester.pumpAndSettle();
+    await tester.tapAt(tester.getCenter(passAndPlay));
+    await tester.pumpAndSettle();
+    expect(
+      find.byKey(const ValueKey('guide-summary-passAndPlay')),
+      findsOneWidget,
+    );
+    expect(find.byType(Dialog), findsNothing);
+    expect(find.text('Pasa el teléfono'), findsWidgets);
+    expect(find.text('Un turno a la vez'), findsOneWidget);
+
+    final playModes = find.byKey(const ValueKey('guide-play-modes'));
+    for (var index = 0; index < 30 && playModes.evaluate().isEmpty; index++) {
+      await tester.drag(scrollable, const Offset(0, -500));
+      await tester.pump();
+    }
+    await tester.pumpAndSettle();
+
+    expect(playModes, findsOneWidget);
+    for (final id in const [
+      'quick-pop',
+      'quick-table',
+      'play-cpu',
+      'pass-and-play',
+    ]) {
+      expect(find.byKey(ValueKey('guide-play-mode-$id')), findsOneWidget);
+    }
+    expect(find.textContaining('Partida casual online'), findsOneWidget);
+    expect(find.text('Crea una sala o entra con un código.'), findsOneWidget);
+    expect(find.textContaining('inteligencia artificial'), findsOneWidget);
+    expect(find.textContaining('pasando el dispositivo'), findsOneWidget);
+    expect(tester.takeException(), isNull);
+
+    await tester.pumpWidget(const SizedBox.shrink());
+    await tester.binding.setSurfaceSize(null);
+  });
+
   testWidgets(
     'chaos guide explains automatic shield and accumulating hidden traps',
     (tester) async {

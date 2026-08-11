@@ -541,7 +541,21 @@ void main() {
             knownRevision: 1,
           ),
         );
-        final roll = await gateway.submit(_roll(expectedRevision: 2));
+        final blockedRoll = await gateway.submit(
+          _roll(actionId: 'roll_waiting_0001', expectedRevision: 2),
+        );
+        expect(
+          blockedRoll.rejection,
+          OnlineCommandRejection.participantUnavailable,
+        );
+        // The host CPU completes the interrupted dice turn. The authority
+        // then releases the returning seat for its next dice turn.
+        authority.engine.roll();
+        authority.engine.endTurn();
+        authority.createCheckpoint();
+        final roll = await gateway.submit(
+          _roll(actionId: 'roll_after_wait_0001', expectedRevision: 2),
+        );
         final snapshot = await gateway.fetchSnapshot('match_authority_001');
 
         expect(publicTicket.ticketId, 'public_player_red');
@@ -550,8 +564,8 @@ void main() {
         expect(gateway.privateCreates, 1);
         expect(gateway.privateJoins, 1);
         expect(reconnected.accepted, isTrue);
-        expect(roll.accepted, isTrue);
-        expect(snapshot.revision, 3);
+        expect(roll.rejection, OnlineCommandRejection.notPlayersTurn);
+        expect(snapshot.revision, 2);
       },
     );
   });

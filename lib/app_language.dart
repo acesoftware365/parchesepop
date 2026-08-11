@@ -702,6 +702,113 @@ const _english = <String, String>{
   '🏆 Modo Tradicional seleccionado': '🏆 Traditional Mode selected',
 
   // Version 2: Quick Pop, contextual tutorial, and progression.
+  'Partida rápida online': 'Quick casual online play',
+  'Amigos online · crea una sala': 'Play online with friends · create a room',
+  'Pasa el teléfono · 2–4 jugadores': 'Pass the phone · 2–4 players',
+  'MODOS DE PARTIDA': 'GAME MODES',
+  'Elige si quieres jugar online o localmente y sigue los pasos de tu modo.':
+      'Choose online or local play and follow the steps for your mode.',
+  'ONLINE · SALA': 'ONLINE · ROOM',
+  'LOCAL · CPU': 'LOCAL · CPU',
+  'LOCAL · AMIGOS': 'LOCAL · FRIENDS',
+  'Crea una sala pública o privada para jugar con amigos en Tradicional o Caos.':
+      'Create a public or private room to play with friends in Traditional or Chaos.',
+  'Crea una sala o entra con un código.': 'Create a room or join with a code.',
+  'Comparte la invitación y espera a tus amigos.':
+      'Share the invite and wait for your friends.',
+  'El anfitrión inicia; el dado decide quién comienza.':
+      'The host starts; the opening roll decides who goes first.',
+  'Juega en tu teléfono contra la inteligencia artificial y elige el nivel que prefieras.':
+      'Play on your phone against AI and choose your preferred level.',
+  'Elige Tradicional o Caos.': 'Choose Traditional or Chaos.',
+  'Selecciona Fácil, Normal o Experto.': 'Select Easy, Normal, or Expert.',
+  'Tira los dados; el CPU juega sus turnos automáticamente.':
+      'Roll the dice; the CPU plays its turns automatically.',
+  'Juega en el mismo teléfono pasando el dispositivo después de cada turno.':
+      'Play on the same phone by passing the device after each turn.',
+  'Elige Tradicional o Caos y confirma los jugadores.':
+      'Choose Traditional or Chaos and confirm the players.',
+  'Cada persona tira, mueve y termina su turno.':
+      'Each person rolls, moves, and finishes their turn.',
+  'Pasa el teléfono al siguiente jugador.':
+      'Pass the phone to the next player.',
+  'Sala online': 'Online room',
+  '2–4 JUGADORES': '2–4 PLAYERS',
+  'Crea una sala pública o privada y elige Tradicional o Caos.':
+      'Create a public or private room and choose Traditional or Chaos.',
+  'Comparte el código o la invitación para que tus amigos entren desde sus dispositivos.':
+      'Share the code or invite so your friends can join from their devices.',
+  'La sala muestra quién está listo y no empieza hasta que el anfitrión la abra.':
+      'The room shows who is ready and will not start until the host opens it.',
+  'Quién comienza': 'Who starts',
+  'DADO INICIAL': 'OPENING ROLL',
+  'Cuando están listos, cada jugador lanza un dado para decidir el orden.':
+      'When everyone is ready, each player rolls a die to decide the order.',
+  'El número más alto comienza; si hay empate, solo los empatados vuelven a lanzar.':
+      'The highest roll starts; if there is a tie, only tied players roll again.',
+  'Después del primer turno, el juego continúa hacia la derecha.':
+      'After the first turn, play continues clockwise.',
+  'Partida sincronizada': 'Synchronized match',
+  'Todos ven el mismo tablero, los dados y el turno actual en tiempo real.':
+      'Everyone sees the same board, dice, and current turn in real time.',
+  'Si alguien se desconecta, puede volver a entrar a la sala y continuar su partida.':
+      'If someone disconnects, they can rejoin the room and continue the match.',
+  'El anfitrión puede cerrar la sala antes de comenzar; una partida iniciada conserva sus turnos.':
+      'The host can close the room before it starts; an active match keeps its turns.',
+  'Quick Table: crea una sala pública o privada y juega online con tus amigos en Tradicional o Caos.':
+      'Quick Table: create a public or private room and play online with friends in Traditional or Chaos.',
+  'Play CPU: juega localmente contra la inteligencia artificial y elige la dificultad.':
+      'Play CPU: play locally against AI and choose the difficulty.',
+  'Juega en este dispositivo contra la inteligencia artificial, sin sala ni conexión.':
+      'Play on this device against AI, with no room or connection required.',
+  'Elige Tradicional para las reglas clásicas o Caos para añadir poderes y trampas.':
+      'Choose Traditional for classic rules or Chaos to add powers and traps.',
+  'Tus turnos y los del CPU siguen el mismo tablero y las mismas reglas del modo elegido.':
+      'Your turns and the CPU turns use the same board and rules for the selected mode.',
+  'Fácil es ideal para aprender; Normal ofrece una partida equilibrada.':
+      'Easy is ideal for learning; Normal offers a balanced match.',
+  'Experto busca jugadas más competitivas y aprovecha mejor las capturas y barreras.':
+      'Expert looks for more competitive plays and uses captures and blockades better.',
+  'Puedes cambiar de dificultad al comenzar una nueva partida.':
+      'You can change difficulty when starting a new match.',
+  'Tu turno': 'Your turn',
+  'Tira los dados, toca una ficha y elige el movimiento señalado en el tablero.':
+      'Roll the dice, tap a piece, and choose the move highlighted on the board.',
+  'El CPU juega automáticamente cuando termina tu turno.':
+      'The CPU plays automatically when your turn ends.',
+  'La victoria y los bonos conservan las reglas del modo Tradicional o Caos.':
+      'Victory and bonuses follow the rules of Traditional or Chaos.',
+  'LOCAL': 'LOCAL',
+  'Fácil · Normal · Experto': 'Easy · Normal · Expert',
+  'Pass & Play: comparte un teléfono y pásalo después de cada turno para jugar localmente.':
+      'Pass & Play: share one phone and pass it after each turn for a local match.',
+  'Pasa el teléfono': 'Pass the phone',
+  'LOCAL · 2–4': 'LOCAL · 2–4',
+  'Juega con tus amigos en el mismo dispositivo, sin crear una sala ni usar internet.':
+      'Play with friends on the same device, without creating a room or using the internet.',
+  'Elige Tradicional o Caos y confirma cuántas personas van a jugar.':
+      'Choose Traditional or Chaos and confirm how many people will play.',
+  'El juego indica claramente cuándo debes entregar el teléfono al siguiente jugador.':
+      'The game clearly tells you when to hand the phone to the next player.',
+  'Un turno a la vez': 'One turn at a time',
+  'Cada persona tira los dados, mueve sus fichas y termina su turno antes de pasar el dispositivo.':
+      'Each person rolls, moves their pieces, and finishes their turn before passing the device.',
+  'El tablero y el visor se mantienen visibles para que el siguiente jugador pueda revisar la jugada.':
+      'The board and viewer stay visible so the next player can review the position.',
+  'Los dobles, capturas, barreras y bonos se aplican igual que en una partida normal.':
+      'Doubles, captures, blockades, and bonuses work the same as in a normal match.',
+  'Gana quien llega primero': 'First to finish wins',
+  'La meta depende del modo: cuatro fichas en Tradicional o dos en Quick Pop.':
+      'The goal depends on the mode: four pieces in Traditional or two in Quick Pop.',
+  'El juego celebra al ganador y muestra el resultado al terminar la partida.':
+      'The game celebrates the winner and shows the result when the match ends.',
+  'Puedes iniciar otra partida local cuando todos estén listos.':
+      'You can start another local match when everyone is ready.',
+  '2–4 jugadores': '2–4 players',
+  'Código de invitación': 'Invite code',
+  'Clásico o Caos': 'Classic or Chaos',
+  'Dado inicial': 'Opening roll',
+  'Turnos sincronizados': 'Synchronized turns',
   'MESA RÁPIDA': 'QUICK TABLE',
   'JUEGA CON AMIGOS': 'PLAY WITH FRIENDS',
   'Crea una sala, entra con código o busca una mesa pública.':
@@ -832,9 +939,9 @@ const _english = <String, String>{
   'Luego jugarás contra CPU automáticamente':
       'Then you will automatically play against the CPU',
   'ONLINE · LISTO': 'ONLINE · READY',
-  'Buscaremos otro jugador durante 5 segundos. Si no aparece nadie, la partida empieza automáticamente contra el CPU.':
-      'We will search for another player for 5 seconds. If no one appears, the match starts automatically against the CPU.',
-  'JUGAR ONLINE · BUSCAR 5 S': 'PLAY ONLINE · SEARCH 5 S',
+  'Buscaremos otro jugador durante 10 segundos. Si no aparece nadie, la partida empieza automáticamente contra el CPU.':
+      'We will search for another player for 10 seconds. If no one appears, the match starts automatically against the CPU.',
+  'JUGAR ONLINE · BUSCAR 10 S': 'PLAY ONLINE · SEARCH 10 S',
   'JUGAR AHORA CONTRA CPU': 'PLAY NOW AGAINST CPU',
   'VOLVER': 'BACK',
   'El servidor no autorizó esta partida. Actualiza el juego e inténtalo otra vez.':
@@ -972,6 +1079,8 @@ const _english = <String, String>{
   'Lanzar': 'Roll',
   'Lanza los dados': 'Roll the dice',
   'Lanzando los dados…': 'Rolling the dice…',
+  'Espera el próximo turno de los dados': 'Wait for the next dice turn',
+  'Espera el próximo turno': 'Wait for the next turn',
   'Los dados están girando': 'The dice are rolling',
   'Toca los dados para lanzar.': 'Tap the dice to roll.',
   'TOCA PARA LANZAR': 'TAP TO ROLL',
@@ -1357,6 +1466,44 @@ const _english = <String, String>{
   'Publicidad y preferencias': 'Advertising and preferences',
   'Publicidad': 'Advertising',
   'Opciones de privacidad de anuncios': 'Ad privacy options',
+  'Reportar jugador': 'Report player',
+  'Reportar jugador o problema': 'Report a player or problem',
+  'Nombre inapropiado': 'Inappropriate name',
+  'Trampa o alteración del juego': 'Cheating or game tampering',
+  'Acoso o mensajes inapropiados': 'Harassment or inappropriate messages',
+  'Problema técnico u otro': 'Technical issue or other',
+  'Nombre ofensivo, sexual, amenazante o que incumple las reglas.':
+      'Offensive, sexual, threatening, or rule-breaking name.',
+  'Resultado imposible, manipulación, desconexiones sospechosas o abuso del juego.':
+      'Impossible result, manipulation, suspicious disconnects, or game abuse.',
+  'Acoso, amenazas o uso indebido de los mensajes rápidos.':
+      'Harassment, threats, or misuse of quick messages.',
+  'Error de la aplicación, partida rota o cualquier otro problema.':
+      'App error, broken match, or any other problem.',
+  '¿Qué quieres reportar?': 'What do you want to report?',
+  'Motivo del reporte': 'Report reason',
+  'Nombre del jugador reportado': 'Reported player name',
+  'Escribe el nombre tal como aparece en la partida':
+      'Enter the name exactly as it appears in the match',
+  'Escribe el nombre del jugador.': 'Enter the player name.',
+  'Jugadores de esta partida': 'Players in this match',
+  'Comentario adicional (opcional)': 'Additional comment (optional)',
+  'Cuéntanos qué ocurrió, cuándo pasó y qué viste.':
+      'Tell us what happened, when it happened, and what you saw.',
+  'Información incluida automáticamente': 'Information included automatically',
+  'Versión de la app': 'App version',
+  'Sistema operativo': 'Operating system',
+  'Dispositivo': 'Device',
+  'Preparando información del dispositivo…': 'Preparing device information…',
+  'Ayúdanos a mantener Parchís Pop seguro y justo. El reporte abre un correo preparado; tú decides si lo envías.':
+      'Help us keep Parchís Pop safe and fair. The report opens a prepared email; you decide whether to send it.',
+  'Preparar correo a sales@liisgo.com': 'Prepare email to sales@liisgo.com',
+  'No se pudo abrir una aplicación de correo. Puedes copiar el reporte.':
+      'Could not open an email app. You can copy the report.',
+  'Copiar reporte': 'Copy report',
+  'Reporte copiado.': 'Report copied.',
+  'No envíes contraseñas, códigos de acceso ni otros datos sensibles.':
+      'Do not send passwords, access codes, or other sensitive data.',
   'Analítica anónima': 'Anonymous analytics',
   'Mide sesiones, retención y pasos online de Quick Pop y Quick Table, sin enviar nombre, correo ni códigos de sala':
       'Measures sessions, retention, and Quick Pop and Quick Table online steps without sending names, email, or room codes',

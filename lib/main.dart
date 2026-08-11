@@ -39,6 +39,7 @@ import 'player_auth.dart';
 import 'player_progression.dart';
 import 'progress_hub.dart';
 import 'quick_pop_search_deadline.dart';
+import 'report_issue.dart';
 import 'safe_chat.dart';
 import 'tutorial_controller.dart';
 import 'tutorial_scenario.dart';
@@ -364,6 +365,14 @@ class MoveDestinationPreview {
   final int? loopIndex;
   final Offset? captureCell;
   final GameToken? captureTarget;
+
+  /// True when this choice ends on one of the board's protected stars or
+  /// departure squares. The engine remains the source of truth; this getter
+  /// only gives the presentation layer a stable way to label the destination.
+  bool get isSafeLanding {
+    final index = loopIndex;
+    return index != null && GameEngine.safeLoopIndices.contains(index);
+  }
 }
 
 List<MoveDestinationPreview> _moveDestinationPreviews(
@@ -2309,8 +2318,8 @@ class PlayHome extends StatelessWidget {
                   color: const Color(0xFF7257E9),
                   icon: Icons.bolt_rounded,
                   title: 'QUICK POP',
-                  subtitle: 'Casual online · CPU en 5 s',
-                  badge: 'ONLINE · CPU EN 5 S',
+                  subtitle: 'Partida rápida online',
+                  badge: 'ONLINE · CPU EN 10 S',
                   featured: !compactModeTiles,
                   tile: compactModeTiles,
                   dense: densePortrait,
@@ -2412,6 +2421,23 @@ class PlayHome extends StatelessWidget {
                             ],
                             if (!compactLandscape)
                               _HomeSectionTitle(compact: narrow),
+                            if (!compactLandscape) ...[
+                              const SizedBox(height: 8),
+                              Align(
+                                alignment: Alignment.centerRight,
+                                child: _NewHomePreviewButton(
+                                  onTap: () => Navigator.push<void>(
+                                    context,
+                                    MaterialPageRoute(
+                                      builder: (_) => NewHomePreviewScreen(
+                                        playerName: profile.name,
+                                        wallet: wallet,
+                                      ),
+                                    ),
+                                  ),
+                                ),
+                              ),
+                            ],
                             if (!compactLandscape)
                               SizedBox(height: narrow ? 10 : 12),
                             if (twoColumnModes)
@@ -2893,6 +2919,613 @@ class PlayHome extends StatelessWidget {
       ),
     );
   }
+}
+
+class _NewHomePreviewButton extends StatelessWidget {
+  const _NewHomePreviewButton({required this.onTap});
+
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) => Semantics(
+    button: true,
+    label: 'New Home',
+    child: OutlinedButton.icon(
+      key: const ValueKey('home-new-home-button'),
+      onPressed: onTap,
+      icon: const Icon(Icons.auto_awesome_rounded, size: 15),
+      label: const Text('New Home'),
+      style: OutlinedButton.styleFrom(
+        foregroundColor: Colors.white,
+        backgroundColor: const Color(0x2607132D),
+        side: BorderSide(color: Colors.white.withValues(alpha: .60)),
+        minimumSize: const Size(0, 34),
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+        tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(18)),
+        textStyle: const TextStyle(
+          fontSize: 11,
+          fontWeight: FontWeight.w900,
+          letterSpacing: .2,
+        ),
+      ),
+    ),
+  );
+}
+
+enum _NewHomeMode { quickPop, quickTable, playCpu, passAndPlay }
+
+class NewHomePreviewScreen extends StatefulWidget {
+  const NewHomePreviewScreen({
+    super.key,
+    required this.playerName,
+    required this.wallet,
+  });
+
+  final String playerName;
+  final WalletController wallet;
+
+  @override
+  State<NewHomePreviewScreen> createState() => _NewHomePreviewScreenState();
+}
+
+class _NewHomePreviewScreenState extends State<NewHomePreviewScreen> {
+  _NewHomeMode selectedMode = _NewHomeMode.quickPop;
+
+  String get _selectedModeLabel => switch (selectedMode) {
+    _NewHomeMode.quickPop => 'Quick Pop',
+    _NewHomeMode.quickTable => 'Quick Table',
+    _NewHomeMode.playCpu => 'Play CPU',
+    _NewHomeMode.passAndPlay => 'Pass & Play',
+  };
+
+  void _previewPlay() {
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text('Aquí comenzaría $_selectedModeLabel.'),
+        behavior: SnackBarBehavior.floating,
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) => Scaffold(
+    backgroundColor: PopColors.navy,
+    body: _HomeArcadeBackdrop(
+      animation: const AlwaysStoppedAnimation<double>(1),
+      child: SafeArea(
+        child: LayoutBuilder(
+          builder: (context, viewport) {
+            final narrow = viewport.maxWidth < 560;
+            final contentWidth = math.min(viewport.maxWidth, 760.0);
+            final name = widget.playerName.trim().isEmpty
+                ? 'Jugador'
+                : widget.playerName.trim();
+            return SingleChildScrollView(
+              padding: EdgeInsets.fromLTRB(
+                narrow ? 14 : 24,
+                narrow ? 10 : 18,
+                narrow ? 14 : 24,
+                24,
+              ),
+              child: Center(
+                child: ConstrainedBox(
+                  constraints: BoxConstraints(maxWidth: contentWidth),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      Row(
+                        children: [
+                          Container(
+                            decoration: BoxDecoration(
+                              color: Colors.white.withValues(alpha: .14),
+                              shape: BoxShape.circle,
+                              border: Border.all(
+                                color: Colors.white.withValues(alpha: .40),
+                              ),
+                            ),
+                            child: IconButton(
+                              key: const ValueKey('new-home-preview-back'),
+                              tooltip: 'Volver',
+                              onPressed: () => Navigator.pop(context),
+                              icon: const Icon(
+                                Icons.arrow_back_rounded,
+                                color: Colors.white,
+                              ),
+                            ),
+                          ),
+                          const SizedBox(width: 10),
+                          const Expanded(
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Text(
+                                  'NEW HOME',
+                                  style: TextStyle(
+                                    color: Colors.white,
+                                    fontSize: 18,
+                                    fontWeight: FontWeight.w900,
+                                    letterSpacing: 1.1,
+                                  ),
+                                ),
+                                SizedBox(height: 2),
+                                Text(
+                                  'Vista previa del nuevo inicio',
+                                  style: TextStyle(
+                                    color: Color(0xDCE7EEFF),
+                                    fontSize: 11,
+                                    fontWeight: FontWeight.w700,
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                          _CoinPill(wallet: widget.wallet),
+                          const SizedBox(width: 8),
+                          const Icon(
+                            Icons.visibility_rounded,
+                            color: PopColors.yellow,
+                            size: 22,
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 14),
+                      _NewHomeHeroCard(
+                        playerName: name,
+                        selectedModeLabel: _selectedModeLabel,
+                        onPlay: _previewPlay,
+                      ),
+                      const SizedBox(height: 16),
+                      const _NewHomeSectionLabel(
+                        label: 'ONLINE',
+                        icon: Icons.public_rounded,
+                        color: PopColors.blue,
+                      ),
+                      const SizedBox(height: 8),
+                      _NewHomeModeGrid(
+                        narrow: narrow,
+                        selectedMode: selectedMode,
+                        onSelected: (mode) =>
+                            setState(() => selectedMode = mode),
+                        modes: const [
+                          _NewHomeModeCardData(
+                            mode: _NewHomeMode.quickPop,
+                            color: Color(0xFF7257E9),
+                            icon: Icons.bolt_rounded,
+                            title: 'QUICK POP',
+                            subtitle: 'Partida casual online',
+                            detail: 'CPU si no encuentra jugador',
+                          ),
+                          _NewHomeModeCardData(
+                            mode: _NewHomeMode.quickTable,
+                            color: PopColors.blue,
+                            icon: Icons.groups_rounded,
+                            title: 'QUICK TABLE',
+                            subtitle: 'Juega online con amigos',
+                            detail: 'Crea o únete a una sala',
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 16),
+                      const _NewHomeSectionLabel(
+                        label: 'LOCAL',
+                        icon: Icons.home_rounded,
+                        color: PopColors.green,
+                      ),
+                      const SizedBox(height: 8),
+                      _NewHomeModeGrid(
+                        narrow: narrow,
+                        selectedMode: selectedMode,
+                        onSelected: (mode) =>
+                            setState(() => selectedMode = mode),
+                        modes: const [
+                          _NewHomeModeCardData(
+                            mode: _NewHomeMode.playCpu,
+                            color: PopColors.red,
+                            icon: Icons.smart_toy_rounded,
+                            title: 'PLAY CPU',
+                            subtitle: 'Juega contra el CPU',
+                            detail: 'Elige dificultad y modo',
+                          ),
+                          _NewHomeModeCardData(
+                            mode: _NewHomeMode.passAndPlay,
+                            color: PopColors.green,
+                            icon: Icons.swap_horiz_rounded,
+                            title: 'PASS & PLAY',
+                            subtitle: 'Pasa el teléfono',
+                            detail: '2–4 jugadores en un dispositivo',
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 16),
+                      const _NewHomeUtilityStrip(),
+                    ],
+                  ),
+                ),
+              ),
+            );
+          },
+        ),
+      ),
+    ),
+  );
+}
+
+class _NewHomeHeroCard extends StatelessWidget {
+  const _NewHomeHeroCard({
+    required this.playerName,
+    required this.selectedModeLabel,
+    required this.onPlay,
+  });
+
+  final String playerName;
+  final String selectedModeLabel;
+  final VoidCallback onPlay;
+
+  @override
+  Widget build(BuildContext context) => Container(
+    key: const ValueKey('new-home-preview-hero'),
+    padding: const EdgeInsets.fromLTRB(18, 18, 18, 16),
+    decoration: BoxDecoration(
+      gradient: const LinearGradient(
+        begin: Alignment.topLeft,
+        end: Alignment.bottomRight,
+        colors: [Color(0xFF2B8AF0), Color(0xFF7048EF)],
+      ),
+      borderRadius: BorderRadius.circular(26),
+      border: Border.all(color: Colors.white.withValues(alpha: .76), width: 2),
+      boxShadow: const [
+        BoxShadow(
+          color: Color(0x5507132D),
+          blurRadius: 16,
+          offset: Offset(0, 9),
+        ),
+      ],
+    ),
+    child: Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Container(
+              width: 54,
+              height: 54,
+              decoration: BoxDecoration(
+                color: PopColors.yellow,
+                shape: BoxShape.circle,
+                border: Border.all(color: Colors.white, width: 3),
+              ),
+              child: const Icon(
+                Icons.play_arrow_rounded,
+                color: PopColors.navy,
+                size: 34,
+              ),
+            ),
+            const SizedBox(width: 12),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    '¡Hola, $playerName!',
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(
+                      color: Colors.white,
+                      fontSize: 22,
+                      fontWeight: FontWeight.w900,
+                    ),
+                  ),
+                  const SizedBox(height: 3),
+                  const Text(
+                    'Tu próxima partida está a un toque.',
+                    style: TextStyle(
+                      color: Color(0xEAF5F8FF),
+                      fontSize: 13,
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
+        const SizedBox(height: 14),
+        Text(
+          'Modo seleccionado: $selectedModeLabel',
+          style: const TextStyle(
+            color: Color(0xFFF6F8FF),
+            fontSize: 12,
+            fontWeight: FontWeight.w800,
+          ),
+        ),
+        const SizedBox(height: 9),
+        SizedBox(
+          height: 48,
+          child: FilledButton.icon(
+            key: const ValueKey('new-home-preview-play'),
+            onPressed: onPlay,
+            icon: const Icon(Icons.play_circle_fill_rounded),
+            label: const Text(
+              'JUGAR AHORA',
+              style: TextStyle(fontWeight: FontWeight.w900),
+            ),
+            style: FilledButton.styleFrom(
+              backgroundColor: Colors.white,
+              foregroundColor: PopColors.navy,
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(16),
+              ),
+            ),
+          ),
+        ),
+      ],
+    ),
+  );
+}
+
+class _NewHomeSectionLabel extends StatelessWidget {
+  const _NewHomeSectionLabel({
+    required this.label,
+    required this.icon,
+    required this.color,
+  });
+
+  final String label;
+  final IconData icon;
+  final Color color;
+
+  @override
+  Widget build(BuildContext context) => Row(
+    children: [
+      Icon(icon, color: color, size: 18),
+      const SizedBox(width: 7),
+      Text(
+        label,
+        style: const TextStyle(
+          color: Colors.white,
+          fontSize: 12,
+          fontWeight: FontWeight.w900,
+          letterSpacing: 1.2,
+        ),
+      ),
+      const SizedBox(width: 9),
+      Expanded(
+        child: Container(
+          height: 2,
+          decoration: BoxDecoration(
+            gradient: LinearGradient(
+              colors: [color.withValues(alpha: .65), Colors.transparent],
+            ),
+          ),
+        ),
+      ),
+    ],
+  );
+}
+
+class _NewHomeModeCardData {
+  const _NewHomeModeCardData({
+    required this.mode,
+    required this.color,
+    required this.icon,
+    required this.title,
+    required this.subtitle,
+    required this.detail,
+  });
+
+  final _NewHomeMode mode;
+  final Color color;
+  final IconData icon;
+  final String title;
+  final String subtitle;
+  final String detail;
+}
+
+class _NewHomeModeGrid extends StatelessWidget {
+  const _NewHomeModeGrid({
+    required this.narrow,
+    required this.selectedMode,
+    required this.onSelected,
+    required this.modes,
+  });
+
+  final bool narrow;
+  final _NewHomeMode selectedMode;
+  final ValueChanged<_NewHomeMode> onSelected;
+  final List<_NewHomeModeCardData> modes;
+
+  @override
+  Widget build(BuildContext context) {
+    return LayoutBuilder(
+      builder: (context, box) {
+        final twoColumns = !narrow && box.maxWidth >= 480;
+        final cardWidth = twoColumns ? (box.maxWidth - 12) / 2 : box.maxWidth;
+        return Wrap(
+          spacing: 12,
+          runSpacing: 12,
+          children: [
+            for (final data in modes)
+              SizedBox(
+                width: cardWidth,
+                child: _NewHomeModeCard(
+                  data: data,
+                  selected: selectedMode == data.mode,
+                  onTap: () => onSelected(data.mode),
+                ),
+              ),
+          ],
+        );
+      },
+    );
+  }
+}
+
+class _NewHomeModeCard extends StatelessWidget {
+  const _NewHomeModeCard({
+    required this.data,
+    required this.selected,
+    required this.onTap,
+  });
+
+  final _NewHomeModeCardData data;
+  final bool selected;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) => Semantics(
+    button: true,
+    selected: selected,
+    label: '${data.title}: ${data.subtitle}',
+    child: Material(
+      color: Colors.transparent,
+      borderRadius: BorderRadius.circular(21),
+      clipBehavior: Clip.antiAlias,
+      child: InkWell(
+        key: ValueKey('new-home-mode-${data.mode.name}'),
+        onTap: onTap,
+        child: AnimatedContainer(
+          duration: const Duration(milliseconds: 180),
+          padding: const EdgeInsets.all(13),
+          decoration: BoxDecoration(
+            gradient: LinearGradient(
+              begin: Alignment.topLeft,
+              end: Alignment.bottomRight,
+              colors: [
+                Color.lerp(data.color, Colors.white, selected ? .10 : .02)!,
+                Color.lerp(data.color, PopColors.navy, .18)!,
+              ],
+            ),
+            borderRadius: BorderRadius.circular(21),
+            border: Border.all(
+              color: selected
+                  ? Colors.white
+                  : Colors.white.withValues(alpha: .32),
+              width: selected ? 2.5 : 1.5,
+            ),
+            boxShadow: [
+              BoxShadow(
+                color: data.color.withValues(alpha: selected ? .38 : .16),
+                blurRadius: selected ? 14 : 8,
+                offset: const Offset(0, 6),
+              ),
+            ],
+          ),
+          child: Row(
+            children: [
+              Container(
+                width: 44,
+                height: 44,
+                decoration: BoxDecoration(
+                  color: Colors.white.withValues(alpha: .90),
+                  borderRadius: BorderRadius.circular(14),
+                ),
+                child: Icon(data.icon, color: data.color, size: 25),
+              ),
+              const SizedBox(width: 10),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      data.title,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(
+                        color: Colors.white,
+                        fontSize: 14,
+                        fontWeight: FontWeight.w900,
+                      ),
+                    ),
+                    const SizedBox(height: 3),
+                    Text(
+                      data.subtitle,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(
+                        color: Color(0xF0F4F7FF),
+                        fontSize: 11,
+                        fontWeight: FontWeight.w700,
+                      ),
+                    ),
+                    const SizedBox(height: 2),
+                    Text(
+                      data.detail,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(
+                        color: Colors.white.withValues(alpha: .80),
+                        fontSize: 9,
+                        fontWeight: FontWeight.w700,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              const SizedBox(width: 5),
+              Icon(
+                selected
+                    ? Icons.check_circle_rounded
+                    : Icons.arrow_forward_rounded,
+                color: Colors.white,
+                size: 22,
+              ),
+            ],
+          ),
+        ),
+      ),
+    ),
+  );
+}
+
+class _NewHomeUtilityStrip extends StatelessWidget {
+  const _NewHomeUtilityStrip();
+
+  @override
+  Widget build(BuildContext context) => Container(
+    padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 9),
+    decoration: BoxDecoration(
+      color: const Color(0xFF071B40).withValues(alpha: .66),
+      borderRadius: BorderRadius.circular(18),
+      border: Border.all(color: Colors.white.withValues(alpha: .24)),
+    ),
+    child: const Row(
+      mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+      children: [
+        _NewHomeUtilityItem(icon: Icons.storefront_rounded, label: 'Tienda'),
+        _NewHomeUtilityItem(
+          icon: Icons.emoji_events_rounded,
+          label: 'Misiones',
+        ),
+        _NewHomeUtilityItem(icon: Icons.help_rounded, label: 'Cómo jugar'),
+      ],
+    ),
+  );
+}
+
+class _NewHomeUtilityItem extends StatelessWidget {
+  const _NewHomeUtilityItem({required this.icon, required this.label});
+
+  final IconData icon;
+  final String label;
+
+  @override
+  Widget build(BuildContext context) => Row(
+    mainAxisSize: MainAxisSize.min,
+    children: [
+      Icon(icon, color: PopColors.yellow, size: 17),
+      const SizedBox(width: 5),
+      Text(
+        label,
+        style: const TextStyle(
+          color: Colors.white,
+          fontSize: 10,
+          fontWeight: FontWeight.w800,
+        ),
+      ),
+    ],
+  );
 }
 
 enum _QuickTableEntryChoice { online }
@@ -4215,7 +4848,7 @@ class _QuickPopEntryDialog extends StatelessWidget {
             ),
             const SizedBox(height: 17),
             const PopText(
-              'Buscaremos otro jugador durante 5 segundos. Si no aparece '
+              'Buscaremos otro jugador durante 10 segundos. Si no aparece '
               'nadie, la partida empieza automáticamente contra el CPU.',
               style: TextStyle(
                 color: Color(0xFF475467),
@@ -4235,7 +4868,7 @@ class _QuickPopEntryDialog extends StatelessWidget {
                 ),
               ),
               icon: const Icon(Icons.public_rounded),
-              label: const PopText('JUGAR ONLINE · BUSCAR 5 S'),
+              label: const PopText('JUGAR ONLINE · BUSCAR 10 S'),
               style: FilledButton.styleFrom(
                 backgroundColor: const Color(0xFF7257E9),
                 foregroundColor: Colors.white,
@@ -5742,7 +6375,7 @@ class _ModeCardState extends State<_ModeCard> {
                                       ),
                                       SizedBox(height: compact ? 1 : 5),
                                       PopText(
-                                        widget.subtitle,
+                                        appTranslate(context, widget.subtitle),
                                         maxLines: compact ? 1 : 2,
                                         overflow: TextOverflow.ellipsis,
                                         style: TextStyle(
@@ -5802,7 +6435,10 @@ class _ModeCardState extends State<_ModeCard> {
                                             ),
                                             const SizedBox(height: 5),
                                             PopText(
-                                              widget.subtitle,
+                                              appTranslate(
+                                                context,
+                                                widget.subtitle,
+                                              ),
                                               maxLines: 2,
                                               overflow: TextOverflow.ellipsis,
                                               style: TextStyle(
@@ -6925,6 +7561,7 @@ class _MatchExitDialogFrame extends StatelessWidget {
     required this.title,
     required this.message,
     required this.actions,
+    this.stackActions = false,
   });
 
   final IconData icon;
@@ -6932,6 +7569,7 @@ class _MatchExitDialogFrame extends StatelessWidget {
   final String title;
   final String message;
   final List<Widget> actions;
+  final bool stackActions;
 
   @override
   Widget build(BuildContext context) => Dialog(
@@ -6940,15 +7578,15 @@ class _MatchExitDialogFrame extends StatelessWidget {
     child: ConstrainedBox(
       constraints: const BoxConstraints(maxWidth: 420),
       child: Container(
-        padding: const EdgeInsets.fromLTRB(20, 20, 20, 17),
+        padding: const EdgeInsets.fromLTRB(20, 18, 20, 16),
         decoration: BoxDecoration(
           gradient: const LinearGradient(
             begin: Alignment.topLeft,
             end: Alignment.bottomRight,
             colors: [Color(0xFF254F9E), Color(0xFF162C5D)],
           ),
-          borderRadius: BorderRadius.circular(28),
-          border: Border.all(color: PopColors.yellow, width: 3),
+          borderRadius: BorderRadius.circular(26),
+          border: Border.all(color: PopColors.yellow, width: 2.5),
           boxShadow: const [
             BoxShadow(
               color: Color(0x9007132D),
@@ -6961,8 +7599,8 @@ class _MatchExitDialogFrame extends StatelessWidget {
           mainAxisSize: MainAxisSize.min,
           children: [
             Container(
-              width: 58,
-              height: 58,
+              width: 62,
+              height: 62,
               decoration: BoxDecoration(
                 color: iconColor,
                 shape: BoxShape.circle,
@@ -6975,7 +7613,7 @@ class _MatchExitDialogFrame extends StatelessWidget {
                   ),
                 ],
               ),
-              child: Icon(icon, color: Colors.white, size: 30),
+              child: Icon(icon, color: Colors.white, size: 31),
             ),
             const SizedBox(height: 13),
             PopText(
@@ -6983,7 +7621,7 @@ class _MatchExitDialogFrame extends StatelessWidget {
               textAlign: TextAlign.center,
               style: const TextStyle(
                 color: Colors.white,
-                fontSize: 22,
+                fontSize: 21,
                 fontWeight: FontWeight.w900,
                 letterSpacing: .35,
               ),
@@ -7008,13 +7646,31 @@ class _MatchExitDialogFrame extends StatelessWidget {
                 ),
               ),
             ),
-            const SizedBox(height: 15),
-            Wrap(
-              alignment: WrapAlignment.center,
-              spacing: 8,
-              runSpacing: 8,
-              children: actions,
-            ),
+            const SizedBox(height: 14),
+            if (stackActions)
+              Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  for (final entry in actions.asMap().entries)
+                    Padding(
+                      padding: EdgeInsets.only(
+                        top: entry.key == actions.length - 1 ? 3 : 0,
+                        bottom: entry.key == actions.length - 1 ? 0 : 8,
+                      ),
+                      child: SizedBox(
+                        width: double.infinity,
+                        child: entry.value,
+                      ),
+                    ),
+                ],
+              )
+            else
+              Wrap(
+                alignment: WrapAlignment.center,
+                spacing: 8,
+                runSpacing: 8,
+                children: actions,
+              ),
           ],
         ),
       ),
@@ -7126,6 +7782,9 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
   int matchRewardCoinsAwarded = 0;
   int matchBasePayout = 0;
   bool localCpuTakeoverActive = false;
+  // If the active online host leaves permanently, the last connected client
+  // continues from the durable checkpoint and lets the CPU drive remote seats.
+  bool onlineHostCpuFallbackActive = false;
   bool rollGuideEnabled = true;
   DiceHandPreference diceHandPreference = DiceHandPreference.right;
   bool rollGuideVisible = false;
@@ -7152,14 +7811,22 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
       (widget.passAndPlay || engine.currentPlayer.color == _localPlayerColor) &&
       !localCpuTakeoverActive &&
       (widget.onlineGameSync == null ||
-          widget.onlineGameSync!.connectionState ==
-              OnlineGameConnectionState.connected);
+          onlineHostCpuFallbackActive ||
+          (widget.onlineGameSync!.connectionState ==
+                  OnlineGameConnectionState.connected &&
+              !widget.onlineGameSync!.localParticipantAwaitingNextTurn));
+
+  bool get _waitingForNextOnlineTurn =>
+      widget.onlineGameSync?.localParticipantAwaitingNextTurn ?? false;
 
   bool get _isCpuControlledTurn {
     if (widget.passAndPlay) return false;
     final sync = widget.onlineGameSync;
     final session = widget.onlineSession;
     if (sync != null && session != null) {
+      if (onlineHostCpuFallbackActive) {
+        return engine.currentPlayer.color != _localPlayerColor;
+      }
       final participant = session.participantForColor(
         engine.currentPlayer.color,
       );
@@ -7172,6 +7839,7 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
     final sync = widget.onlineGameSync;
     return sync != null &&
         !sync.isHost &&
+        !onlineHostCpuFallbackActive &&
         !engine.gameOver &&
         sync.hostAvailability != OnlineHostAvailability.available;
   }
@@ -7487,6 +8155,14 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
       if (!mounted) return;
       if (engine.gameOver) unawaited(_settleMatchRewards());
       unawaited(_saveMatchCheckpoint());
+      final sync = widget.onlineGameSync;
+      if (sync != null &&
+          !sync.isHost &&
+          sync.requiresHostRecovery &&
+          !onlineHostCpuFallbackActive) {
+        _activateOnlineHostCpuFallback(sync);
+        return;
+      }
       // A restored checkpoint can open directly on a CPU turn without a fresh
       // engine notification. Kick the existing CPU driver once after mount.
       if (widget.isResumedMatch && !engine.gameOver && _isCpuControlledTurn) {
@@ -7548,6 +8224,14 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
 
   void _onOnlineSyncChanged() {
     if (!mounted) return;
+    final sync = widget.onlineGameSync;
+    if (sync != null &&
+        !sync.isHost &&
+        sync.requiresHostRecovery &&
+        !onlineHostCpuFallbackActive) {
+      _activateOnlineHostCpuFallback(sync);
+      return;
+    }
     _refreshHostRecoveryTimer();
     if (!engine.gameOver && _isCpuControlledTurn && !cpuThinking) {
       _onGameChanged();
@@ -7593,6 +8277,29 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
         ),
       );
     }
+  }
+
+  void _activateOnlineHostCpuFallback(OnlineGameSyncClient sync) {
+    if (onlineHostCpuFallbackActive || sync.isHost || engine.gameOver) return;
+    onlineHostCpuFallbackActive = true;
+    hostRecoveryUiTimer?.cancel();
+    hostRecoveryUiTimer = null;
+    // The guest already has the last authoritative checkpoint. Stop its
+    // presence/listeners and continue locally so the table never freezes.
+    unawaited(sync.pause());
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(
+        duration: Duration(seconds: 3),
+        content: PopText('El anfitrión salió. El CPU continúa la partida.'),
+      ),
+    );
+    setState(() {});
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted && !engine.gameOver && _isCpuControlledTurn && !cpuThinking) {
+        _onGameChanged();
+      }
+    });
   }
 
   @override
@@ -7656,7 +8363,9 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
       rollGuideAppActive = true;
       localCpuTakeoverActive = false;
       if (widget.onlineGameSync case final sync?) {
-        unawaited(sync.reconnect());
+        if (!onlineHostCpuFallbackActive) {
+          unawaited(sync.reconnect());
+        }
       }
       unawaited(_saveMatchCheckpoint());
       unawaited(_loadRollGuidePreferences(rearm: true));
@@ -7777,7 +8486,7 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
         diceThrowSerial++;
       });
     }
-    final sync = widget.onlineGameSync;
+    final sync = onlineHostCpuFallbackActive ? null : widget.onlineGameSync;
     if (sync != null) {
       unawaited(_rollOnline(sync, reduceMotion: reduceMotion));
       return;
@@ -7866,7 +8575,7 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
   }
 
   void _executeLegalMoveCommand(LegalMoveCommand command) {
-    final sync = widget.onlineGameSync;
+    final sync = onlineHostCpuFallbackActive ? null : widget.onlineGameSync;
     if (sync == null) {
       engine.executeMoveCommand(command);
       return;
@@ -7905,7 +8614,7 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
   void _useHeldPowerFromHud() {
     if (!_isLocallyControlledTurn || engine.effectResolving) return;
     _cancelTokenSelection();
-    final sync = widget.onlineGameSync;
+    final sync = onlineHostCpuFallbackActive ? null : widget.onlineGameSync;
     if (sync == null) {
       engine.usePowerUp();
       return;
@@ -7951,6 +8660,34 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
     );
     if (!mounted) return;
     await _loadRollGuidePreferences(rearm: true);
+  }
+
+  void _openReportIssue() {
+    final suggestedNames = widget.onlineSession?.participants
+        .where(
+          (participant) =>
+              participant.color != _localPlayerColor &&
+              participant.kind != ParticipantKind.virtual,
+        )
+        .map((participant) => participant.displayName.trim())
+        .where((name) => name.isNotEmpty)
+        .toList(growable: false);
+    Navigator.push<void>(
+      context,
+      MaterialPageRoute(
+        builder: (_) => ReportIssueScreen(
+          suggestedPlayerNames: suggestedNames ?? const <String>[],
+          initialPlayerName: suggestedNames?.length == 1
+              ? suggestedNames!.single
+              : null,
+          modeLabel: widget.matchFormat == MatchFormat.quickPop
+              ? 'Quick Pop'
+              : engine.isChaos
+              ? 'Caos'
+              : 'Tradicional',
+        ),
+      ),
+    );
   }
 
   Future<void> _saveMatchCheckpoint() async {
@@ -8898,29 +9635,44 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
         iconColor: PopColors.blue,
         title: '¿GUARDAR PARTIDA?',
         message: 'Podrás continuar contra CPU desde exactamente este punto.',
+        stackActions: true,
         actions: [
-          TextButton(
-            style: TextButton.styleFrom(foregroundColor: Colors.white),
-            onPressed: () =>
-                Navigator.pop(dialogContext, _CpuExitChoice.cancel),
-            child: const PopText('CANCELAR'),
-          ),
-          OutlinedButton(
-            style: OutlinedButton.styleFrom(
-              foregroundColor: const Color(0xFFFFD867),
-              side: const BorderSide(color: Color(0xFFFFD867), width: 1.5),
-            ),
-            onPressed: () =>
-                Navigator.pop(dialogContext, _CpuExitChoice.discard),
-            child: const PopText('SALIR SIN GUARDAR'),
-          ),
-          FilledButton(
+          FilledButton.icon(
+            icon: const Icon(Icons.save_rounded, size: 19),
             style: FilledButton.styleFrom(
               backgroundColor: PopColors.green,
               foregroundColor: Colors.white,
+              minimumSize: const Size.fromHeight(54),
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(16),
+              ),
             ),
             onPressed: () => Navigator.pop(dialogContext, _CpuExitChoice.save),
-            child: const PopText('GUARDAR Y SALIR'),
+            label: const PopText('GUARDAR Y SALIR'),
+          ),
+          OutlinedButton.icon(
+            icon: const Icon(Icons.exit_to_app_rounded, size: 18),
+            style: OutlinedButton.styleFrom(
+              foregroundColor: const Color(0xFFFFD867),
+              side: const BorderSide(color: Color(0xFFFFD867), width: 1.5),
+              minimumSize: const Size.fromHeight(50),
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(16),
+              ),
+            ),
+            onPressed: () =>
+                Navigator.pop(dialogContext, _CpuExitChoice.discard),
+            label: const PopText('SALIR SIN GUARDAR'),
+          ),
+          TextButton.icon(
+            icon: const Icon(Icons.close_rounded, size: 18),
+            style: TextButton.styleFrom(
+              foregroundColor: Colors.white.withValues(alpha: .86),
+              minimumSize: const Size.fromHeight(44),
+            ),
+            onPressed: () =>
+                Navigator.pop(dialogContext, _CpuExitChoice.cancel),
+            label: const PopText('CANCELAR'),
           ),
         ],
       ),
@@ -8953,7 +9705,7 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
     if (!mounted || engine.gameOver || !_isCpuControlledTurn) {
       return;
     }
-    final sync = widget.onlineGameSync;
+    final sync = onlineHostCpuFallbackActive ? null : widget.onlineGameSync;
     final virtualParticipantId = sync == null
         ? null
         : widget.onlineSession!
@@ -9157,7 +9909,7 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
       return;
     }
     setState(() => selectedToken = null);
-    final sync = widget.onlineGameSync;
+    final sync = onlineHostCpuFallbackActive ? null : widget.onlineGameSync;
     if (sync == null) {
       engine.moveToken(token, die: die);
     } else {
@@ -9185,7 +9937,7 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
       return;
     }
     setState(() => selectedToken = null);
-    final sync = widget.onlineGameSync;
+    final sync = onlineHostCpuFallbackActive ? null : widget.onlineGameSync;
     if (sync == null) {
       engine.moveTokenUsingAllDice(token);
     } else {
@@ -9225,6 +9977,13 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
       final target = engine.captureTargetFor(token, choice);
       if (target != null) captureTargetsByDie[choice] = target;
     }
+    final safeLandingChoices = <int>{
+      for (final choice in choices)
+        if (engine.isSafeLandingFor(token, choice)) choice,
+    };
+    final allDiceSafeLanding =
+        allDiceTotal != null &&
+        engine.isSafeLandingFor(token, allDiceTotal, usesAllDice: true);
     return _TokenMovePopup(
       tokenNumber: token.id + 1,
       tokenInNest: token.inNest,
@@ -9235,12 +9994,14 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
           if (engine.isHomeEntryCaptureMove(token, choice)) choice,
       },
       captureTargetsByDie: captureTargetsByDie,
+      safeLandingChoices: safeLandingChoices,
       rolledDice: engine.dice,
       onChoice: _moveSelectedToken,
       allDiceTotal: allDiceTotal,
       allDiceCaptureTarget: allDiceTotal == null
           ? null
           : engine.captureTargetUsingAllDice(token),
+      allDiceSafeLanding: allDiceSafeLanding,
       onAllDice: _moveSelectedTokenUsingAllDice,
       onCancel: _cancelTokenSelection,
     );
@@ -9592,7 +10353,10 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
     final playerLabels = <PlayerColor, String>{
       if (widget.onlineSession case final onlineSession?)
         for (final participant in onlineSession.participants)
-          participant.color: participant.isVirtuallyControlled
+          participant.color:
+              participant.isVirtuallyControlled ||
+                  (onlineHostCpuFallbackActive &&
+                      participant.color != _localPlayerColor)
               ? 'CPU · ${participant.displayName}'
               : participant.displayName,
     };
@@ -9933,6 +10697,7 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
                       diceThrowInProgress: diceThrowInProgress,
                       diceThrowSerial: diceThrowSerial,
                       diceThrowResult: diceThrowResult,
+                      waitingForNextTurn: _waitingForNextOnlineTurn,
                       onShowChat: widget.onlineSession == null
                           ? null
                           : _showSafeChatPicker,
@@ -9978,6 +10743,8 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
                         );
                       },
                       onShowSettings: _openGameSettings,
+                      canReport: widget.onlineSession != null,
+                      onReportIssue: _openReportIssue,
                     );
                     return KeyedSubtree(
                       key: const ValueKey('game-content-area'),
@@ -10035,6 +10802,8 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
                                                           diceThrowSerial,
                                                       diceThrowResult:
                                                           diceThrowResult,
+                                                      waitingForNextTurn:
+                                                          _waitingForNextOnlineTurn,
                                                       onShowPowers:
                                                           _showPowerStatus,
                                                       onShowChat:
@@ -10131,6 +10900,8 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
                                                       diceThrowSerial,
                                                   diceThrowResult:
                                                       diceThrowResult,
+                                                  waitingForNextTurn:
+                                                      _waitingForNextOnlineTurn,
                                                   onShowPowers:
                                                       _showPowerStatus,
                                                   onShowChat:
@@ -10393,7 +11164,7 @@ class _OnlineHostRecoveryOverlay extends StatelessWidget {
                   PopText(
                     unavailable
                         ? 'La partida quedó guardada en el último movimiento seguro. Reintenta cuando vuelva el anfitrión o sal de la mesa.'
-                        : 'La partida está en pausa. Esperaremos $secondsRemaining s sin mover ninguna ficha.',
+                        : 'La partida está en pausa. Esperaremos $secondsRemaining s; si no vuelve, el CPU continuará automáticamente.',
                     textAlign: TextAlign.center,
                     style: const TextStyle(
                       color: Color(0xFF667085),
@@ -11572,6 +12343,8 @@ class _GameQuickBar extends StatelessWidget {
     required this.onShowHistory,
     required this.onShowGuide,
     required this.onShowSettings,
+    this.canReport = false,
+    this.onReportIssue,
   });
 
   final bool chaos;
@@ -11585,6 +12358,8 @@ class _GameQuickBar extends StatelessWidget {
   final VoidCallback onShowHistory;
   final VoidCallback onShowGuide;
   final VoidCallback onShowSettings;
+  final bool canReport;
+  final VoidCallback? onReportIssue;
 
   @override
   Widget build(BuildContext context) {
@@ -11671,6 +12446,15 @@ class _GameQuickBar extends StatelessWidget {
                     iconSize: iconSize,
                     expandedTarget: phoneLandscape,
                     onPressed: onShowGuide,
+                  ),
+                if (canReport && !veryNarrow && onReportIssue != null)
+                  _GameQuickAction(
+                    key: const ValueKey('game-report-button'),
+                    tooltip: appTranslate(context, 'Reportar jugador'),
+                    icon: Icons.flag_rounded,
+                    iconSize: iconSize,
+                    expandedTarget: phoneLandscape,
+                    onPressed: onReportIssue!,
                   ),
                 _GameQuickAction(
                   key: const ValueKey('game-settings-button'),
@@ -12059,6 +12843,7 @@ class _GameSideRail extends StatefulWidget {
     required this.diceThrowInProgress,
     required this.diceThrowSerial,
     required this.diceThrowResult,
+    required this.waitingForNextTurn,
     required this.onShowPowers,
     this.onShowChat,
     this.onCustomize,
@@ -12085,6 +12870,7 @@ class _GameSideRail extends StatefulWidget {
   final bool diceThrowInProgress;
   final int diceThrowSerial;
   final (int, int)? diceThrowResult;
+  final bool waitingForNextTurn;
   final VoidCallback onShowPowers;
   final VoidCallback? onShowChat;
   final VoidCallback? onCustomize;
@@ -12150,6 +12936,7 @@ class _GameSideRailState extends State<_GameSideRail> {
                     diceThrowInProgress: widget.diceThrowInProgress,
                     diceThrowSerial: widget.diceThrowSerial,
                     diceThrowResult: widget.diceThrowResult,
+                    waitingForNextTurn: widget.waitingForNextTurn,
                     onShowChat: widget.onShowChat,
                     onCustomize: widget.onCustomize,
                     compact: true,
@@ -12185,6 +12972,7 @@ class _GameSideRailState extends State<_GameSideRail> {
                     diceThrowInProgress: widget.diceThrowInProgress,
                     diceThrowSerial: widget.diceThrowSerial,
                     diceThrowResult: widget.diceThrowResult,
+                    waitingForNextTurn: widget.waitingForNextTurn,
                     onShowChat: widget.onShowChat,
                     onCustomize: widget.onCustomize,
                     compact: true,
@@ -14192,10 +14980,12 @@ class _TokenMovePopup extends StatelessWidget {
     required this.twentyStepColor,
     required this.homeEntryCaptureChoices,
     required this.captureTargetsByDie,
+    this.safeLandingChoices = const <int>{},
     required this.rolledDice,
     required this.onChoice,
     required this.allDiceTotal,
     required this.allDiceCaptureTarget,
+    this.allDiceSafeLanding = false,
     required this.onAllDice,
     required this.onCancel,
   });
@@ -14206,10 +14996,12 @@ class _TokenMovePopup extends StatelessWidget {
   final Color twentyStepColor;
   final Set<int> homeEntryCaptureChoices;
   final Map<int, GameToken> captureTargetsByDie;
+  final Set<int> safeLandingChoices;
   final List<int> rolledDice;
   final ValueChanged<int> onChoice;
   final int? allDiceTotal;
   final GameToken? allDiceCaptureTarget;
+  final bool allDiceSafeLanding;
   final VoidCallback onAllDice;
   final VoidCallback onCancel;
 
@@ -14305,6 +15097,7 @@ class _TokenMovePopup extends StatelessWidget {
     final isExit = tokenInNest && value == 5;
     final isHomeEntryCapture = homeEntryCaptureChoices.contains(value);
     final target = captureTargetsByDie[value];
+    final isSafeLanding = safeLandingChoices.contains(value);
     final english = appLanguageCodeOf(context) == 'en';
     final baseLabel = isExit
         ? english
@@ -14326,8 +15119,13 @@ class _TokenMovePopup extends StatelessWidget {
     final semanticColor = target == null
         ? null
         : _captureColorName(context, target.owner, semantic: true);
+    final safeBaseLabel = isSafeLanding
+        ? english
+              ? '$baseLabel and land on a safe square'
+              : '$baseLabel y cae en una casilla segura'
+        : baseLabel;
     final semanticLabel = target == null
-        ? baseLabel
+        ? safeBaseLabel
         : isHomeEntryCapture
         ? english
               ? 'Capture the $semanticColor piece blocking the home entry '
@@ -14335,10 +15133,10 @@ class _TokenMovePopup extends StatelessWidget {
               : 'Capturar la ficha $semanticColor que bloquea la entrada '
                     'con $value'
         : english
-        ? '$baseLabel and capture the $semanticColor piece'
-        : '$baseLabel y capturar la ficha $semanticColor';
+        ? '$safeBaseLabel and capture the $semanticColor piece'
+        : '$safeBaseLabel y capturar la ficha $semanticColor';
     final primary = isExit
-        ? const FittedBox(
+        ? FittedBox(
             fit: BoxFit.scaleDown,
             child: Row(
               mainAxisSize: MainAxisSize.min,
@@ -14349,6 +15147,13 @@ class _TokenMovePopup extends StatelessWidget {
                   size: 16,
                 ),
                 SizedBox(width: 3),
+                if (isSafeLanding)
+                  const Icon(
+                    Icons.star_rounded,
+                    color: Color(0xFFFFF1A8),
+                    size: 14,
+                  ),
+                if (isSafeLanding) const SizedBox(width: 2),
                 PopText(
                   'SALIDA',
                   style: TextStyle(
@@ -14362,13 +15167,20 @@ class _TokenMovePopup extends StatelessWidget {
             ),
           )
         : isHomeEntryCapture
-        ? const FittedBox(
+        ? FittedBox(
             fit: BoxFit.scaleDown,
             child: Row(
               mainAxisSize: MainAxisSize.min,
               children: [
                 Icon(Icons.gps_fixed_rounded, color: Colors.white, size: 15),
                 SizedBox(width: 3),
+                if (isSafeLanding)
+                  const Icon(
+                    Icons.star_rounded,
+                    color: Color(0xFFFFF1A8),
+                    size: 14,
+                  ),
+                if (isSafeLanding) const SizedBox(width: 2),
                 PopText(
                   'CAPTURAR',
                   style: TextStyle(
@@ -14386,6 +15198,23 @@ class _TokenMovePopup extends StatelessWidget {
             child: Row(
               mainAxisSize: MainAxisSize.min,
               children: [
+                if (isSafeLanding) ...[
+                  const Icon(
+                    Icons.star_rounded,
+                    color: Color(0xFFFFF1A8),
+                    size: 14,
+                  ),
+                  const SizedBox(width: 2),
+                  const PopText(
+                    'SAFE',
+                    style: TextStyle(
+                      color: Colors.white,
+                      fontSize: 8,
+                      fontWeight: FontWeight.w900,
+                    ),
+                  ),
+                  const SizedBox(width: 4),
+                ],
                 PopText(
                   '$value',
                   style: const TextStyle(
@@ -14458,9 +15287,15 @@ class _TokenMovePopup extends StatelessWidget {
     const color = Color(0xFF7057FF);
     final target = allDiceCaptureTarget;
     final english = appLanguageCodeOf(context) == 'en';
+    final isSafeLanding = allDiceSafeLanding;
     final baseLabel = english
         ? 'Move piece $tokenNumber using both dice, $total steps total'
         : 'Mover ficha $tokenNumber usando ambos dados, $total pasos en total';
+    final safeBaseLabel = isSafeLanding
+        ? english
+              ? '$baseLabel and land on a safe square'
+              : '$baseLabel y cae en una casilla segura'
+        : baseLabel;
     final semanticColor = target == null
         ? null
         : _captureColorName(context, target.owner, semantic: true);
@@ -14468,10 +15303,10 @@ class _TokenMovePopup extends StatelessWidget {
       button: true,
       excludeSemantics: true,
       label: target == null
-          ? baseLabel
+          ? safeBaseLabel
           : english
-          ? '$baseLabel and capture the $semanticColor piece'
-          : '$baseLabel y capturar la ficha $semanticColor',
+          ? '$safeBaseLabel and capture the $semanticColor piece'
+          : '$safeBaseLabel y capturar la ficha $semanticColor',
       onTap: onAllDice,
       child: SizedBox(
         key: const ValueKey('move-choice-all'),
@@ -14515,6 +15350,23 @@ class _TokenMovePopup extends StatelessWidget {
                         size: 15,
                       ),
                       const SizedBox(width: 3),
+                      if (isSafeLanding) ...[
+                        const Icon(
+                          Icons.star_rounded,
+                          color: Color(0xFFFFF1A8),
+                          size: 14,
+                        ),
+                        const SizedBox(width: 2),
+                        const PopText(
+                          'SAFE',
+                          style: TextStyle(
+                            color: Colors.white,
+                            fontSize: 8,
+                            fontWeight: FontWeight.w900,
+                          ),
+                        ),
+                        const SizedBox(width: 3),
+                      ],
                       const PopText(
                         'TODOS',
                         style: TextStyle(
@@ -14914,6 +15766,13 @@ class _BoardMoveCalloutLayout {
 Size _boardMoveCalloutSize(MoveDestinationPreview preview) {
   // Leave a small margin above the 48-point accessibility minimum because
   // the complete board can be fractionally scaled on short phones.
+  if (preview.isSafeLanding) {
+    // Keep the combined-dice bubble's footprint unchanged. The SAFE marker
+    // is inside a FittedBox, so it scales to the existing touch target without
+    // covering another piece in a crowded board position.
+    if (preview.usesAllDice) return const Size(100, 50);
+    return const Size(112, 50);
+  }
   if (preview.captureTarget != null) return const Size(112, 50);
   if (preview.usesAllDice) return const Size(100, 50);
   if (preview.isHomeEntryCapture) return const Size(104, 50);
@@ -15266,10 +16125,15 @@ class _BoardMoveChoiceCalloutState extends State<_BoardMoveChoiceCallout> {
           : 'Mover ficha $tokenNumber, ${preview.value} '
                 '${preview.value == 1 ? 'paso' : 'pasos'}';
     }
-    if (target == null) return baseLabel;
+    final safeBaseLabel = preview.isSafeLanding
+        ? english
+              ? '$baseLabel and land on a safe square'
+              : '$baseLabel y cae en una casilla segura'
+        : baseLabel;
+    if (target == null) return safeBaseLabel;
     return english
-        ? '$baseLabel and capture the $targetColor piece'
-        : '$baseLabel y capturar la ficha $targetColor';
+        ? '$safeBaseLabel and capture the $targetColor piece'
+        : '$safeBaseLabel y capturar la ficha $targetColor';
   }
 
   Widget _numberBadge(int value, Color color) => Container(
@@ -15299,6 +16163,27 @@ class _BoardMoveChoiceCalloutState extends State<_BoardMoveChoiceCallout> {
     ),
   );
 
+  Widget _safeMarker(MoveDestinationPreview preview) => Row(
+    key: ValueKey(
+      'move-choice-safe-${preview.usesAllDice ? 'all' : preview.value}',
+    ),
+    mainAxisSize: MainAxisSize.min,
+    children: const [
+      Icon(Icons.star_rounded, color: Color(0xFFE2A500), size: 14),
+      SizedBox(width: 2),
+      PopText(
+        'SAFE',
+        style: TextStyle(
+          color: PopColors.navy,
+          fontSize: 8,
+          height: 1,
+          fontWeight: FontWeight.w900,
+        ),
+      ),
+      SizedBox(width: 4),
+    ],
+  );
+
   Widget _primaryContent(MoveDestinationPreview preview) {
     final color = preview.color;
     if (preview.usesAllDice) {
@@ -15309,6 +16194,7 @@ class _BoardMoveChoiceCalloutState extends State<_BoardMoveChoiceCallout> {
           children: [
             Icon(Icons.fast_forward_rounded, color: color, size: 15),
             const SizedBox(width: 2),
+            if (preview.isSafeLanding) _safeMarker(preview),
             const PopText(
               'TODOS',
               style: TextStyle(
@@ -15351,6 +16237,7 @@ class _BoardMoveChoiceCalloutState extends State<_BoardMoveChoiceCallout> {
               size: 15,
             ),
             const SizedBox(width: 3),
+            if (preview.isSafeLanding) _safeMarker(preview),
             PopText(
               specialLabel,
               style: const TextStyle(
@@ -15371,6 +16258,7 @@ class _BoardMoveChoiceCalloutState extends State<_BoardMoveChoiceCallout> {
       child: Row(
         mainAxisAlignment: MainAxisAlignment.center,
         children: [
+          if (preview.isSafeLanding) _safeMarker(preview),
           _numberBadge(preview.value, color),
           const SizedBox(width: 5),
           PopText(
@@ -19141,6 +20029,7 @@ class GameControlPanel extends StatelessWidget {
     this.diceThrowInProgress = false,
     this.diceThrowSerial = 0,
     this.diceThrowResult,
+    this.waitingForNextTurn = false,
     this.onShowChat,
     this.onCustomize,
     this.compact = false,
@@ -19165,6 +20054,7 @@ class GameControlPanel extends StatelessWidget {
   final bool diceThrowInProgress;
   final int diceThrowSerial;
   final (int, int)? diceThrowResult;
+  final bool waitingForNextTurn;
   final VoidCallback? onShowChat;
   final VoidCallback? onCustomize;
   final bool compact;
@@ -19207,7 +20097,9 @@ class GameControlPanel extends StatelessWidget {
         engine.hasRolled &&
         !engine.effectResolving &&
         engine.remainingDice.contains(20);
-    final phaseLabel = diceThrowInProgress
+    final phaseLabel = waitingForNextTurn
+        ? appTranslate(context, 'Espera el próximo turno de los dados')
+        : diceThrowInProgress
         ? 'Lanzando los dados…'
         : engine.effectResolving
         ? 'Resolviendo el efecto…'
@@ -19726,14 +20618,17 @@ class GameControlPanel extends StatelessWidget {
               PlayerColor.yellow => PopColors.yellow,
               PlayerColor.blue => PopColors.blue,
             };
-            final dicePrompt = diceThrowInProgress
+            final dicePrompt = waitingForNextTurn
+                ? appTranslate(context, 'Espera el próximo turno')
+                : diceThrowInProgress
                 ? 'Lanzando los dados…'
                 : selectedToken != null && moveChoices.isNotEmpty
                 ? 'Elige ${moveChoices.join(' o ')}'
                 : engine.hasRolled
                 ? 'Elige una ficha'
                 : 'Lanza los dados';
-            final isLocalTurn = engine.currentPlayer.isHuman;
+            final isLocalTurn =
+                engine.currentPlayer.isHuman && !waitingForNextTurn;
             final desiredNavigatorWidth = ((box.maxWidth - 32) * .43)
                 .clamp(128.0, 156.0)
                 .toDouble();
@@ -21180,6 +22075,13 @@ class _HeldDicePair extends StatelessWidget {
           ? math.sin(((phase - .25) / .33) * math.pi)
           : 0.0;
       final shake = math.sin(phase * math.pi * 9) * shakeWindow * 2.5;
+      // The hand artwork has separate grip/release poses.  Let the dice
+      // follow that same motion instead of floating with one frozen face:
+      // while the hand opens they make two quick, perspective-aware turns,
+      // changing faces on the way, and settle back to their equipped faces
+      // before the loop starts again.
+      final rollProgress = ((phase - .10) / .62).clamp(0.0, 1.0);
+      final roll = Curves.easeInOutCubic.transform(rollProgress);
       final firstCenter = Offset(
         width * (hand == DiceHandPreference.right ? .43 : .57),
         height * .53,
@@ -21188,6 +22090,24 @@ class _HeldDicePair extends StatelessWidget {
         width * (hand == DiceHandPreference.right ? .59 : .41),
         height * .60,
       );
+      final turnAngle = roll * math.pi * 4;
+      final firstValue = ((1 - 1 + (roll * 12).floor()) % 6) + 1;
+      final secondValue = ((5 - 1 + (roll * 12 + .35).floor()) % 6) + 1;
+      final firstTransform = Matrix4.identity()
+        ..setEntry(3, 2, .0018)
+        ..rotateY(mirror * turnAngle)
+        ..rotateX(math.sin(roll * math.pi * 2) * .18)
+        ..rotateZ(
+          mirror * (-.18 + shake * .012 + math.sin(roll * math.pi * 2) * .08),
+        );
+      final secondTransform = Matrix4.identity()
+        ..setEntry(3, 2, .0018)
+        ..rotateY(-mirror * turnAngle)
+        ..rotateX(math.sin(roll * math.pi * 2 + .65) * .18)
+        ..rotateZ(
+          mirror *
+              (.24 - shake * .012 - math.sin(roll * math.pi * 2 + .65) * .08),
+        );
       return Stack(
         clipBehavior: Clip.hardEdge,
         children: [
@@ -21196,11 +22116,12 @@ class _HeldDicePair extends StatelessWidget {
             top: firstCenter.dy - dieSize / 2,
             width: dieSize,
             height: dieSize,
-            child: Transform.rotate(
-              angle: mirror * (-.18 + shake * .012),
+            child: Transform(
+              alignment: Alignment.center,
+              transform: firstTransform,
               child: _DieSurface(
                 key: ValueKey('dice-guide-surface-0-${style.id}'),
-                value: 1,
+                value: firstValue,
                 style: style,
                 slotIndex: 0,
                 size: dieSize,
@@ -21212,11 +22133,12 @@ class _HeldDicePair extends StatelessWidget {
             top: secondCenter.dy - dieSize / 2,
             width: dieSize,
             height: dieSize,
-            child: Transform.rotate(
-              angle: mirror * (.24 - shake * .012),
+            child: Transform(
+              alignment: Alignment.center,
+              transform: secondTransform,
               child: _DieSurface(
                 key: ValueKey('dice-guide-surface-1-${style.id}'),
-                value: 5,
+                value: secondValue,
                 style: style,
                 slotIndex: 1,
                 size: dieSize,
@@ -26145,6 +27067,19 @@ class PoliciesScreen extends StatelessWidget {
               'No se permiten nombres ofensivos, amenazas, acoso ni contenido '
                   'sexual. Los mensajes durante la partida se limitarán a '
                   'frases preaprobadas.',
+            ),
+          ),
+          ListTile(
+            key: const ValueKey('report-player-button'),
+            leading: const Icon(Icons.flag_rounded),
+            title: const PopText('Reportar jugador o problema'),
+            subtitle: const PopText(
+              'Nombre inapropiado, trampa, acoso o fallos',
+            ),
+            trailing: const Icon(Icons.chevron_right),
+            onTap: () => Navigator.push<void>(
+              context,
+              MaterialPageRoute(builder: (_) => const ReportIssueScreen()),
             ),
           ),
           ListTile(

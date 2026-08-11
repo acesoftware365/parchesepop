@@ -428,6 +428,17 @@ class OnlineMatchAuthority {
         );
       }
     }
+    final rawAwaitingNextTurn = checkpoint['awaitingNextTurn'];
+    if (rawAwaitingNextTurn is Map) {
+      for (final entry in rawAwaitingNextTurn.entries) {
+        final participantId = entry.key;
+        final turn = entry.value;
+        if (participantId is! String || turn is! int || turn < 1) continue;
+        if (authority._connections.containsKey(participantId)) {
+          authority._awaitingNextTurn[participantId] = turn;
+        }
+      }
+    }
 
     final rawActions = checkpoint['processedActions'];
     if (rawActions is List) {
@@ -456,11 +467,21 @@ class OnlineMatchAuthority {
   final bool _ownsEngine;
   final Map<String, _MutableConnection> _connections =
       <String, _MutableConnection>{};
+  // A returning human must not interrupt a dice turn that the CPU already
+  // took over. The value is the turn number that was active when the player
+  // came back; the seat is released as soon as that turn advances.
+  final Map<String, int> _awaitingNextTurn = <String, int>{};
   final Map<String, _ProcessedAction> _processedActions =
       <String, _ProcessedAction>{};
   int _revision = 0;
 
   int get revision => _revision;
+
+  /// Human seats currently waiting for the next dice turn after reconnecting.
+  /// This is exposed to the sync adapter so replicas can keep their controls
+  /// disabled until the authoritative CPU turn has finished.
+  Map<String, int> get awaitingNextTurn =>
+      Map<String, int>.unmodifiable(_awaitingNextTurn);
 
   OnlineAuthoritySnapshot snapshot() {
     final events = engine.eventHistory;
@@ -494,6 +515,7 @@ class OnlineMatchAuthority {
     OnlineActionCommand command, {
     bool allowCpuControlledParticipant = false,
   }) {
+    _releaseReconnectWaitsIfTurnChanged();
     if (!_validActionId(command.actionId)) {
       return _reject(OnlineCommandRejection.invalidActionId);
     }
@@ -517,6 +539,10 @@ class OnlineMatchAuthority {
       return _reject(OnlineCommandRejection.unknownParticipant);
     }
     final presence = _connections[participant.id]!.presence;
+    final waitingTurn = _awaitingNextTurn[participant.id];
+    if (waitingTurn != null && waitingTurn == engine.turnNumber) {
+      return _reject(OnlineCommandRejection.participantUnavailable);
+    }
     // A trusted gateway may let the room host drive any CPU-controlled seat,
     // including a remote human after the reconnect grace period expires. The
     // gateway must authenticate that host privilege; ordinary participant
@@ -622,6 +648,7 @@ class OnlineMatchAuthority {
     String participantId, {
     required DateTime now,
   }) {
+    _releaseReconnectWaitsIfTurnChanged();
     final participant = _participantOrNull(participantId);
     if (participant == null) {
       return OnlineReconnectDecision(
@@ -680,9 +707,16 @@ class OnlineMatchAuthority {
       }
     }
 
+    final cameBackDuringOwnTurn =
+        !engine.gameOver && participant.color == engine.currentPlayer.color;
     connection
       ..presence = OnlineParticipantPresence.connected
       ..disconnectedAt = null;
+    if (cameBackDuringOwnTurn) {
+      _awaitingNextTurn[participantId] = engine.turnNumber;
+    } else {
+      _awaitingNextTurn.remove(participantId);
+    }
     _revision++;
     return OnlineReconnectDecision(
       status: OnlineReconnectStatus.reconnected,
@@ -720,6 +754,7 @@ class OnlineMatchAuthority {
   /// JSON-compatible durable state. The host must encrypt/sign it as needed;
   /// this contract does not provide storage security.
   Map<String, Object?> createCheckpoint() {
+    _releaseReconnectWaitsIfTurnChanged();
     final processed = _processedActions.entries.toList()
       ..sort((a, b) => a.key.compareTo(b.key));
     return <String, Object?>{
@@ -770,6 +805,7 @@ class OnlineMatchAuthority {
                 ?.millisecondsSinceEpoch,
           },
       ],
+      'awaitingNextTurn': <String, int>{..._awaitingNextTurn},
       'processedActions': <Map<String, Object>>[
         for (final entry in processed)
           <String, Object>{
@@ -823,6 +859,14 @@ class OnlineMatchAuthority {
     final disconnectedAt = connection.disconnectedAt;
     if (disconnectedAt == null) return false;
     return !now.isBefore(disconnectedAt.add(disconnectPolicy.gracePeriod));
+  }
+
+  void _releaseReconnectWaitsIfTurnChanged() {
+    if (_awaitingNextTurn.isEmpty) return;
+    final currentTurn = engine.turnNumber;
+    _awaitingNextTurn.removeWhere(
+      (_, waitingTurn) => waitingTurn != currentTurn,
+    );
   }
 
   void _initializeConnections() {

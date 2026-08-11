@@ -345,6 +345,7 @@ class OnlineGameSyncClient extends ChangeNotifier {
   DateTime? _hostReconnectDeadline;
   String? _activeHostUid;
   OnlineGameConnectionState _connectionState = OnlineGameConnectionState.idle;
+  bool _localParticipantAwaitingNextTurn = false;
 
   GameEngine get engine => _engine;
   PlayerColor get localColor => session.localColor;
@@ -358,6 +359,8 @@ class OnlineGameSyncClient extends ChangeNotifier {
   OnlineGameConnectionState get connectionState => _connectionState;
   OnlineHostAvailability get hostAvailability => _hostAvailability;
   DateTime? get hostReconnectDeadline => _hostReconnectDeadline;
+  bool get localParticipantAwaitingNextTurn =>
+      _localParticipantAwaitingNextTurn;
   bool get requiresHostRecovery =>
       _hostAvailability == OnlineHostAvailability.unavailable;
   Stream<OnlineSafeChatMessage> get safeChatMessages =>
@@ -376,6 +379,13 @@ class OnlineGameSyncClient extends ChangeNotifier {
         .where((candidate) => candidate.id == candidateId)
         .firstOrNull;
     if (participant == null || participant.id == participantId) return false;
+    final waitingTurn = _authority!.awaitingNextTurn[candidateId];
+    if (waitingTurn != null) {
+      // The authority removes this marker while publishing the next
+      // checkpoint. Until then, keep the CPU in control of the returning
+      // player's current dice turn.
+      return waitingTurn == _engine.turnNumber;
+    }
     return _authority!.snapshot().connectionFor(candidateId).presence ==
         OnlineParticipantPresence.cpuControlled;
   }
@@ -772,7 +782,9 @@ class OnlineGameSyncClient extends ChangeNotifier {
       restored.dispose();
       throw const FormatException('Missing full engine checkpoint.');
     }
-    restored.engine.applyRemoteCheckpoint(_dynamicMap(fullCheckpoint));
+    final engineCheckpoint = <String, Object?>{...fullCheckpoint}
+      ..remove('onlineAwaitingNextTurn');
+    restored.engine.applyRemoteCheckpoint(_dynamicMap(engineCheckpoint));
     _needsHostTransitionResume = true;
     _authority?.dispose();
     _authority = restored;
@@ -781,7 +793,11 @@ class OnlineGameSyncClient extends ChangeNotifier {
     _stateRevision = (document['stateRevision'] as num).toInt();
     _createdAtMs = (document['createdAt'] as num).toInt();
     final checkpoint = onlineMap(document['checkpoint']);
-    _lastCheckpointJson = jsonEncode(checkpoint);
+    _lastCheckpointJson = jsonEncode(engineCheckpoint);
+    final awaitingNextTurn = onlineMap(checkpoint['onlineAwaitingNextTurn']);
+    final turn = checkpoint['turn'];
+    _localParticipantAwaitingNextTurn =
+        turn is int && awaitingNextTurn[participantId] == turn;
     _restoreResults(document['results']);
   }
 
@@ -860,13 +876,19 @@ class OnlineGameSyncClient extends ChangeNotifier {
     if (checkpoint.isEmpty) {
       throw const FormatException('Missing full engine checkpoint.');
     }
-    final encodedCheckpoint = jsonEncode(checkpoint);
+    final engineCheckpoint = <String, Object?>{...checkpoint}
+      ..remove('onlineAwaitingNextTurn');
+    final encodedCheckpoint = jsonEncode(engineCheckpoint);
     // Presence-only authority publications intentionally keep the board
     // checkpoint identical. Do not restart/cancel replica animations merely
     // because another player's reconnect state changed.
     if (encodedCheckpoint != _lastCheckpointJson) {
-      _engine.applyRemoteCheckpoint(_dynamicMap(checkpoint));
+      _engine.applyRemoteCheckpoint(_dynamicMap(engineCheckpoint));
     }
+    final awaitingNextTurn = onlineMap(checkpoint['onlineAwaitingNextTurn']);
+    final turn = checkpoint['turn'];
+    _localParticipantAwaitingNextTurn =
+        turn is int && awaitingNextTurn[participantId] == turn;
     _stateRevision = incomingStateRevision;
     _lastCheckpointJson = encodedCheckpoint;
     notifyListeners();
@@ -1182,6 +1204,12 @@ class OnlineGameSyncClient extends ChangeNotifier {
     final now = await transport.store.serverNowMs();
     final authorityCheckpoint = _authority!.createCheckpoint();
     authorityCheckpoint['engine'] = checkpoint;
+    final replicatedCheckpoint = <String, Object?>{
+      ...checkpoint,
+      // This presentation-only marker lets a returning guest keep its dice
+      // controls disabled while the host CPU finishes the interrupted turn.
+      'onlineAwaitingNextTurn': <String, int>{..._authority!.awaitingNextTurn},
+    };
     return <String, Object?>{
       'schemaVersion': onlineGameSyncSchemaVersion,
       'authorityModel': onlineGameSyncAuthorityModel,
@@ -1191,7 +1219,7 @@ class OnlineGameSyncClient extends ChangeNotifier {
       'hostLocalColor': localColor.name,
       'authorityRevision': _authority!.revision,
       'stateRevision': _stateRevision,
-      'checkpoint': checkpoint,
+      'checkpoint': replicatedCheckpoint,
       'authorityCheckpoint': authorityCheckpoint,
       'results': <String, Object?>{
         for (final participantEntry in _results.entries)

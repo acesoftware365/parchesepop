@@ -253,6 +253,38 @@ void main() {
     expect(tester.takeException(), isNull);
   });
 
+  testWidgets('small New Home button opens the proposed home preview', (
+    tester,
+  ) async {
+    _useSpanish();
+    _useViewport(tester, const Size(390, 844));
+    SharedPreferences.setMockInitialValues({});
+
+    await _pumpLoadedHome(tester);
+
+    final newHome = find.byKey(const ValueKey('home-new-home-button'));
+    expect(newHome, findsOneWidget);
+    expect(newHome.hitTestable(), findsOneWidget);
+    await tester.tap(newHome);
+    await tester.pumpAndSettle();
+
+    expect(find.byType(NewHomePreviewScreen), findsOneWidget);
+    expect(find.byKey(const ValueKey('new-home-preview-hero')), findsOneWidget);
+    expect(find.text('NEW HOME'), findsOneWidget);
+    expect(find.text('JUGAR AHORA'), findsOneWidget);
+
+    final quickTable = find.byKey(const ValueKey('new-home-mode-quickTable'));
+    expect(quickTable, findsOneWidget);
+    await tester.tap(quickTable);
+    await tester.pump(const Duration(milliseconds: 200));
+    expect(find.text('Modo seleccionado: Quick Table'), findsOneWidget);
+
+    await tester.tap(find.byKey(const ValueKey('new-home-preview-back')));
+    await tester.pumpAndSettle();
+    expect(find.byType(HomeScreen), findsOneWidget);
+    expect(tester.takeException(), isNull);
+  });
+
   testWidgets(
     'banner-constrained landscape shows the complete home without scrolling',
     (tester) async {
@@ -353,7 +385,7 @@ void main() {
     );
     expect(find.byKey(const ValueKey('home-quick-pop')), findsNothing);
     expect(find.text('QUICK POP'), findsOneWidget);
-    expect(find.text('Casual online · CPU en 5 s'), findsOneWidget);
+    expect(find.text('Partida rápida online'), findsOneWidget);
     expect(find.text('MESA RÁPIDA'), findsOneWidget);
     expect(find.text('Amigos online · crea una sala'), findsOneWidget);
     expect(find.text('CONTRA CPU'), findsOneWidget);

@@ -12,6 +12,10 @@ void main() {
   test('Version 2 static and dynamic copy has complete English coverage', () {
     const staticCopy = <String, String>{
       'MESA RÁPIDA': 'QUICK TABLE',
+      'Partida rápida online': 'Quick casual online play',
+      'Amigos online · crea una sala':
+          'Play online with friends · create a room',
+      'Pasa el teléfono · 2–4 jugadores': 'Pass the phone · 2–4 players',
       'JUEGA CON AMIGOS': 'PLAY WITH FRIENDS',
       'CREAR SALA': 'CREATE ROOM',
       'ENTRAR CON CÓDIGO': 'JOIN WITH CODE',
@@ -40,7 +44,7 @@ void main() {
       'Buscando un jugador online…': 'Searching for an online player…',
       'Luego jugarás contra CPU automáticamente':
           'Then you will automatically play against the CPU',
-      'JUGAR ONLINE · BUSCAR 5 S': 'PLAY ONLINE · SEARCH 5 S',
+      'JUGAR ONLINE · BUSCAR 10 S': 'PLAY ONLINE · SEARCH 10 S',
       'JUGAR AHORA CONTRA CPU': 'PLAY NOW AGAINST CPU',
       'El modo online necesita conexión con un servidor seguro. Mientras lo terminamos, puedes probar Quick Pop contra el CPU.':
           'Online play requires a secure server connection. While we finish it, you can try Quick Pop against the CPU.',
