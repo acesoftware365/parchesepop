@@ -347,14 +347,19 @@ void main() {
     expect(find.byKey(const ValueKey('home-mode-quick-pop')), findsOneWidget);
     expect(find.byKey(const ValueKey('home-mode-quick-table')), findsOneWidget);
     expect(find.byKey(const ValueKey('home-mode-cpu')), findsOneWidget);
+    expect(
+      find.byKey(const ValueKey('home-mode-pass-and-play')),
+      findsOneWidget,
+    );
     expect(find.byKey(const ValueKey('home-quick-pop')), findsNothing);
     expect(find.text('QUICK POP'), findsOneWidget);
-    expect(find.text('ONLINE · CPU EN 5 S'), findsOneWidget);
-    expect(find.text('2 fichas · partida rápida'), findsOneWidget);
+    expect(find.text('Casual online · CPU en 5 s'), findsOneWidget);
     expect(find.text('MESA RÁPIDA'), findsOneWidget);
-    expect(find.text('Amigos online o partida local'), findsOneWidget);
+    expect(find.text('Amigos online · crea una sala'), findsOneWidget);
     expect(find.text('CONTRA CPU'), findsOneWidget);
     expect(find.text('Juega contra el CPU'), findsOneWidget);
+    expect(find.text('PASS & PLAY'), findsOneWidget);
+    expect(find.text('Pasa el teléfono · 2–4 jugadores'), findsOneWidget);
     expect(tester.takeException(), isNull);
   });
 

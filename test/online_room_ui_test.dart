@@ -384,7 +384,7 @@ void main() {
         controller: language,
         child: MaterialApp(
           theme: ThemeData(useMaterial3: true),
-          home: QuickTableHubScreen(controller: controller, onPlayLocal: () {}),
+          home: QuickTableHubScreen(controller: controller),
         ),
       ),
     );
@@ -394,37 +394,26 @@ void main() {
     expect(find.text('CREATE ROOM'), findsOneWidget);
     expect(find.text('JOIN WITH CODE'), findsOneWidget);
     expect(find.text('PUBLIC ROOMS'), findsOneWidget);
-    expect(find.text('LOCAL MATCH'), findsOneWidget);
+    expect(find.text('LOCAL MATCH'), findsNothing);
     expect(find.text('JUEGA CON AMIGOS'), findsNothing);
     expect(tester.takeException(), isNull);
   });
 
-  testWidgets('hub keeps all four primary actions visible without scrolling', (
+  testWidgets('hub keeps the three online actions visible without scrolling', (
     tester,
   ) async {
     final controller = _FakeOnlineRoomController();
-    var localStarted = false;
-    await _pumpPhone(
-      tester,
-      QuickTableHubScreen(
-        controller: controller,
-        onPlayLocal: () => localStarted = true,
-      ),
-    );
+    await _pumpPhone(tester, QuickTableHubScreen(controller: controller));
 
     for (final key in [
       'quick-table-create-room',
       'quick-table-join-code',
       'quick-table-public-rooms',
-      'quick-table-play-local',
     ]) {
       _expectPrimaryVisible(tester, find.byKey(ValueKey(key)));
     }
     expect(find.byType(SingleChildScrollView), findsNothing);
     expect(tester.takeException(), isNull);
-
-    await tester.tap(find.byKey(const ValueKey('quick-table-play-local')));
-    expect(localStarted, isTrue);
   });
 
   testWidgets('create flow selects Chaos/public and reaches its lobby', (

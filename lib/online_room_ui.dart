@@ -81,7 +81,7 @@ class QuickTableHubScreen extends StatelessWidget {
   const QuickTableHubScreen({
     super.key,
     required this.controller,
-    required this.onPlayLocal,
+    this.onPlayLocal,
     this.shareService,
     this.analytics = const NoopGameAnalytics(),
     this.launchSource = MatchLaunchSource.home,
@@ -89,7 +89,11 @@ class QuickTableHubScreen extends StatelessWidget {
   }) : assert(createTimeout > Duration.zero);
 
   final OnlineRoomController controller;
-  final VoidCallback onPlayLocal;
+
+  /// Kept nullable for invite/error-flow compatibility. Local play now has
+  /// its own home card (PASS & PLAY), so the online room hub never renders a
+  /// duplicate local-match action.
+  final VoidCallback? onPlayLocal;
   final RoomInviteShareService? shareService;
   final GameAnalytics analytics;
   final MatchLaunchSource launchSource;
@@ -193,17 +197,6 @@ class QuickTableHubScreen extends StatelessWidget {
                               launchSource: launchSource,
                             ),
                           ),
-                        ),
-                      ),
-                      const SizedBox(height: 10),
-                      Expanded(
-                        child: _HubAction(
-                          key: const ValueKey('quick-table-play-local'),
-                          color: _RoomColors.red,
-                          icon: Icons.phone_iphone_rounded,
-                          title: 'PARTIDA LOCAL',
-                          subtitle: 'Juega ahora en este dispositivo',
-                          onTap: onPlayLocal,
                         ),
                       ),
                     ],

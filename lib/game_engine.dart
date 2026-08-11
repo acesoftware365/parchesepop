@@ -213,6 +213,7 @@ class GameEngine extends ChangeNotifier {
     this.matchFormat = MatchFormat.classic,
     this.localViewerColor = PlayerColor.red,
     this.initialPlayerColor = PlayerColor.red,
+    bool allPlayersHuman = false,
     Random? random,
     String humanName = 'Tú',
     List<String>? cpuNames,
@@ -229,7 +230,7 @@ class GameEngine extends ChangeNotifier {
              cpuNames: cpuNames,
              playerNames: playerNames,
            ),
-           isHuman: localViewerColor == PlayerColor.red,
+           isHuman: allPlayersHuman || localViewerColor == PlayerColor.red,
            tokenCount: MatchRules.forFormat(matchFormat).tokenCount,
            initialTokenProgress: MatchRules.forFormat(
              matchFormat,
@@ -247,7 +248,7 @@ class GameEngine extends ChangeNotifier {
              cpuNames: cpuNames,
              playerNames: playerNames,
            ),
-           isHuman: localViewerColor == PlayerColor.green,
+           isHuman: allPlayersHuman || localViewerColor == PlayerColor.green,
            tokenCount: MatchRules.forFormat(matchFormat).tokenCount,
            initialTokenProgress: MatchRules.forFormat(
              matchFormat,
@@ -265,7 +266,7 @@ class GameEngine extends ChangeNotifier {
              cpuNames: cpuNames,
              playerNames: playerNames,
            ),
-           isHuman: localViewerColor == PlayerColor.yellow,
+           isHuman: allPlayersHuman || localViewerColor == PlayerColor.yellow,
            tokenCount: MatchRules.forFormat(matchFormat).tokenCount,
            initialTokenProgress: MatchRules.forFormat(
              matchFormat,
@@ -283,7 +284,7 @@ class GameEngine extends ChangeNotifier {
              cpuNames: cpuNames,
              playerNames: playerNames,
            ),
-           isHuman: localViewerColor == PlayerColor.blue,
+           isHuman: allPlayersHuman || localViewerColor == PlayerColor.blue,
            tokenCount: MatchRules.forFormat(matchFormat).tokenCount,
            initialTokenProgress: MatchRules.forFormat(
              matchFormat,

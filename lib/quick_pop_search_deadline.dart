@@ -49,8 +49,9 @@ typedef QuickPopDeadlineScheduler =
 ///
 /// A human result is deliberately not terminal. The result must first be
 /// prepared, start its replicated game sync, and pass the shared two-player
-/// readiness barrier injected through [synchronize]. The deadline therefore
-/// covers every operation between the original tap and a playable table.
+/// readiness barrier injected through [synchronize]. The five-second window
+/// decides whether to keep searching; [humanPreparationGrace] gives a verified
+/// pair a separate bounded window to finish opening the playable table.
 ///
 /// Online operations are injected so a deadline or cancellation can dispose
 /// resources that complete late without ever navigating after the CPU outcome
@@ -58,6 +59,7 @@ typedef QuickPopDeadlineScheduler =
 final class QuickPopDeadlineSearch<Connection, Ticket, Resolution, Prepared> {
   QuickPopDeadlineSearch({
     required this.window,
+    this.humanPreparationGrace = const Duration(seconds: 10),
     required Duration Function() elapsed,
     required Future<Connection> Function() connect,
     required Future<Ticket> Function(Connection connection) enqueue,
@@ -114,6 +116,7 @@ final class QuickPopDeadlineSearch<Connection, Ticket, Resolution, Prepared> {
     QuickPopDeadlineScheduler? scheduleDeadline,
     this.pollInterval = const Duration(milliseconds: 120),
   }) : assert(window > Duration.zero),
+       assert(!humanPreparationGrace.isNegative),
        assert(pollInterval > Duration.zero),
        _connect = connect,
        _enqueue = enqueue,
@@ -141,6 +144,15 @@ final class QuickPopDeadlineSearch<Connection, Ticket, Resolution, Prepared> {
            });
 
   final Duration window;
+
+  /// Extra time granted after a real opponent is found inside [window].
+  ///
+  /// Match preparation opens Firebase auth, the room checkpoint, presence
+  /// leases, and the two-player readiness barrier. Those operations can take
+  /// longer than the five-second search without meaning that the opponent
+  /// disappeared. A CPU fallback is still decided at [window] when no human
+  /// resolution exists; this grace only protects a verified human launch.
+  final Duration humanPreparationGrace;
   final Duration pollInterval;
   final Future<Connection> Function() _connect;
   final Future<Ticket> Function(Connection connection) _enqueue;
@@ -214,6 +226,7 @@ final class QuickPopDeadlineSearch<Connection, Ticket, Resolution, Prepared> {
       _QuickPopLaunchCommitState.none;
   bool _settlementStarted = false;
   Object? _settlementFailure;
+  bool _humanPreparationDeadlineExtended = false;
 
   QuickPopDeadlineOutcome get outcome => _outcome;
 
@@ -388,6 +401,28 @@ final class QuickPopDeadlineSearch<Connection, Ticket, Resolution, Prepared> {
     final ticket = _ticket;
     final resolution = _resolution;
     final prepared = _prepared;
+    // A verified human may have been found just before the search deadline
+    // while Firebase is still preparing the shared table. Keep that launch
+    // alive for a short, bounded grace period instead of tearing down both
+    // clients at exactly five seconds. If no readiness commit arrives during
+    // the grace, this method runs again and falls back normally.
+    if (_launchCommitState == _QuickPopLaunchCommitState.none &&
+        resolution != null &&
+        _isHumanResolution(resolution) &&
+        connection != null &&
+        ticket != null &&
+        prepared == null &&
+        !_humanPreparationDeadlineExtended &&
+        humanPreparationGrace > Duration.zero) {
+      _humanPreparationDeadlineExtended = true;
+      _cancelDeadline?.call();
+      _cancelDeadline = _scheduleDeadline(
+        humanPreparationGrace,
+        () => unawaited(_settleAtDeadline()),
+      );
+      return;
+    }
+
     if (_launchCommitState == _QuickPopLaunchCommitState.none ||
         connection == null ||
         ticket == null ||

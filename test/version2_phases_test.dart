@@ -150,23 +150,25 @@ void main() {
     final quickPop = find.byKey(const ValueKey('home-mode-quick-pop'));
     final quickTable = find.byKey(const ValueKey('home-mode-quick-table'));
     final cpu = find.byKey(const ValueKey('home-mode-cpu'));
+    final passAndPlay = find.byKey(const ValueKey('home-mode-pass-and-play'));
     expect(quickPop, findsOneWidget);
     expect(quickTable, findsOneWidget);
     expect(cpu, findsOneWidget);
+    expect(passAndPlay, findsOneWidget);
     expect(
       find.byKey(const ValueKey('home-quick-pop')),
       findsNothing,
       reason: 'Quick Pop must not be duplicated in the secondary menu dock.',
     );
     expect(find.text('QUICK POP'), findsOneWidget);
-    expect(find.text('ONLINE · CPU EN 5 S'), findsOneWidget);
-    expect(find.text('2 fichas · partida rápida'), findsOneWidget);
+    expect(find.text('Casual online · CPU en 5 s'), findsOneWidget);
     expect(find.text('MESA RÁPIDA'), findsOneWidget);
-    expect(find.text('Amigos online o partida local'), findsOneWidget);
+    expect(find.text('Amigos online · crea una sala'), findsOneWidget);
     expect(find.text('CONTRA CPU'), findsOneWidget);
     expect(find.text('Juega contra el CPU'), findsOneWidget);
+    expect(find.text('PASS & PLAY'), findsOneWidget);
 
-    for (final card in [quickPop, quickTable, cpu]) {
+    for (final card in [quickPop, quickTable, cpu, passAndPlay]) {
       await tester.ensureVisible(card);
       await tester.pump(const Duration(milliseconds: 50));
       expect(card.hitTestable(), findsOneWidget);
@@ -177,8 +179,17 @@ void main() {
       expect(rect.height, greaterThanOrEqualTo(48));
     }
     final featuredTop = tester.getTopLeft(quickPop).dy;
-    expect(featuredTop, lessThan(tester.getTopLeft(quickTable).dy));
-    expect(featuredTop, lessThan(tester.getTopLeft(cpu).dy));
+    expect(
+      tester.getTopLeft(quickTable).dy,
+      closeTo(featuredTop, 1),
+      reason: 'Quick Pop and Quick Table should share the first row.',
+    );
+    expect(
+      tester.getTopLeft(passAndPlay).dy,
+      closeTo(tester.getTopLeft(cpu).dy, 1),
+      reason: 'CPU and Pass & Play should share the second row.',
+    );
+    expect(tester.getTopLeft(cpu).dy, greaterThan(featuredTop));
 
     await tester.ensureVisible(quickPop);
     await tester.tap(quickPop);

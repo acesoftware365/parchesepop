@@ -76,6 +76,7 @@ final class _SearchHarness {
           scheduleDeadline: (delay, callback) {
             scheduledDelay = delay;
             deadlineCallback = callback;
+            deadlineCancelled = false;
             return () => deadlineCancelled = true;
           },
         );
@@ -204,7 +205,7 @@ void main() {
   });
 
   test(
-    'preparation finishing after 5000 ms cannot navigate and is disposed',
+    'human preparation gets a bounded grace period before fallback',
     () async {
       final harness = _SearchHarness();
       harness.connection.complete(_Connection());
@@ -217,6 +218,14 @@ void main() {
       expect(harness.prepareCalls, 1);
 
       harness.elapsed = const Duration(seconds: 5);
+      harness.fireDeadline();
+      await _flushAsyncWork();
+      expect(harness.scheduledDelay, const Duration(seconds: 10));
+      expect(harness.fallbackResults, isEmpty);
+
+      // If the shared table never becomes ready, the extended deadline still
+      // makes one deterministic CPU decision.
+      harness.elapsed = const Duration(seconds: 17);
       harness.fireDeadline();
       expect(await terminal, QuickPopDeadlineOutcome.fallback);
       expect(harness.abandonCalls, 1);

@@ -128,7 +128,7 @@ void main() {
     expect(tester.takeException(), isNull);
   });
 
-  testWidgets('local quick table clearly offers traditional and chaos modes', (
+  testWidgets('pass and play clearly offers traditional and chaos modes', (
     tester,
   ) async {
     SharedPreferences.setMockInitialValues({
@@ -143,40 +143,34 @@ void main() {
 
     await tester.pumpWidget(const ParchesePopApp());
     await tester.pumpAndSettle();
-    await tester.tap(find.text('MESA RÁPIDA'));
+    await tester.tap(find.byKey(const ValueKey('home-mode-pass-and-play')));
     await tester.pump();
     await tester.pump(const Duration(milliseconds: 450));
     expect(
-      find.byKey(const ValueKey('quick-table-entry-dialog')),
+      find.byKey(const ValueKey('pass-and-play-setup-dialog')),
       findsOneWidget,
     );
-    await tester.tap(find.byKey(const ValueKey('quick-table-local')));
+    await tester.tap(find.byKey(const ValueKey('pass-play-mode-traditional')));
     await tester.pump();
     await tester.pump(const Duration(milliseconds: 450));
 
-    expect(find.byKey(const ValueKey('online-mode-step')), findsOneWidget);
+    expect(find.byType(GameScreen), findsOneWidget);
     expect(
-      find.byKey(const ValueKey('online-mode-traditional')),
-      findsOneWidget,
-    );
-    expect(find.byKey(const ValueKey('online-mode-chaos')), findsOneWidget);
-    expect(find.text('Tradicional'), findsOneWidget);
-    expect(find.text('Caos'), findsOneWidget);
-    expect(
-      find.text('Reglas clásicas, sin cubos, objetos ni trampas.'),
-      findsOneWidget,
+      tester.widget<GameScreen>(find.byType(GameScreen)).passAndPlay,
+      isTrue,
     );
     expect(
-      find.text('Cubos sorpresa, poderes, trampas y efectos especiales.'),
-      findsOneWidget,
+      tester
+          .widget<GameScreen>(find.byType(GameScreen))
+          .gameEngine!
+          .players
+          .every((player) => player.isHuman),
+      isTrue,
     );
-    expect(find.text('CLÁSICO'), findsOneWidget);
-    expect(find.text('MÁS ACCIÓN'), findsOneWidget);
-    expect(find.byType(MatchmakingScreen), findsNothing);
     expect(tester.takeException(), isNull);
   });
 
-  testWidgets('a legacy profile can start a quick match without an account', (
+  testWidgets('a legacy profile can start Pass & Play without an account', (
     tester,
   ) async {
     SharedPreferences.setMockInitialValues({
@@ -188,22 +182,24 @@ void main() {
 
     await tester.pumpWidget(const ParchesePopApp());
     await tester.pumpAndSettle();
-    await tester.tap(find.text('MESA RÁPIDA'));
+    await tester.tap(find.byKey(const ValueKey('home-mode-pass-and-play')));
     await tester.pump();
     await tester.pump(const Duration(milliseconds: 450));
-    await tester.tap(find.byKey(const ValueKey('quick-table-local')));
+    await tester.tap(find.byKey(const ValueKey('pass-play-mode-traditional')));
     await tester.pump();
     await tester.pump(const Duration(milliseconds: 450));
 
-    expect(find.byKey(const ValueKey('online-mode-step')), findsOneWidget);
-    expect(find.text('Tradicional'), findsOneWidget);
-    expect(find.text('Caos'), findsOneWidget);
+    expect(find.byType(GameScreen), findsOneWidget);
+    expect(
+      tester.widget<GameScreen>(find.byType(GameScreen)).passAndPlay,
+      isTrue,
+    );
     expect(tester.takeException(), isNull);
   });
 
   for (final mode in GameMode.values) {
     testWidgets(
-      'online ${mode.name} choice is preserved through matchmaking and game',
+      'Pass & Play ${mode.name} choice is preserved through the game',
       (tester) async {
         SharedPreferences.setMockInitialValues({
           'profile_name': 'JuanPop',
@@ -217,37 +213,15 @@ void main() {
 
         await tester.pumpWidget(const ParchesePopApp());
         await tester.pumpAndSettle();
-        await tester.tap(find.text('MESA RÁPIDA'));
+        await tester.tap(find.byKey(const ValueKey('home-mode-pass-and-play')));
         await tester.pump();
         await tester.pump(const Duration(milliseconds: 450));
-        await tester.tap(find.byKey(const ValueKey('quick-table-local')));
+        await tester.tap(find.byKey(ValueKey('pass-play-mode-${mode.name}')));
         await tester.pump();
         await tester.pump(const Duration(milliseconds: 450));
-        await tester.tap(
-          find.byKey(
-            ValueKey(
-              mode == GameMode.chaos
-                  ? 'online-mode-chaos'
-                  : 'online-mode-traditional',
-            ),
-          ),
-        );
-        await tester.pump();
-        await tester.pump(const Duration(milliseconds: 450));
-
-        expect(find.byType(MatchmakingScreen), findsOneWidget);
-        final matchmaking = tester.widget<MatchmakingScreen>(
-          find.byType(MatchmakingScreen),
-        );
-        expect((matchmaking as dynamic).mode, mode);
-
-        await tester.pump(const Duration(seconds: 12));
-        await tester.pump(const Duration(milliseconds: 450));
-
         final game = tester.widget<GameScreen>(find.byType(GameScreen));
         expect(game.mode, mode);
-        expect(game.onlineSession, isNotNull);
-        expect(game.onlineSession!.mode, mode);
+        expect(game.passAndPlay, isTrue);
         expect(tester.takeException(), isNull);
       },
     );

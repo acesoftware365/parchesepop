@@ -1031,6 +1031,27 @@ test('Realtime Database rules enforce the online security contract', async (t) =
     );
     await assertFails(set(pathRef('follower', statusPath), 'inGame'));
     await assertSucceeds(set(pathRef('leader', statusPath), 'inGame'));
+    // Quick Pop's capture bonus is a verified twenty-step die. The command
+    // envelope accepts it only for this already-valid Quick Pop room.
+    await assertSucceeds(
+      set(
+        pathRef(
+          'leader',
+          `onlineV2/rooms/${roomId}/commands/leader/quick-pop-twenty`,
+        ),
+        {
+          kind: 'move',
+          matchId: roomId,
+          participantId: 'leader',
+          submittedById: 'leader',
+          actionId: 'quick-pop-twenty',
+          expectedRevision: 0,
+          submittedAt: Date.now(),
+          tokenId: 0,
+          die: 20,
+        },
+      ),
+    );
     await assertFails(set(pathRef('outsider', statusPath), 'closed'));
     await assertSucceeds(set(pathRef('follower', statusPath), 'closed'));
     await assertFails(

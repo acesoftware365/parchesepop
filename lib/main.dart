@@ -2282,7 +2282,7 @@ class PlayHome extends StatelessWidget {
       final densePortrait =
           narrow && !compactLandscape && viewport.maxHeight < 730;
       final padding = compactLandscape
-          ? const EdgeInsets.fromLTRB(10, 6, 10, 3)
+          ? const EdgeInsets.fromLTRB(10, 6, 10, 2)
           : narrow
           ? const EdgeInsets.fromLTRB(14, 14, 14, 16)
           : const EdgeInsets.fromLTRB(24, 18, 24, 22);
@@ -2298,28 +2298,34 @@ class PlayHome extends StatelessWidget {
             constraints: const BoxConstraints(maxWidth: 1180),
             child: LayoutBuilder(
               builder: (context, contentBox) {
-                final horizontalModes = contentBox.maxWidth >= 620;
+                // Keep the four primary modes in a predictable 2 × 2 grid.
+                // On phones each card switches to the compact tile treatment
+                // so the two actions remain side by side without scrolling.
+                final twoColumnModes = contentBox.maxWidth >= 340;
+                final compactModeTiles =
+                    compactLandscape || contentBox.maxWidth < 620;
                 final quickPopCard = _ModeCard(
                   key: const ValueKey('home-mode-quick-pop'),
                   color: const Color(0xFF7257E9),
-                  icon: Icons.speed_rounded,
+                  icon: Icons.bolt_rounded,
                   title: 'QUICK POP',
-                  subtitle: '2 fichas · partida rápida',
+                  subtitle: 'Casual online · CPU en 5 s',
                   badge: 'ONLINE · CPU EN 5 S',
-                  featured: true,
+                  featured: !compactModeTiles,
+                  tile: compactModeTiles,
                   dense: densePortrait,
-                  expanded: horizontalModes && !compactLandscape,
+                  expanded: !compactModeTiles && !compactLandscape,
                   onTap: () => _showQuickPopEntry(context),
                 );
                 final quickTableCard = _ModeCard(
                   key: const ValueKey('home-mode-quick-table'),
                   color: PopColors.blue,
-                  icon: Icons.bolt_rounded,
+                  icon: Icons.groups_rounded,
                   title: 'MESA RÁPIDA',
-                  subtitle: 'Amigos online o partida local',
-                  tile: narrow && !compactLandscape,
+                  subtitle: 'Amigos online · crea una sala',
+                  tile: compactModeTiles,
                   dense: densePortrait,
-                  expanded: horizontalModes && !compactLandscape,
+                  expanded: !compactModeTiles && !compactLandscape,
                   onTap: () => _startOnline(context),
                 );
                 final cpuCard = _ModeCard(
@@ -2328,12 +2334,29 @@ class PlayHome extends StatelessWidget {
                   icon: Icons.smart_toy_rounded,
                   title: 'CONTRA CPU',
                   subtitle: 'Juega contra el CPU',
-                  tile: narrow && !compactLandscape,
+                  tile: compactModeTiles,
                   dense: densePortrait,
-                  expanded: horizontalModes && !compactLandscape,
+                  expanded: !compactModeTiles && !compactLandscape,
                   onTap: () => _showCpuDialog(context),
                 );
-                final modeCards = [quickPopCard, quickTableCard, cpuCard];
+                final passAndPlayCard = _ModeCard(
+                  key: const ValueKey('home-mode-pass-and-play'),
+                  color: PopColors.green,
+                  icon: Icons.swap_horiz_rounded,
+                  title: 'PASS & PLAY',
+                  subtitle: 'Pasa el teléfono · 2–4 jugadores',
+                  badge: '2–4 JUGADORES',
+                  tile: compactModeTiles,
+                  dense: densePortrait,
+                  expanded: !compactModeTiles && !compactLandscape,
+                  onTap: () => _showPassAndPlayDialog(context),
+                );
+                final modeCards = <Widget>[
+                  quickPopCard,
+                  quickTableCard,
+                  cpuCard,
+                  passAndPlayCard,
+                ];
                 return ConstrainedBox(
                   constraints: BoxConstraints(minHeight: availableHeight),
                   child: Column(
@@ -2387,38 +2410,49 @@ class PlayHome extends StatelessWidget {
                               ),
                               SizedBox(height: compactLandscape ? 5 : 10),
                             ],
-                            _HomeSectionTitle(
-                              compact: compactLandscape || narrow,
-                            ),
-                            SizedBox(height: compactLandscape ? 4 : 12),
-                            if (horizontalModes)
-                              Row(
-                                crossAxisAlignment: CrossAxisAlignment.start,
-                                children: [
-                                  for (
-                                    var index = 0;
-                                    index < modeCards.length;
-                                    index++
-                                  ) ...[
-                                    if (index > 0) const SizedBox(width: 12),
-                                    Expanded(child: modeCards[index]),
-                                  ],
-                                ],
-                              )
-                            else if (narrow && !compactLandscape)
+                            if (!compactLandscape)
+                              _HomeSectionTitle(compact: narrow),
+                            if (!compactLandscape)
+                              SizedBox(height: narrow ? 10 : 12),
+                            if (twoColumnModes)
                               Column(
                                 children: [
-                                  quickPopCard,
-                                  SizedBox(height: densePortrait ? 9 : 13),
-                                  Row(
-                                    crossAxisAlignment:
-                                        CrossAxisAlignment.start,
-                                    children: [
-                                      Expanded(child: quickTableCard),
-                                      SizedBox(width: densePortrait ? 9 : 12),
-                                      Expanded(child: cpuCard),
-                                    ],
-                                  ),
+                                  for (var row = 0; row < 2; row++) ...[
+                                    if (row > 0)
+                                      SizedBox(
+                                        height: compactLandscape
+                                            ? 1
+                                            : densePortrait
+                                            ? 9
+                                            : 13,
+                                      ),
+                                    _HomeModeGroupLabel(
+                                      label: row == 0 ? 'ONLINE' : 'LOCAL',
+                                      color: row == 0
+                                          ? PopColors.blue
+                                          : PopColors.green,
+                                      icon: row == 0
+                                          ? Icons.public_rounded
+                                          : Icons.home_rounded,
+                                      compact: compactLandscape || narrow,
+                                    ),
+                                    SizedBox(
+                                      height: compactLandscape
+                                          ? 0
+                                          : densePortrait
+                                          ? 5
+                                          : 7,
+                                    ),
+                                    Row(
+                                      crossAxisAlignment:
+                                          CrossAxisAlignment.start,
+                                      children: [
+                                        Expanded(child: modeCards[row * 2]),
+                                        SizedBox(width: densePortrait ? 9 : 12),
+                                        Expanded(child: modeCards[row * 2 + 1]),
+                                      ],
+                                    ),
+                                  ],
                                 ],
                               )
                             else
@@ -2503,7 +2537,7 @@ class PlayHome extends StatelessWidget {
                               ),
                             ],
                           ),
-                          SizedBox(height: compactLandscape ? 2 : 13),
+                          SizedBox(height: compactLandscape ? 0 : 13),
                         ],
                       ),
                     ],
@@ -2606,10 +2640,6 @@ class PlayHome extends StatelessWidget {
       );
       return;
     }
-    if (choice == _QuickTableEntryChoice.local) {
-      await _startLocalTable(context);
-      return;
-    }
     await Navigator.push<void>(
       context,
       MaterialPageRoute(
@@ -2660,6 +2690,41 @@ class PlayHome extends StatelessWidget {
         builder: (_) => GameScreen(
           opponent: 'CPU • ${setup.level}',
           mode: setup.mode,
+          wallet: wallet,
+          progression: appFeatureRollout.retentionRewards ? progression : null,
+          tutorial: tutorial,
+          localProfile: profile,
+          analytics: analytics,
+        ),
+      ),
+    );
+  }
+
+  Future<void> _showPassAndPlayDialog(BuildContext context) async {
+    final mode = await showDialog<GameMode>(
+      context: context,
+      builder: (_) => const _PassAndPlaySetupDialog(),
+    );
+    if (!context.mounted || mode == null) return;
+    final engine = GameEngine(
+      mode: mode,
+      allPlayersHuman: true,
+      humanName: profile.name,
+      playerNames: <PlayerColor, String>{
+        PlayerColor.red: profile.name,
+        PlayerColor.green: 'Jugador 2',
+        PlayerColor.yellow: 'Jugador 3',
+        PlayerColor.blue: 'Jugador 4',
+      },
+    );
+    Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (_) => GameScreen(
+          opponent: 'PASS & PLAY',
+          mode: mode,
+          gameEngine: engine,
+          passAndPlay: true,
           wallet: wallet,
           progression: appFeatureRollout.retentionRewards ? progression : null,
           tutorial: tutorial,
@@ -2830,7 +2895,7 @@ class PlayHome extends StatelessWidget {
   }
 }
 
-enum _QuickTableEntryChoice { online, local }
+enum _QuickTableEntryChoice { online }
 
 class _QuickTableEntryDialog extends StatelessWidget {
   const _QuickTableEntryDialog();
@@ -2903,22 +2968,6 @@ class _QuickTableEntryDialog extends StatelessWidget {
               style: FilledButton.styleFrom(
                 minimumSize: const Size.fromHeight(56),
                 backgroundColor: PopColors.blue,
-              ),
-            ),
-            const SizedBox(height: 10),
-            OutlinedButton.icon(
-              key: const ValueKey('quick-table-local'),
-              onPressed: () =>
-                  Navigator.pop(context, _QuickTableEntryChoice.local),
-              icon: const Icon(Icons.phone_iphone_rounded),
-              label: const PopText('PARTIDA LOCAL'),
-              style: OutlinedButton.styleFrom(
-                minimumSize: const Size.fromHeight(54),
-                foregroundColor: PopColors.navy,
-                side: const BorderSide(color: PopColors.blue, width: 2),
-                shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(18),
-                ),
               ),
             ),
           ],
@@ -3246,7 +3295,7 @@ class _QuickTableOnlineShellState extends State<_QuickTableOnlineShell> {
                     const SizedBox(height: 7),
                     TextButton(
                       onPressed: _playLocal,
-                      child: const PopText('JUGAR PARTIDA LOCAL'),
+                      child: const PopText('JUGAR CONTRA CPU'),
                     ),
                   ],
                 ),
@@ -3565,7 +3614,12 @@ class _QuickPopOnlineSearchScreenState
               transport: online.transport,
               ticket: queued,
               resolution: resolution,
-              hostTimeout: search.remaining,
+              // The five-second budget is only for finding a human. Once the
+              // verified pair exists, Firebase auth, the shared checkpoint,
+              // presence leases, and the readiness barrier need their own
+              // bounded setup window; tying this to search.remaining caused
+              // both emulators to abandon a valid match at the deadline.
+              hostTimeout: const Duration(seconds: 15),
             );
             try {
               await _startOnlineSyncWithRetry(
@@ -4200,6 +4254,90 @@ class _QuickPopEntryDialog extends StatelessWidget {
               ),
               icon: const Icon(Icons.smart_toy_rounded),
               label: const PopText('JUGAR AHORA CONTRA CPU'),
+            ),
+          ],
+        ),
+      ),
+    ),
+  );
+}
+
+class _PassAndPlaySetupDialog extends StatelessWidget {
+  const _PassAndPlaySetupDialog();
+
+  @override
+  Widget build(BuildContext context) => Dialog(
+    key: const ValueKey('pass-and-play-setup-dialog'),
+    insetPadding: const EdgeInsets.all(16),
+    clipBehavior: Clip.antiAlias,
+    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(30)),
+    child: ConstrainedBox(
+      constraints: const BoxConstraints(maxWidth: 640),
+      child: SingleChildScrollView(
+        padding: const EdgeInsets.all(22),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Row(
+              children: [
+                Container(
+                  width: 48,
+                  height: 48,
+                  decoration: const BoxDecoration(
+                    color: PopColors.green,
+                    shape: BoxShape.circle,
+                  ),
+                  child: const Icon(
+                    Icons.swap_horiz_rounded,
+                    color: Colors.white,
+                    size: 29,
+                  ),
+                ),
+                const SizedBox(width: 11),
+                const Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      PopText(
+                        'PASS & PLAY',
+                        style: TextStyle(
+                          fontSize: 23,
+                          fontWeight: FontWeight.w900,
+                          color: PopColors.navy,
+                        ),
+                      ),
+                      PopText(
+                        'Pasa el teléfono después de cada turno',
+                        style: TextStyle(
+                          color: Color(0xFF667085),
+                          fontWeight: FontWeight.w700,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                IconButton(
+                  tooltip: appTranslate(context, 'Cerrar'),
+                  onPressed: () => Navigator.pop(context),
+                  icon: const Icon(Icons.close_rounded),
+                ),
+              ],
+            ),
+            const SizedBox(height: 16),
+            const PopText(
+              'Todos juegan en el mismo dispositivo. Elige las reglas de la mesa:',
+              textAlign: TextAlign.center,
+              style: TextStyle(
+                color: Color(0xFF667085),
+                fontWeight: FontWeight.w700,
+              ),
+            ),
+            const SizedBox(height: 14),
+            _GameModeChoices(
+              key: const ValueKey('pass-and-play-mode-step'),
+              keyPrefix: 'pass-play',
+              onSelected: (mode) => Navigator.pop(context, mode),
             ),
           ],
         ),
@@ -5052,6 +5190,81 @@ class _HomeSectionTitle extends StatelessWidget {
   }
 }
 
+class _HomeModeGroupLabel extends StatelessWidget {
+  const _HomeModeGroupLabel({
+    required this.label,
+    required this.color,
+    required this.icon,
+    required this.compact,
+  });
+
+  final String label;
+  final Color color;
+  final IconData icon;
+  final bool compact;
+
+  @override
+  Widget build(BuildContext context) => Row(
+    children: [
+      Expanded(
+        child: Container(
+          height: 2,
+          decoration: BoxDecoration(
+            gradient: LinearGradient(
+              colors: [
+                color.withValues(alpha: 0),
+                color.withValues(alpha: .62),
+              ],
+            ),
+          ),
+        ),
+      ),
+      SizedBox(width: compact ? 5 : 8),
+      Container(
+        padding: EdgeInsets.symmetric(
+          horizontal: compact ? 7 : 10,
+          vertical: compact ? 2 : 4,
+        ),
+        decoration: BoxDecoration(
+          color: color.withValues(alpha: .22),
+          borderRadius: BorderRadius.circular(999),
+          border: Border.all(color: color.withValues(alpha: .75), width: 1),
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(icon, color: Colors.white, size: compact ? 10 : 14),
+            SizedBox(width: compact ? 3 : 5),
+            PopText(
+              label,
+              style: TextStyle(
+                color: Colors.white,
+                fontSize: compact ? 8 : 11,
+                fontWeight: FontWeight.w900,
+                letterSpacing: compact ? .8 : 1.1,
+              ),
+            ),
+          ],
+        ),
+      ),
+      SizedBox(width: compact ? 5 : 8),
+      Expanded(
+        child: Container(
+          height: 2,
+          decoration: BoxDecoration(
+            gradient: LinearGradient(
+              colors: [
+                color.withValues(alpha: .62),
+                color.withValues(alpha: 0),
+              ],
+            ),
+          ),
+        ),
+      ),
+    ],
+  );
+}
+
 class _HomeMenuDock extends StatelessWidget {
   const _HomeMenuDock({required this.children, required this.compact});
 
@@ -5064,7 +5277,7 @@ class _HomeMenuDock extends StatelessWidget {
     width: double.infinity,
     padding: EdgeInsets.symmetric(
       horizontal: compact ? 6 : 12,
-      vertical: compact ? 4 : 10,
+      vertical: compact ? 2 : 10,
     ),
     decoration: BoxDecoration(
       color: const Color(0xFF071B40).withValues(alpha: .68),
@@ -5199,7 +5412,7 @@ class _RoundMenuButtonState extends State<_RoundMenuButton> {
           duration: const Duration(milliseconds: 120),
           curve: Curves.easeOut,
           child: SizedBox(
-            height: 54,
+            height: 52,
             child: Material(
               color: Colors.white.withValues(alpha: .08),
               borderRadius: BorderRadius.circular(13),
@@ -5401,7 +5614,7 @@ class _ModeCardState extends State<_ModeCard> {
     final compact = MediaQuery.sizeOf(context).height < 520;
     final narrow = MediaQuery.sizeOf(context).width < 500 && !compact;
     final minHeight = compact
-        ? 90.0
+        ? (widget.tile ? 58.0 : 78.0)
         : widget.tile
         ? (widget.dense ? 128.0 : 146.0)
         : widget.featured && widget.dense
@@ -5488,7 +5701,7 @@ class _ModeCardState extends State<_ModeCard> {
                           Padding(
                             padding: EdgeInsets.all(
                               compact
-                                  ? 9
+                                  ? 4
                                   : widget.dense
                                   ? 12
                                   : narrow
@@ -5505,7 +5718,11 @@ class _ModeCardState extends State<_ModeCard> {
                                           _ModeArtwork(
                                             color: widget.color,
                                             icon: widget.icon,
-                                            size: widget.dense ? 43 : 49,
+                                            size: compact
+                                                ? 25
+                                                : widget.dense
+                                                ? 43
+                                                : 49,
                                           ),
                                           const Spacer(),
                                           _ModePlayPill(
@@ -5517,16 +5734,24 @@ class _ModeCardState extends State<_ModeCard> {
                                       const Spacer(),
                                       _ModeCardTitle(
                                         title: widget.title,
-                                        fontSize: widget.dense ? 16 : 18,
+                                        fontSize: compact
+                                            ? 11
+                                            : widget.dense
+                                            ? 16
+                                            : 18,
                                       ),
-                                      const SizedBox(height: 5),
+                                      SizedBox(height: compact ? 1 : 5),
                                       PopText(
                                         widget.subtitle,
-                                        maxLines: 2,
+                                        maxLines: compact ? 1 : 2,
                                         overflow: TextOverflow.ellipsis,
                                         style: TextStyle(
                                           color: const Color(0xFFF4F7FF),
-                                          fontSize: widget.dense ? 9.5 : 10.5,
+                                          fontSize: compact
+                                              ? 7
+                                              : widget.dense
+                                              ? 9.5
+                                              : 10.5,
                                           height: 1.15,
                                           fontWeight: FontWeight.w700,
                                         ),
@@ -5727,7 +5952,10 @@ class _ModeArtwork extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final online = icon == Icons.public_rounded || icon == Icons.bolt_rounded;
+    final online =
+        icon == Icons.public_rounded ||
+        icon == Icons.bolt_rounded ||
+        icon == Icons.groups_rounded;
     return SizedBox(
       width: size,
       height: size,
@@ -5753,7 +5981,29 @@ class _ModeArtwork extends StatelessWidget {
                     ),
                   ],
                 ),
-                child: Icon(icon, color: color, size: size * .53),
+                child: Stack(
+                  alignment: Alignment.center,
+                  children: [
+                    Container(
+                      width: size * .70,
+                      height: size * .70,
+                      decoration: BoxDecoration(
+                        shape: BoxShape.circle,
+                        gradient: RadialGradient(
+                          colors: [
+                            color.withValues(alpha: .22),
+                            color.withValues(alpha: .04),
+                          ],
+                        ),
+                        border: Border.all(
+                          color: color.withValues(alpha: .16),
+                          width: 1,
+                        ),
+                      ),
+                    ),
+                    Icon(icon, color: color, size: size * .53),
+                  ],
+                ),
               ),
             ),
           ),
@@ -6783,6 +7033,7 @@ class GameScreen extends StatefulWidget {
     this.progression,
     this.tutorial,
     this.guidedTutorial = false,
+    this.passAndPlay = false,
     this.localProfile,
     this.onlineSession,
     this.onlineGameSync,
@@ -6806,6 +7057,7 @@ class GameScreen extends StatefulWidget {
   final PlayerProgressionController? progression;
   final TutorialController? tutorial;
   final bool guidedTutorial;
+  final bool passAndPlay;
   final PlayerProfile? localProfile;
   final OnlineMatchSession? onlineSession;
   final OnlineGameSyncClient? onlineGameSync;
@@ -6896,13 +7148,15 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
       widget.onlineSession?.localColor ?? engine.localViewerColor;
 
   bool get _isLocallyControlledTurn =>
-      engine.currentPlayer.color == _localPlayerColor &&
+      engine.currentPlayer.isHuman &&
+      (widget.passAndPlay || engine.currentPlayer.color == _localPlayerColor) &&
       !localCpuTakeoverActive &&
       (widget.onlineGameSync == null ||
           widget.onlineGameSync!.connectionState ==
               OnlineGameConnectionState.connected);
 
   bool get _isCpuControlledTurn {
+    if (widget.passAndPlay) return false;
     final sync = widget.onlineGameSync;
     final session = widget.onlineSession;
     if (sync != null && session != null) {
