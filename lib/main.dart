@@ -656,6 +656,39 @@ Map<GameToken, Offset> _displayTokenCells(
     Offset(2.5, 4.5),
     Offset(4.5, 4.5),
   ];
+
+  // A two-token barrier is intentionally split around its logical cell. On
+  // the twelve outside-edge cells that split can place one center at logical
+  // 0 or 20, where the board's rounded clip cuts the token (and its glow).
+  // Keep the pair together, but translate it inward just enough for the
+  // complete visual footprint to remain inside the board. This changes only
+  // presentation coordinates; the engine cell and hit-testing identity stay
+  // unchanged.
+  const tokenVisualExtentCells = .64;
+  final frameGutterCells = compactPhone
+      ? _BoardGeometry.compactFrameGutterCells
+      : _BoardGeometry.frameGutterCells;
+  final safeEdge = math.max(0.0, tokenVisualExtentCells - frameGutterCells);
+
+  Offset translatePairInsideBoard(Offset first, Offset second) {
+    var shift = Offset.zero;
+    final minX = math.min(first.dx, second.dx);
+    final maxX = math.max(first.dx, second.dx);
+    final minY = math.min(first.dy, second.dy);
+    final maxY = math.max(first.dy, second.dy);
+    if (minX < safeEdge) {
+      shift += Offset(safeEdge - minX, 0);
+    } else if (maxX > _BoardGeometry.gridCells - safeEdge) {
+      shift += Offset(_BoardGeometry.gridCells - safeEdge - maxX, 0);
+    }
+    if (minY < safeEdge) {
+      shift += Offset(0, safeEdge - minY);
+    } else if (maxY > _BoardGeometry.gridCells - safeEdge) {
+      shift += Offset(0, _BoardGeometry.gridCells - safeEdge - maxY);
+    }
+    return shift;
+  }
+
   final result = <GameToken, Offset>{};
   final occupiedCells = <Offset, List<GameToken>>{};
 
@@ -718,8 +751,11 @@ Map<GameToken, Offset> _displayTokenCells(
       axis = isWide ? const Offset(1, 0) : const Offset(0, 1);
     }
     final barrierOffset = compactPhone ? .50 : .47;
-    result[tokens.first] = entry.key - axis * barrierOffset;
-    result[tokens.last] = entry.key + axis * barrierOffset;
+    final firstCenter = entry.key - axis * barrierOffset;
+    final secondCenter = entry.key + axis * barrierOffset;
+    final pairShift = translatePairInsideBoard(firstCenter, secondCenter);
+    result[tokens.first] = firstCenter + pairShift;
+    result[tokens.last] = secondCenter + pairShift;
   }
 
   return result;
