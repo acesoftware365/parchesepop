@@ -137,6 +137,7 @@ final class RealtimeOnlineRoomController extends ChangeNotifier
   Future<void> createRoom({
     required OnlineRoomGameMode mode,
     required RoomVisibility visibility,
+    String? roomName,
   }) async {
     _ensureActive();
     final attempt = ++_createAttempt;
@@ -146,6 +147,7 @@ final class RealtimeOnlineRoomController extends ChangeNotifier
       visibility: visibility,
       mode: mode.name,
       matchFormat: 'quickTable',
+      roomName: roomName,
     );
     if (_createCancelled(attempt)) {
       await _cleanupCancelledCreate(room);
@@ -165,6 +167,12 @@ final class RealtimeOnlineRoomController extends ChangeNotifier
       throw const OnlineRoomOperationCancelledException();
     }
   }
+
+  @override
+  Future<void> reportPublicRoom({
+    required String roomId,
+    required String reason,
+  }) => transport.reportPublicRoom(roomId: roomId, reason: reason);
 
   @override
   Future<void> cancelPendingCreate() async {
@@ -465,11 +473,32 @@ final class RealtimeOnlineRoomController extends ChangeNotifier
 
   @override
   Future<void> startOpeningRoll() async {
+    final room = _requireRoom();
+    // Quick Table supports 2–4 humans. Before publishing the opening roll,
+    // materialize any empty board colors as host-owned CPU seats so every
+    // client receives the same four-color match and CPU commands pass the
+    // realtime membership checks.
+    final roomWithCpuSeats = await transport.ensureQuickTableCpuSeats(room.id);
+    _roomRecord = roomWithCpuSeats;
+    final waitingWithCpu = _lobbyFromRoom(
+      roomWithCpuSeats,
+      status: RoomStatus.waiting,
+    );
+    await transport.store.set(
+      _lobbyStatePath(room.id),
+      waitingWithCpu.toJson(),
+    );
+    _setLobby(waitingWithCpu);
     final lobby = await _mutateHostLobby(
       (snapshot) =>
           snapshot.startOpeningRoll(actorParticipantId: localParticipantId),
     );
     await _syncRoomStatus(lobby.status);
+    // CPU seats have no device that can press the opening-roll button. The
+    // host rolls those seats immediately, while human players still roll on
+    // their own phones. This keeps a 2- or 3-player room from waiting for an
+    // empty seat and leaves the same authoritative lobby for every client.
+    await _rollCpuOpeningSeats(roomWithCpuSeats.id);
   }
 
   @override
@@ -654,6 +683,7 @@ final class RealtimeOnlineRoomController extends ChangeNotifier
       'roomCode': room.code.value,
       'hostParticipantId': room.hostUid,
       'visibility': room.visibility.name,
+      if (room.roomName != null) 'roomName': room.roomName,
       'status': status.name,
       'revision': max(room.revision, previousRevision),
       'participants': <Object?>[
@@ -802,9 +832,68 @@ final class RealtimeOnlineRoomController extends ChangeNotifier
       _setLobby(updated);
       if (updated.status == RoomStatus.starting) {
         await _syncRoomStatus(RoomStatus.starting);
+      } else {
+        // A human roll can resolve a tie that promotes a CPU seat into the
+        // next opening-roll round. Keep the CPU participant moving without
+        // asking an empty seat to interact with the UI.
+        await _rollCpuOpeningSeats(roomId);
       }
     }
     await transport.store.set(requestPath, null);
+  }
+
+  Future<void> _rollCpuOpeningSeats(String roomId) async {
+    final epoch = _roomEpoch;
+    while (!_disposed && epoch == _roomEpoch) {
+      final raw = await transport.store.read(_lobbyStatePath(roomId));
+      if (raw == null) return;
+      final current = OnlineLobby.fromJson(onlineMap(raw));
+      final opening = current.openingRoll;
+      if (current.status != RoomStatus.openingRoll || opening == null) return;
+
+      String? cpuParticipantId;
+      for (final participantId in opening.eligibleParticipantIds) {
+        if (participantId.startsWith('cpu_') &&
+            !opening.currentRolls.containsKey(participantId)) {
+          cpuParticipantId = participantId;
+          break;
+        }
+      }
+      if (cpuParticipantId == null) return;
+
+      // Generate once outside the transaction so retries cannot change the
+      // visible result for a CPU seat.
+      final generatedValue = _openingRollRandom.nextInt(6) + 1;
+      final result = await transport.store.transaction(
+        _lobbyStatePath(roomId),
+        (transactionRaw) {
+          if (transactionRaw == null) {
+            return const OnlineStoreTransactionDecision.abort();
+          }
+          final lobby = OnlineLobby.fromJson(onlineMap(transactionRaw));
+          final state = lobby.openingRoll;
+          if (lobby.status != RoomStatus.openingRoll ||
+              state == null ||
+              !state.eligibleParticipantIds.contains(cpuParticipantId) ||
+              state.currentRolls.containsKey(cpuParticipantId)) {
+            return const OnlineStoreTransactionDecision.abort();
+          }
+          lobby.rollOpeningDie(
+            actorParticipantId: cpuParticipantId!,
+            random: _FixedOpeningRollRandom(generatedValue),
+          );
+          return OnlineStoreTransactionDecision.commit(lobby.toJson());
+        },
+      );
+      if (!result.committed) continue;
+
+      final updated = OnlineLobby.fromJson(onlineMap(result.value));
+      _setLobby(updated);
+      if (updated.status == RoomStatus.starting) {
+        await _syncRoomStatus(RoomStatus.starting);
+        return;
+      }
+    }
   }
 
   Future<void> _syncRoomStatus(RoomStatus status) async {
@@ -947,6 +1036,7 @@ final class RealtimeOnlineRoomController extends ChangeNotifier
         hostDisplayName: record.hostDisplayName,
         mode: mode,
         occupiedSeats: record.occupiedSeatCount,
+        roomName: record.roomName,
       );
     }).whereType<PublicRoomSummary>(),
   );

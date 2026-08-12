@@ -789,6 +789,71 @@ void main() {
       expect(errors, isEmpty);
     });
 
+    test('a disconnected host cannot receive a new join request', () async {
+      final store = InMemoryOnlineRealtimeStore(initialNowMs: 4500);
+      final host = _client(
+        store,
+        'offline-host',
+        'Host',
+        codeFactory: (_) => RoomCode.parse('AFF234'),
+      );
+      final guest = _client(store, 'offline-guest', 'Guest');
+      final room = await host.createRoom(
+        visibility: RoomVisibility.public,
+        mode: 'classic',
+        matchFormat: 'quickTable',
+      );
+
+      await store.set(
+        '$onlineTransportRoot/rooms/${room.id}/presence/${room.hostUid}',
+        OnlinePresenceRecord(
+          uid: room.hostUid,
+          presence: LobbyPresence.disconnected,
+          changedAtMs: 4501,
+          connectionId: 'offline',
+        ).toJson(),
+      );
+
+      await expectLater(
+        guest.requestRoomJoinByCode(room.code.value),
+        throwsA(_transportError(OnlineTransportErrorCode.roomNotFound)),
+      );
+    });
+
+    test('host maintenance registers public-room disconnect cleanup', () async {
+      final store = InMemoryOnlineRealtimeStore(initialNowMs: 4600);
+      final host = _client(
+        store,
+        'lease-host',
+        'Host',
+        codeFactory: (_) => RoomCode.parse('LEAS24'),
+      );
+      final room = await host.createRoom(
+        visibility: RoomVisibility.public,
+        mode: 'classic',
+        matchFormat: 'quickTable',
+      );
+      store.clearOperations();
+      final lease = await host.maintainHostedRoom(room.id);
+      expect(
+        store.operations,
+        contains(
+          isA<InMemoryStoreOperation>()
+              .having(
+                (operation) => operation.kind,
+                'kind',
+                InMemoryStoreOperationKind.onDisconnect,
+              )
+              .having(
+                (operation) => operation.path,
+                'public-room path',
+                '$onlineTransportRoot/publicRooms/${room.id}',
+              ),
+        ),
+      );
+      await lease.close();
+    });
+
     test('a timed-out join request is removed from the queue', () async {
       final store = InMemoryOnlineRealtimeStore(initialNowMs: 5000);
       final host = _client(
@@ -1333,23 +1398,20 @@ void main() {
       expect(resolution?.opponentUid, isNull);
     });
 
-    test(
-      'CPU fallback begins at exactly ten seconds, never earlier',
-      () async {
-        final store = InMemoryOnlineRealtimeStore(initialNowMs: 20_000);
-        final player = _client(store, 'solo', 'Solo', seed: 20);
-        final ticket = await player.enqueueQuickPop(mode: 'classic');
+    test('CPU fallback begins at exactly ten seconds, never earlier', () async {
+      final store = InMemoryOnlineRealtimeStore(initialNowMs: 20_000);
+      final player = _client(store, 'solo', 'Solo', seed: 20);
+      final ticket = await player.enqueueQuickPop(mode: 'classic');
 
-        store.setNowMs(ticket.deadlineAtMs - 1);
-        expect(await player.resolveQuickPop(ticket), isNull);
+      store.setNowMs(ticket.deadlineAtMs - 1);
+      expect(await player.resolveQuickPop(ticket), isNull);
 
-        store.setNowMs(ticket.deadlineAtMs);
-        final resolution = await player.resolveQuickPop(ticket);
-        expect(resolution?.kind, QuickPopResolutionKind.cpu);
-        expect(resolution?.resolvedAtMs, ticket.deadlineAtMs);
-        expect(resolution?.opponentUid, isNull);
-      },
-    );
+      store.setNowMs(ticket.deadlineAtMs);
+      final resolution = await player.resolveQuickPop(ticket);
+      expect(resolution?.kind, QuickPopResolutionKind.cpu);
+      expect(resolution?.resolvedAtMs, ticket.deadlineAtMs);
+      expect(resolution?.opponentUid, isNull);
+    });
 
     test(
       'a server deadline denial is retried once after a bounded guard',
@@ -1557,4 +1619,48 @@ void main() {
     expect(decoded.lobbyParticipants.single.ready, isTrue);
     expect(decoded.lobbyParticipants.single.connected, isTrue);
   });
+
+  test(
+    'public room reports are written privately with a bounded reason',
+    () async {
+      final store = InMemoryOnlineRealtimeStore(initialNowMs: 1000);
+      final host = OnlineTransportClient(
+        store: store,
+        identity: OnlineTransportIdentity(
+          uid: 'host-report',
+          displayName: 'Host',
+        ),
+        random: Random(7),
+      );
+      final room = await host.createRoom(
+        visibility: RoomVisibility.public,
+        mode: 'classic',
+        matchFormat: 'quickTable',
+        roomName: 'Noche de amigos',
+      );
+      final guest = OnlineTransportClient(
+        store: store,
+        identity: OnlineTransportIdentity(
+          uid: 'guest-report',
+          displayName: 'Guest',
+        ),
+        random: Random(8),
+      );
+      await guest.reportPublicRoom(
+        roomId: room.id,
+        reason: 'Sala sospechosa o spam',
+      );
+      final raw = onlineMap(
+        await store.read('onlineV2/rooms/${room.id}/reports'),
+      );
+      expect(raw, hasLength(1));
+      expect(onlineMap(raw.values.single)['reporterUid'], 'guest-report');
+      expect(
+        OnlineRoomRecord.fromJson(
+          await store.read('onlineV2/rooms/${room.id}'),
+        ).roomName,
+        'Noche de amigos',
+      );
+    },
+  );
 }

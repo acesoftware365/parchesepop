@@ -59,6 +59,31 @@ void _roll(OnlineLobby room, String participantId, int zeroBasedDie) {
 }
 
 void main() {
+  test('room name survives lobby serialization and trims whitespace', () {
+    final room = OnlineLobby.create(
+      roomId: 'named-room',
+      roomCode: RoomCode.parse('ABC234'),
+      hostParticipantId: 'host',
+      hostDisplayName: 'Host Player',
+      roomName: '  Noche de amigos  ',
+    );
+    final restored = OnlineLobby.fromJson(room.toJson());
+    expect(restored.roomName, 'Noche de amigos');
+  });
+
+  test('room name rejects oversized metadata', () {
+    expect(
+      () => OnlineLobby.create(
+        roomId: 'named-room',
+        roomCode: RoomCode.parse('ABC234'),
+        hostParticipantId: 'host',
+        hostDisplayName: 'Host Player',
+        roomName: 'x' * 29,
+      ),
+      throwsA(isA<LobbyJsonException>()),
+    );
+  });
+
   group('RoomCode', () {
     test('normalizes pasted codes and rejects ambiguous characters', () {
       expect(RoomCode.parse(' ab-cd 23 ').value, 'ABCD23');
@@ -192,6 +217,48 @@ void main() {
         () => room.join(participantId: 'late', displayName: 'Late Player'),
         throwsA(_lobbyError(LobbyErrorCode.roomNotJoinable)),
       );
+    });
+
+    test('two ready participants can start a Quick Table opening roll', () {
+      final room = _room();
+      room.join(participantId: 'green', displayName: 'Guest');
+      room.setReady(actorParticipantId: 'host', ready: true);
+      room.setReady(actorParticipantId: 'green', ready: true);
+
+      expect(room.occupiedSeatCount, 2);
+      expect(room.canStart, isTrue);
+      final openingRoll = room.startOpeningRoll(actorParticipantId: 'host');
+
+      expect(room.status, RoomStatus.openingRoll);
+      expect(openingRoll.eligibleParticipantIds, [
+        'host',
+        'green',
+        'cpu_ABC234_yellow',
+        'cpu_ABC234_blue',
+      ]);
+      expect(room.participantForSeat(LobbySeatColor.yellow)?.ready, isTrue);
+      expect(room.participantForSeat(LobbySeatColor.blue)?.ready, isTrue);
+    });
+
+    test('three ready participants can start a Quick Table opening roll', () {
+      final room = _room();
+      room.join(participantId: 'green', displayName: 'Guest');
+      room.join(participantId: 'yellow', displayName: 'Guest Two');
+      room.setReady(actorParticipantId: 'host', ready: true);
+      room.setReady(actorParticipantId: 'green', ready: true);
+      room.setReady(actorParticipantId: 'yellow', ready: true);
+
+      expect(room.occupiedSeatCount, 3);
+      expect(room.canStart, isTrue);
+      final openingRoll = room.startOpeningRoll(actorParticipantId: 'host');
+
+      expect(room.status, RoomStatus.openingRoll);
+      expect(openingRoll.eligibleParticipantIds, [
+        'host',
+        'green',
+        'yellow',
+        'cpu_ABC234_blue',
+      ]);
     });
 
     test('requires four connected and ready participants to start', () {

@@ -196,6 +196,7 @@ final class OnlineRoomRecord {
     required this.status,
     required this.mode,
     required this.matchFormat,
+    this.roomName,
     required Map<String, OnlineRoomMemberRecord> members,
     required Map<String, OnlinePresenceRecord> presence,
     required this.revision,
@@ -211,6 +212,10 @@ final class OnlineRoomRecord {
   final RoomStatus status;
   final String mode;
   final String matchFormat;
+
+  /// Optional player-facing name shown in the public directory and lobby.
+  /// Older room snapshots legitimately omit this field.
+  final String? roomName;
   final Map<String, OnlineRoomMemberRecord> members;
   final Map<String, OnlinePresenceRecord> presence;
   final int revision;
@@ -245,6 +250,7 @@ final class OnlineRoomRecord {
     'status': status.name,
     'mode': mode,
     'matchFormat': matchFormat,
+    if (roomName != null && roomName!.isNotEmpty) 'roomName': roomName,
     'members': <String, Object?>{
       for (final entry in members.entries) entry.key: entry.value.toJson(),
     },
@@ -272,6 +278,7 @@ final class OnlineRoomRecord {
       status: _enumValue(RoomStatus.values, map['status'], RoomStatus.waiting),
       mode: _requiredString(map, 'mode'),
       matchFormat: _requiredString(map, 'matchFormat'),
+      roomName: _optionalString(map, 'roomName'),
       members: <String, OnlineRoomMemberRecord>{
         for (final entry in membersRaw.entries)
           entry.key: OnlineRoomMemberRecord.fromJson(
@@ -298,7 +305,9 @@ final class PublicOnlineRoomRecord {
     required this.hostDisplayName,
     required this.mode,
     required this.matchFormat,
+    this.roomName,
     required this.occupiedSeatCount,
+    required this.hostConnected,
     required this.updatedAtMs,
   });
 
@@ -308,7 +317,9 @@ final class PublicOnlineRoomRecord {
   final String hostDisplayName;
   final String mode;
   final String matchFormat;
+  final String? roomName;
   final int occupiedSeatCount;
+  final bool hostConnected;
   final int updatedAtMs;
 
   Map<String, Object?> toJson() => <String, Object?>{
@@ -318,7 +329,9 @@ final class PublicOnlineRoomRecord {
     'hostDisplayName': hostDisplayName,
     'mode': mode,
     'matchFormat': matchFormat,
+    if (roomName != null && roomName!.isNotEmpty) 'roomName': roomName,
     'occupiedSeats': occupiedSeatCount,
+    'hostConnected': hostConnected,
     'updatedAt': updatedAtMs,
   };
 
@@ -331,7 +344,11 @@ final class PublicOnlineRoomRecord {
       hostDisplayName: _requiredString(map, 'hostDisplayName'),
       mode: _requiredString(map, 'mode'),
       matchFormat: _requiredString(map, 'matchFormat'),
+      roomName: _optionalString(map, 'roomName'),
       occupiedSeatCount: _requiredInt(map, 'occupiedSeats'),
+      // Old directory entries did not carry liveness. Treat them as stale so
+      // they cannot expose a JOIN action after a host disconnect.
+      hostConnected: map['hostConnected'] == true,
       updatedAtMs: _requiredInt(map, 'updatedAt'),
     );
   }
@@ -346,7 +363,9 @@ final class PublicOnlineRoomRecord {
       hostDisplayName: host.displayName,
       mode: room.mode,
       matchFormat: room.matchFormat,
+      roomName: room.roomName,
       occupiedSeatCount: room.occupiedSeatCount,
+      hostConnected: room.presenceFor(room.hostUid) == LobbyPresence.connected,
       updatedAtMs: room.updatedAtMs,
     );
   }

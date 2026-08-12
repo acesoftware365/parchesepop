@@ -183,14 +183,25 @@ final class OnlinePresenceLease {
 }
 
 final class OnlineHostRoomLease {
-  const OnlineHostRoomLease._(this._subscriptions);
+  OnlineHostRoomLease._(
+    this._subscriptions,
+    this._maintenanceTimer,
+    this._onClose,
+  );
 
   final List<StreamSubscription<Object?>> _subscriptions;
+  final Timer? _maintenanceTimer;
+  final Future<void> Function()? _onClose;
+  bool _closed = false;
 
   Future<void> close() async {
+    if (_closed) return;
+    _closed = true;
+    _maintenanceTimer?.cancel();
     for (final subscription in _subscriptions) {
       await subscription.cancel();
     }
+    await _onClose?.call();
   }
 }
 
@@ -354,9 +365,11 @@ final class OnlineTransportClient {
     required RoomVisibility visibility,
     required String mode,
     required String matchFormat,
+    String? roomName,
   }) async {
     final cleanMode = _validatedSegment(mode, 'mode');
     final cleanFormat = _validatedSegment(matchFormat, 'matchFormat');
+    final cleanRoomName = _cleanRoomName(roomName);
     final now = await store.serverNowMs();
     final roomId = _stableId(
       'room|${identity.uid}|$now|${_random.nextInt(0x7fffffff)}',
@@ -373,6 +386,7 @@ final class OnlineTransportClient {
       status: RoomStatus.waiting,
       mode: cleanMode,
       matchFormat: cleanFormat,
+      roomName: cleanRoomName,
       members: <String, OnlineRoomMemberRecord>{
         identity.uid: OnlineRoomMemberRecord(
           uid: identity.uid,
@@ -474,6 +488,15 @@ final class OnlineTransportClient {
       throw const OnlineTransportException(
         OnlineTransportErrorCode.invalidRoomStatus,
         'Only waiting rooms accept new players.',
+      );
+    }
+    // A public-room index can outlive the host's process when a phone loses
+    // connectivity. Reject it immediately instead of making a guest wait for
+    // the full admission timeout.
+    if (room.presenceFor(room.hostUid) != LobbyPresence.connected) {
+      throw const OnlineTransportException(
+        OnlineTransportErrorCode.roomNotFound,
+        'The room host is no longer connected.',
       );
     }
     if (!room.members.containsKey(identity.uid) &&
@@ -579,10 +602,30 @@ final class OnlineTransportClient {
         }),
       );
     });
-    return OnlineHostRoomLease._(<StreamSubscription<Object?>>[
-      roomSubscription,
-      requestSubscription,
-    ]);
+
+    Future<void> reconcile() async {
+      final snapshot = await readRoom(cleanRoomId);
+      if (snapshot == null ||
+          snapshot.presenceFor(snapshot.hostUid) != LobbyPresence.connected) {
+        return;
+      }
+      await admitPendingJoinRequests(cleanRoomId);
+    }
+
+    final publicRoomPath = '$_publicRoomsPath/$cleanRoomId';
+    // A process/network disconnect must remove the denormalized public entry;
+    // otherwise other phones can discover a room whose host is gone.
+    await store.setOnDisconnect(publicRoomPath, null);
+    await reportable(reconcile);
+    final maintenanceTimer = Timer.periodic(
+      const Duration(seconds: 2),
+      (_) => unawaited(reportable(reconcile)),
+    );
+    return OnlineHostRoomLease._(
+      <StreamSubscription<Object?>>[roomSubscription, requestSubscription],
+      maintenanceTimer,
+      () => store.cancelOnDisconnect(publicRoomPath),
+    );
   }
 
   /// Host-only admission serializes seat allocation at the room root.
@@ -1016,6 +1059,69 @@ final class OnlineTransportClient {
     return (await readRoom(cleanRoomId))!;
   }
 
+  /// Completes a two- or three-human Quick Table with deterministic CPU seats.
+  ///
+  /// The host performs this while the room is still waiting. The room keeps
+  /// showing the real human count until the host presses start; at that point
+  /// the four board colors are materialized atomically so every client can
+  /// prepare the same four-player engine and the CPU commands have valid
+  /// member/presence paths.
+  Future<OnlineRoomRecord> ensureQuickTableCpuSeats(String roomId) async {
+    final cleanRoomId = _validatedSegment(roomId, 'roomId');
+    final now = await store.serverNowMs();
+    final result = await store.transaction('$_roomsPath/$cleanRoomId', (raw) {
+      if (raw == null) {
+        throw const OnlineTransportException(
+          OnlineTransportErrorCode.roomNotFound,
+          'The room no longer exists.',
+        );
+      }
+      final room = OnlineRoomRecord.fromJson(raw);
+      _requireHost(room);
+      if (room.status != RoomStatus.waiting) {
+        throw const OnlineTransportException(
+          OnlineTransportErrorCode.invalidRoomStatus,
+          'CPU seats can be added only while the room is waiting.',
+        );
+      }
+      if (room.members.length < minimumOnlinePlayers) {
+        throw const OnlineTransportException(
+          OnlineTransportErrorCode.invalidRoomStatus,
+          'At least two players are required to start a Quick Table.',
+        );
+      }
+      final map = onlineMap(raw);
+      final members = onlineMap(map['members']);
+      final presence = onlineMap(map['presence']);
+      final occupied = room.members.values.map((member) => member.seat).toSet();
+      for (final seat in LobbySeatColor.values) {
+        if (occupied.contains(seat)) continue;
+        final uid = cpuParticipantIdForSeat(room.code, seat);
+        members[uid] = OnlineRoomMemberRecord(
+          uid: uid,
+          displayName: cpuDisplayNameForSeat(seat),
+          seat: seat,
+          joinedAtMs: now,
+          ready: true,
+        ).toJson();
+        presence[uid] = OnlinePresenceRecord(
+          uid: uid,
+          presence: LobbyPresence.connected,
+          changedAtMs: now,
+          connectionId: 'cpu_${room.id}',
+        ).toJson();
+        occupied.add(seat);
+      }
+      map
+        ..['members'] = members
+        ..['presence'] = presence
+        ..['revision'] = room.revision + 1
+        ..['updatedAt'] = now;
+      return OnlineStoreTransactionDecision.commit(map);
+    });
+    return OnlineRoomRecord.fromJson(result.value);
+  }
+
   Future<OnlineRoomRecord> updatePrivacy({
     required String roomId,
     required RoomVisibility visibility,
@@ -1032,6 +1138,27 @@ final class OnlineTransportClient {
     });
     await _syncPublicRoom(updated);
     return updated;
+  }
+
+  Future<void> reportPublicRoom({
+    required String roomId,
+    required String reason,
+  }) async {
+    final cleanRoomId = _validatedSegment(roomId, 'roomId');
+    final cleanReason = _cleanReportReason(reason);
+    final now = await store.serverNowMs();
+    final reportId = _stableId(
+      'roomReport|${identity.uid}|$cleanRoomId|$now|${_random.nextInt(0x7fffffff)}',
+      prefix: 'report_',
+    );
+    await store
+        .set('$_roomsPath/$cleanRoomId/reports/$reportId', <String, Object?>{
+          'reportId': reportId,
+          'roomId': cleanRoomId,
+          'reporterUid': identity.uid,
+          'reason': cleanReason,
+          'createdAt': now,
+        });
   }
 
   Future<OnlineRoomRecord> closeRoom(String roomId) async {
@@ -2253,7 +2380,8 @@ final class OnlineTransportClient {
     final path = '$_publicRoomsPath/${room.id}';
     if (!room.isPublic ||
         room.status != RoomStatus.waiting ||
-        !room.isJoinable) {
+        !room.isJoinable ||
+        room.presenceFor(room.hostUid) != LobbyPresence.connected) {
       await store.set(path, null);
       return;
     }
@@ -2265,7 +2393,8 @@ final class OnlineTransportClient {
     for (final value in onlineMap(raw).values) {
       try {
         final record = PublicOnlineRoomRecord.fromJson(value);
-        if (record.occupiedSeatCount < LobbySeatColor.values.length) {
+        if (record.occupiedSeatCount < LobbySeatColor.values.length &&
+            record.hostConnected) {
           records.add(record);
         }
       } on FormatException {
@@ -3009,4 +3138,22 @@ String _validatedDisplayName(String value) {
 String? _cleanOptional(String? value) {
   final clean = value?.trim();
   return clean == null || clean.isEmpty ? null : clean;
+}
+
+String? _cleanRoomName(String? value) {
+  if (value == null) return null;
+  final clean = value.trim();
+  if (clean.isEmpty) return null;
+  if (clean.length > 28) {
+    throw const FormatException('Room names must be 28 characters or fewer.');
+  }
+  return clean;
+}
+
+String _cleanReportReason(String value) {
+  final clean = value.trim();
+  if (clean.isEmpty || clean.length > 64) {
+    throw const FormatException('A report reason is required.');
+  }
+  return clean;
 }

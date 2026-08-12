@@ -1175,6 +1175,39 @@ test('Realtime Database rules enforce the online security contract', async (t) =
     await assertFails(set(pathRef('leader', `onlineV2/rooms/${roomId}`), room));
   });
 
+  await t.test('a Quick Table host may materialize missing CPU seats before start', async () => {
+    await environment.clearDatabase();
+    const now = Date.now();
+    const room = waitingRoom(now, { withGuest: true });
+    room.members.cpu_ABC234_yellow = member('cpu_ABC234_yellow', 'CPU Amarillo', 'yellow', now + 2, true);
+    room.members.cpu_ABC234_blue = member('cpu_ABC234_blue', 'CPU Azul', 'blue', now + 2, true);
+    room.presence.cpu_ABC234_yellow = presence('cpu_ABC234_yellow', now + 2);
+    room.presence.cpu_ABC234_blue = presence('cpu_ABC234_blue', now + 2);
+    room.revision = 2;
+    room.updatedAt = now + 2;
+
+    const base = waitingRoom(now, { withGuest: true });
+    await seed('onlineV2/rooms/room-1', base);
+    const membersOnly = structuredClone(base);
+    membersOnly.members.cpu_ABC234_yellow = room.members.cpu_ABC234_yellow;
+    membersOnly.members.cpu_ABC234_blue = room.members.cpu_ABC234_blue;
+    await assertSucceeds(
+      set(pathRef('host', 'onlineV2/rooms/room-1'), membersOnly),
+    );
+    const complete = structuredClone(membersOnly);
+    complete.presence.cpu_ABC234_yellow = room.presence.cpu_ABC234_yellow;
+    complete.presence.cpu_ABC234_blue = room.presence.cpu_ABC234_blue;
+    await assertSucceeds(
+      set(pathRef('host', 'onlineV2/rooms/room-1'), complete),
+    );
+    const stored = await assertSucceeds(
+      get(pathRef('guest', 'onlineV2/rooms/room-1')),
+    );
+    assert.equal(Object.keys(stored.child('members').val()).length, 4);
+    assert.equal(stored.child('members/cpu_ABC234_yellow/displayName').val(), 'CPU Amarillo');
+    assert.equal(stored.child('presence/cpu_ABC234_blue/state').val(), 'connected');
+  });
+
   await t.test('known room codes and exact join paths work without exposing indexes or active rooms', async () => {
     await environment.clearDatabase();
     const now = Date.now();

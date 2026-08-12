@@ -25,6 +25,7 @@ import 'game_interaction_state.dart';
 import 'mobile_ads.dart';
 import 'firebase_online_transport.dart';
 import 'online_game_sync.dart';
+import 'online_authority.dart' show OnlineCommandRejection;
 import 'online_deep_link.dart';
 import 'online_invite.dart';
 import 'online_lobby.dart';
@@ -93,6 +94,7 @@ class _PlatformGameFeedbackOutput implements GameFeedbackOutput {
     GameHapticCue.strong => HapticFeedback.heavyImpact(),
     GameHapticCue.success => HapticFeedback.mediumImpact(),
     GameHapticCue.celebration => HapticFeedback.vibrate(),
+    GameHapticCue.rollStart => HapticFeedback.mediumImpact(),
   };
 }
 
@@ -1132,10 +1134,25 @@ class _ParchesePopAppState extends State<ParchesePopApp>
               if (languageCode == 'es') return const Locale('es');
               return const Locale('es');
             },
-            builder: (context, child) => MobileAdShell(
-              controller: adsController,
-              child: child ?? const SizedBox.shrink(),
-            ),
+            builder: (context, child) {
+              // Some older Android phones ship with a very large system
+              // font setting. Let it grow a little for accessibility, but
+              // cap it on compact screens so cards, dialogs, and settings
+              // keep their intended hierarchy instead of splitting words or
+              // pushing the primary action below the banner.
+              final media = MediaQuery.of(context);
+              final compactPhone = media.size.shortestSide <= 400;
+              final textScaler = media.textScaler.clamp(
+                maxScaleFactor: compactPhone ? 1.15 : 1.3,
+              );
+              return MediaQuery(
+                data: media.copyWith(textScaler: textScaler),
+                child: MobileAdShell(
+                  controller: adsController,
+                  child: child ?? const SizedBox.shrink(),
+                ),
+              );
+            },
             theme: ThemeData(
               useMaterial3: true,
               colorScheme: ColorScheme.fromSeed(
@@ -2288,12 +2305,23 @@ class PlayHome extends StatelessWidget {
       final compactLandscape =
           viewport.maxHeight < 520 && viewport.maxWidth > viewport.maxHeight;
       final narrow = viewport.maxWidth < 560;
+      // Foldables and older Android phones often report a short logical
+      // viewport once the safe area and adaptive banner are applied. Keep a
+      // little breathing room for the header and utility dock, but never
+      // fall back to a single vertical list of modes on a phone.
+      final ultraCompactPortrait =
+          narrow && !compactLandscape && viewport.maxHeight < 760;
       final densePortrait =
-          narrow && !compactLandscape && viewport.maxHeight < 730;
+          narrow && !compactLandscape && viewport.maxHeight < 820;
       final padding = compactLandscape
           ? const EdgeInsets.fromLTRB(10, 6, 10, 2)
           : narrow
-          ? const EdgeInsets.fromLTRB(14, 14, 14, 16)
+          ? EdgeInsets.fromLTRB(
+              ultraCompactPortrait ? 10 : 14,
+              ultraCompactPortrait ? 7 : 14,
+              ultraCompactPortrait ? 10 : 14,
+              ultraCompactPortrait ? 8 : 16,
+            )
           : const EdgeInsets.fromLTRB(24, 18, 24, 22);
       final availableHeight = math.max(
         0.0,
@@ -2310,9 +2338,13 @@ class PlayHome extends StatelessWidget {
                 // Keep the four primary modes in a predictable 2 × 2 grid.
                 // On phones each card switches to the compact tile treatment
                 // so the two actions remain side by side without scrolling.
-                final twoColumnModes = contentBox.maxWidth >= 340;
+                // 300 logical pixels still gives both cards a comfortable
+                // 140+ px column and keeps small foldable cover displays out
+                // of the scroll-only layout.
                 final compactModeTiles =
                     compactLandscape || contentBox.maxWidth < 620;
+                final twoColumnModes =
+                    compactModeTiles && contentBox.maxWidth >= 300;
                 final quickPopCard = _ModeCard(
                   key: const ValueKey('home-mode-quick-pop'),
                   color: const Color(0xFF7257E9),
@@ -2323,6 +2355,7 @@ class PlayHome extends StatelessWidget {
                   featured: !compactModeTiles,
                   tile: compactModeTiles,
                   dense: densePortrait,
+                  ultraCompact: ultraCompactPortrait,
                   expanded: !compactModeTiles && !compactLandscape,
                   onTap: () => _showQuickPopEntry(context),
                 );
@@ -2334,6 +2367,7 @@ class PlayHome extends StatelessWidget {
                   subtitle: 'Amigos online · crea una sala',
                   tile: compactModeTiles,
                   dense: densePortrait,
+                  ultraCompact: ultraCompactPortrait,
                   expanded: !compactModeTiles && !compactLandscape,
                   onTap: () => _startOnline(context),
                 );
@@ -2345,6 +2379,7 @@ class PlayHome extends StatelessWidget {
                   subtitle: 'Juega contra el CPU',
                   tile: compactModeTiles,
                   dense: densePortrait,
+                  ultraCompact: ultraCompactPortrait,
                   expanded: !compactModeTiles && !compactLandscape,
                   onTap: () => _showCpuDialog(context),
                 );
@@ -2357,6 +2392,7 @@ class PlayHome extends StatelessWidget {
                   badge: '2–4 JUGADORES',
                   tile: compactModeTiles,
                   dense: densePortrait,
+                  ultraCompact: ultraCompactPortrait,
                   expanded: !compactModeTiles && !compactLandscape,
                   onTap: () => _showPassAndPlayDialog(context),
                 );
@@ -2421,25 +2457,14 @@ class PlayHome extends StatelessWidget {
                             ],
                             if (!compactLandscape)
                               _HomeSectionTitle(compact: narrow),
-                            if (!compactLandscape) ...[
-                              const SizedBox(height: 8),
-                              Align(
-                                alignment: Alignment.centerRight,
-                                child: _NewHomePreviewButton(
-                                  onTap: () => Navigator.push<void>(
-                                    context,
-                                    MaterialPageRoute(
-                                      builder: (_) => NewHomePreviewScreen(
-                                        playerName: profile.name,
-                                        wallet: wallet,
-                                      ),
-                                    ),
-                                  ),
-                                ),
-                              ),
-                            ],
                             if (!compactLandscape)
-                              SizedBox(height: narrow ? 10 : 12),
+                              SizedBox(
+                                height: ultraCompactPortrait
+                                    ? 5
+                                    : narrow
+                                    ? 10
+                                    : 12,
+                              ),
                             if (twoColumnModes)
                               Column(
                                 children: [
@@ -2448,27 +2473,31 @@ class PlayHome extends StatelessWidget {
                                       SizedBox(
                                         height: compactLandscape
                                             ? 1
+                                            : ultraCompactPortrait
+                                            ? 5
                                             : densePortrait
-                                            ? 9
+                                            ? 7
                                             : 13,
                                       ),
-                                    _HomeModeGroupLabel(
-                                      label: row == 0 ? 'ONLINE' : 'LOCAL',
-                                      color: row == 0
-                                          ? PopColors.blue
-                                          : PopColors.green,
-                                      icon: row == 0
-                                          ? Icons.public_rounded
-                                          : Icons.home_rounded,
-                                      compact: compactLandscape || narrow,
-                                    ),
-                                    SizedBox(
-                                      height: compactLandscape
-                                          ? 0
-                                          : densePortrait
-                                          ? 5
-                                          : 7,
-                                    ),
+                                    if (!ultraCompactPortrait)
+                                      _HomeModeGroupLabel(
+                                        label: row == 0 ? 'ONLINE' : 'LOCAL',
+                                        color: row == 0
+                                            ? PopColors.blue
+                                            : PopColors.green,
+                                        icon: row == 0
+                                            ? Icons.public_rounded
+                                            : Icons.home_rounded,
+                                        compact: compactLandscape || narrow,
+                                      ),
+                                    if (!ultraCompactPortrait)
+                                      SizedBox(
+                                        height: compactLandscape
+                                            ? 0
+                                            : densePortrait
+                                            ? 5
+                                            : 7,
+                                      ),
                                     Row(
                                       crossAxisAlignment:
                                           CrossAxisAlignment.start,
@@ -2919,613 +2948,6 @@ class PlayHome extends StatelessWidget {
       ),
     );
   }
-}
-
-class _NewHomePreviewButton extends StatelessWidget {
-  const _NewHomePreviewButton({required this.onTap});
-
-  final VoidCallback onTap;
-
-  @override
-  Widget build(BuildContext context) => Semantics(
-    button: true,
-    label: 'New Home',
-    child: OutlinedButton.icon(
-      key: const ValueKey('home-new-home-button'),
-      onPressed: onTap,
-      icon: const Icon(Icons.auto_awesome_rounded, size: 15),
-      label: const Text('New Home'),
-      style: OutlinedButton.styleFrom(
-        foregroundColor: Colors.white,
-        backgroundColor: const Color(0x2607132D),
-        side: BorderSide(color: Colors.white.withValues(alpha: .60)),
-        minimumSize: const Size(0, 34),
-        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
-        tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(18)),
-        textStyle: const TextStyle(
-          fontSize: 11,
-          fontWeight: FontWeight.w900,
-          letterSpacing: .2,
-        ),
-      ),
-    ),
-  );
-}
-
-enum _NewHomeMode { quickPop, quickTable, playCpu, passAndPlay }
-
-class NewHomePreviewScreen extends StatefulWidget {
-  const NewHomePreviewScreen({
-    super.key,
-    required this.playerName,
-    required this.wallet,
-  });
-
-  final String playerName;
-  final WalletController wallet;
-
-  @override
-  State<NewHomePreviewScreen> createState() => _NewHomePreviewScreenState();
-}
-
-class _NewHomePreviewScreenState extends State<NewHomePreviewScreen> {
-  _NewHomeMode selectedMode = _NewHomeMode.quickPop;
-
-  String get _selectedModeLabel => switch (selectedMode) {
-    _NewHomeMode.quickPop => 'Quick Pop',
-    _NewHomeMode.quickTable => 'Quick Table',
-    _NewHomeMode.playCpu => 'Play CPU',
-    _NewHomeMode.passAndPlay => 'Pass & Play',
-  };
-
-  void _previewPlay() {
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Text('Aquí comenzaría $_selectedModeLabel.'),
-        behavior: SnackBarBehavior.floating,
-      ),
-    );
-  }
-
-  @override
-  Widget build(BuildContext context) => Scaffold(
-    backgroundColor: PopColors.navy,
-    body: _HomeArcadeBackdrop(
-      animation: const AlwaysStoppedAnimation<double>(1),
-      child: SafeArea(
-        child: LayoutBuilder(
-          builder: (context, viewport) {
-            final narrow = viewport.maxWidth < 560;
-            final contentWidth = math.min(viewport.maxWidth, 760.0);
-            final name = widget.playerName.trim().isEmpty
-                ? 'Jugador'
-                : widget.playerName.trim();
-            return SingleChildScrollView(
-              padding: EdgeInsets.fromLTRB(
-                narrow ? 14 : 24,
-                narrow ? 10 : 18,
-                narrow ? 14 : 24,
-                24,
-              ),
-              child: Center(
-                child: ConstrainedBox(
-                  constraints: BoxConstraints(maxWidth: contentWidth),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.stretch,
-                    children: [
-                      Row(
-                        children: [
-                          Container(
-                            decoration: BoxDecoration(
-                              color: Colors.white.withValues(alpha: .14),
-                              shape: BoxShape.circle,
-                              border: Border.all(
-                                color: Colors.white.withValues(alpha: .40),
-                              ),
-                            ),
-                            child: IconButton(
-                              key: const ValueKey('new-home-preview-back'),
-                              tooltip: 'Volver',
-                              onPressed: () => Navigator.pop(context),
-                              icon: const Icon(
-                                Icons.arrow_back_rounded,
-                                color: Colors.white,
-                              ),
-                            ),
-                          ),
-                          const SizedBox(width: 10),
-                          const Expanded(
-                            child: Column(
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: [
-                                Text(
-                                  'NEW HOME',
-                                  style: TextStyle(
-                                    color: Colors.white,
-                                    fontSize: 18,
-                                    fontWeight: FontWeight.w900,
-                                    letterSpacing: 1.1,
-                                  ),
-                                ),
-                                SizedBox(height: 2),
-                                Text(
-                                  'Vista previa del nuevo inicio',
-                                  style: TextStyle(
-                                    color: Color(0xDCE7EEFF),
-                                    fontSize: 11,
-                                    fontWeight: FontWeight.w700,
-                                  ),
-                                ),
-                              ],
-                            ),
-                          ),
-                          _CoinPill(wallet: widget.wallet),
-                          const SizedBox(width: 8),
-                          const Icon(
-                            Icons.visibility_rounded,
-                            color: PopColors.yellow,
-                            size: 22,
-                          ),
-                        ],
-                      ),
-                      const SizedBox(height: 14),
-                      _NewHomeHeroCard(
-                        playerName: name,
-                        selectedModeLabel: _selectedModeLabel,
-                        onPlay: _previewPlay,
-                      ),
-                      const SizedBox(height: 16),
-                      const _NewHomeSectionLabel(
-                        label: 'ONLINE',
-                        icon: Icons.public_rounded,
-                        color: PopColors.blue,
-                      ),
-                      const SizedBox(height: 8),
-                      _NewHomeModeGrid(
-                        narrow: narrow,
-                        selectedMode: selectedMode,
-                        onSelected: (mode) =>
-                            setState(() => selectedMode = mode),
-                        modes: const [
-                          _NewHomeModeCardData(
-                            mode: _NewHomeMode.quickPop,
-                            color: Color(0xFF7257E9),
-                            icon: Icons.bolt_rounded,
-                            title: 'QUICK POP',
-                            subtitle: 'Partida casual online',
-                            detail: 'CPU si no encuentra jugador',
-                          ),
-                          _NewHomeModeCardData(
-                            mode: _NewHomeMode.quickTable,
-                            color: PopColors.blue,
-                            icon: Icons.groups_rounded,
-                            title: 'QUICK TABLE',
-                            subtitle: 'Juega online con amigos',
-                            detail: 'Crea o únete a una sala',
-                          ),
-                        ],
-                      ),
-                      const SizedBox(height: 16),
-                      const _NewHomeSectionLabel(
-                        label: 'LOCAL',
-                        icon: Icons.home_rounded,
-                        color: PopColors.green,
-                      ),
-                      const SizedBox(height: 8),
-                      _NewHomeModeGrid(
-                        narrow: narrow,
-                        selectedMode: selectedMode,
-                        onSelected: (mode) =>
-                            setState(() => selectedMode = mode),
-                        modes: const [
-                          _NewHomeModeCardData(
-                            mode: _NewHomeMode.playCpu,
-                            color: PopColors.red,
-                            icon: Icons.smart_toy_rounded,
-                            title: 'PLAY CPU',
-                            subtitle: 'Juega contra el CPU',
-                            detail: 'Elige dificultad y modo',
-                          ),
-                          _NewHomeModeCardData(
-                            mode: _NewHomeMode.passAndPlay,
-                            color: PopColors.green,
-                            icon: Icons.swap_horiz_rounded,
-                            title: 'PASS & PLAY',
-                            subtitle: 'Pasa el teléfono',
-                            detail: '2–4 jugadores en un dispositivo',
-                          ),
-                        ],
-                      ),
-                      const SizedBox(height: 16),
-                      const _NewHomeUtilityStrip(),
-                    ],
-                  ),
-                ),
-              ),
-            );
-          },
-        ),
-      ),
-    ),
-  );
-}
-
-class _NewHomeHeroCard extends StatelessWidget {
-  const _NewHomeHeroCard({
-    required this.playerName,
-    required this.selectedModeLabel,
-    required this.onPlay,
-  });
-
-  final String playerName;
-  final String selectedModeLabel;
-  final VoidCallback onPlay;
-
-  @override
-  Widget build(BuildContext context) => Container(
-    key: const ValueKey('new-home-preview-hero'),
-    padding: const EdgeInsets.fromLTRB(18, 18, 18, 16),
-    decoration: BoxDecoration(
-      gradient: const LinearGradient(
-        begin: Alignment.topLeft,
-        end: Alignment.bottomRight,
-        colors: [Color(0xFF2B8AF0), Color(0xFF7048EF)],
-      ),
-      borderRadius: BorderRadius.circular(26),
-      border: Border.all(color: Colors.white.withValues(alpha: .76), width: 2),
-      boxShadow: const [
-        BoxShadow(
-          color: Color(0x5507132D),
-          blurRadius: 16,
-          offset: Offset(0, 9),
-        ),
-      ],
-    ),
-    child: Column(
-      crossAxisAlignment: CrossAxisAlignment.stretch,
-      children: [
-        Row(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Container(
-              width: 54,
-              height: 54,
-              decoration: BoxDecoration(
-                color: PopColors.yellow,
-                shape: BoxShape.circle,
-                border: Border.all(color: Colors.white, width: 3),
-              ),
-              child: const Icon(
-                Icons.play_arrow_rounded,
-                color: PopColors.navy,
-                size: 34,
-              ),
-            ),
-            const SizedBox(width: 12),
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    '¡Hola, $playerName!',
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: const TextStyle(
-                      color: Colors.white,
-                      fontSize: 22,
-                      fontWeight: FontWeight.w900,
-                    ),
-                  ),
-                  const SizedBox(height: 3),
-                  const Text(
-                    'Tu próxima partida está a un toque.',
-                    style: TextStyle(
-                      color: Color(0xEAF5F8FF),
-                      fontSize: 13,
-                      fontWeight: FontWeight.w700,
-                    ),
-                  ),
-                ],
-              ),
-            ),
-          ],
-        ),
-        const SizedBox(height: 14),
-        Text(
-          'Modo seleccionado: $selectedModeLabel',
-          style: const TextStyle(
-            color: Color(0xFFF6F8FF),
-            fontSize: 12,
-            fontWeight: FontWeight.w800,
-          ),
-        ),
-        const SizedBox(height: 9),
-        SizedBox(
-          height: 48,
-          child: FilledButton.icon(
-            key: const ValueKey('new-home-preview-play'),
-            onPressed: onPlay,
-            icon: const Icon(Icons.play_circle_fill_rounded),
-            label: const Text(
-              'JUGAR AHORA',
-              style: TextStyle(fontWeight: FontWeight.w900),
-            ),
-            style: FilledButton.styleFrom(
-              backgroundColor: Colors.white,
-              foregroundColor: PopColors.navy,
-              shape: RoundedRectangleBorder(
-                borderRadius: BorderRadius.circular(16),
-              ),
-            ),
-          ),
-        ),
-      ],
-    ),
-  );
-}
-
-class _NewHomeSectionLabel extends StatelessWidget {
-  const _NewHomeSectionLabel({
-    required this.label,
-    required this.icon,
-    required this.color,
-  });
-
-  final String label;
-  final IconData icon;
-  final Color color;
-
-  @override
-  Widget build(BuildContext context) => Row(
-    children: [
-      Icon(icon, color: color, size: 18),
-      const SizedBox(width: 7),
-      Text(
-        label,
-        style: const TextStyle(
-          color: Colors.white,
-          fontSize: 12,
-          fontWeight: FontWeight.w900,
-          letterSpacing: 1.2,
-        ),
-      ),
-      const SizedBox(width: 9),
-      Expanded(
-        child: Container(
-          height: 2,
-          decoration: BoxDecoration(
-            gradient: LinearGradient(
-              colors: [color.withValues(alpha: .65), Colors.transparent],
-            ),
-          ),
-        ),
-      ),
-    ],
-  );
-}
-
-class _NewHomeModeCardData {
-  const _NewHomeModeCardData({
-    required this.mode,
-    required this.color,
-    required this.icon,
-    required this.title,
-    required this.subtitle,
-    required this.detail,
-  });
-
-  final _NewHomeMode mode;
-  final Color color;
-  final IconData icon;
-  final String title;
-  final String subtitle;
-  final String detail;
-}
-
-class _NewHomeModeGrid extends StatelessWidget {
-  const _NewHomeModeGrid({
-    required this.narrow,
-    required this.selectedMode,
-    required this.onSelected,
-    required this.modes,
-  });
-
-  final bool narrow;
-  final _NewHomeMode selectedMode;
-  final ValueChanged<_NewHomeMode> onSelected;
-  final List<_NewHomeModeCardData> modes;
-
-  @override
-  Widget build(BuildContext context) {
-    return LayoutBuilder(
-      builder: (context, box) {
-        final twoColumns = !narrow && box.maxWidth >= 480;
-        final cardWidth = twoColumns ? (box.maxWidth - 12) / 2 : box.maxWidth;
-        return Wrap(
-          spacing: 12,
-          runSpacing: 12,
-          children: [
-            for (final data in modes)
-              SizedBox(
-                width: cardWidth,
-                child: _NewHomeModeCard(
-                  data: data,
-                  selected: selectedMode == data.mode,
-                  onTap: () => onSelected(data.mode),
-                ),
-              ),
-          ],
-        );
-      },
-    );
-  }
-}
-
-class _NewHomeModeCard extends StatelessWidget {
-  const _NewHomeModeCard({
-    required this.data,
-    required this.selected,
-    required this.onTap,
-  });
-
-  final _NewHomeModeCardData data;
-  final bool selected;
-  final VoidCallback onTap;
-
-  @override
-  Widget build(BuildContext context) => Semantics(
-    button: true,
-    selected: selected,
-    label: '${data.title}: ${data.subtitle}',
-    child: Material(
-      color: Colors.transparent,
-      borderRadius: BorderRadius.circular(21),
-      clipBehavior: Clip.antiAlias,
-      child: InkWell(
-        key: ValueKey('new-home-mode-${data.mode.name}'),
-        onTap: onTap,
-        child: AnimatedContainer(
-          duration: const Duration(milliseconds: 180),
-          padding: const EdgeInsets.all(13),
-          decoration: BoxDecoration(
-            gradient: LinearGradient(
-              begin: Alignment.topLeft,
-              end: Alignment.bottomRight,
-              colors: [
-                Color.lerp(data.color, Colors.white, selected ? .10 : .02)!,
-                Color.lerp(data.color, PopColors.navy, .18)!,
-              ],
-            ),
-            borderRadius: BorderRadius.circular(21),
-            border: Border.all(
-              color: selected
-                  ? Colors.white
-                  : Colors.white.withValues(alpha: .32),
-              width: selected ? 2.5 : 1.5,
-            ),
-            boxShadow: [
-              BoxShadow(
-                color: data.color.withValues(alpha: selected ? .38 : .16),
-                blurRadius: selected ? 14 : 8,
-                offset: const Offset(0, 6),
-              ),
-            ],
-          ),
-          child: Row(
-            children: [
-              Container(
-                width: 44,
-                height: 44,
-                decoration: BoxDecoration(
-                  color: Colors.white.withValues(alpha: .90),
-                  borderRadius: BorderRadius.circular(14),
-                ),
-                child: Icon(data.icon, color: data.color, size: 25),
-              ),
-              const SizedBox(width: 10),
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      data.title,
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: const TextStyle(
-                        color: Colors.white,
-                        fontSize: 14,
-                        fontWeight: FontWeight.w900,
-                      ),
-                    ),
-                    const SizedBox(height: 3),
-                    Text(
-                      data.subtitle,
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: const TextStyle(
-                        color: Color(0xF0F4F7FF),
-                        fontSize: 11,
-                        fontWeight: FontWeight.w700,
-                      ),
-                    ),
-                    const SizedBox(height: 2),
-                    Text(
-                      data.detail,
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: TextStyle(
-                        color: Colors.white.withValues(alpha: .80),
-                        fontSize: 9,
-                        fontWeight: FontWeight.w700,
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-              const SizedBox(width: 5),
-              Icon(
-                selected
-                    ? Icons.check_circle_rounded
-                    : Icons.arrow_forward_rounded,
-                color: Colors.white,
-                size: 22,
-              ),
-            ],
-          ),
-        ),
-      ),
-    ),
-  );
-}
-
-class _NewHomeUtilityStrip extends StatelessWidget {
-  const _NewHomeUtilityStrip();
-
-  @override
-  Widget build(BuildContext context) => Container(
-    padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 9),
-    decoration: BoxDecoration(
-      color: const Color(0xFF071B40).withValues(alpha: .66),
-      borderRadius: BorderRadius.circular(18),
-      border: Border.all(color: Colors.white.withValues(alpha: .24)),
-    ),
-    child: const Row(
-      mainAxisAlignment: MainAxisAlignment.spaceEvenly,
-      children: [
-        _NewHomeUtilityItem(icon: Icons.storefront_rounded, label: 'Tienda'),
-        _NewHomeUtilityItem(
-          icon: Icons.emoji_events_rounded,
-          label: 'Misiones',
-        ),
-        _NewHomeUtilityItem(icon: Icons.help_rounded, label: 'Cómo jugar'),
-      ],
-    ),
-  );
-}
-
-class _NewHomeUtilityItem extends StatelessWidget {
-  const _NewHomeUtilityItem({required this.icon, required this.label});
-
-  final IconData icon;
-  final String label;
-
-  @override
-  Widget build(BuildContext context) => Row(
-    mainAxisSize: MainAxisSize.min,
-    children: [
-      Icon(icon, color: PopColors.yellow, size: 17),
-      const SizedBox(width: 5),
-      Text(
-        label,
-        style: const TextStyle(
-          color: Colors.white,
-          fontSize: 10,
-          fontWeight: FontWeight.w800,
-        ),
-      ),
-    ],
-  );
 }
 
 enum _QuickTableEntryChoice { online }
@@ -5196,6 +4618,7 @@ class _GameModeChoices extends StatelessWidget {
           title: 'Tradicional',
           description: 'Reglas clásicas, sin cubos, objetos ni trampas.',
           badge: 'CLÁSICO',
+          compact: !horizontal,
           onTap: () => onSelected(GameMode.traditional),
         ),
         _CpuChoiceCard(
@@ -5205,6 +4628,7 @@ class _GameModeChoices extends StatelessWidget {
           title: 'Caos',
           description: 'Cubos sorpresa, poderes, trampas y efectos especiales.',
           badge: 'MÁS ACCIÓN',
+          compact: !horizontal,
           onTap: () => onSelected(GameMode.chaos),
         ),
       ];
@@ -5350,7 +4774,7 @@ class _CpuChoiceCard extends StatelessWidget {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  PopText(
+                  _AutoFitSingleLineText(
                     title,
                     style: TextStyle(
                       color: Colors.white,
@@ -5669,7 +5093,7 @@ class _TutorialStarterButton extends StatelessWidget {
                 mainAxisSize: MainAxisSize.min,
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  PopText(
+                  _AutoFitSingleLineText(
                     'TUTORIAL JUGABLE',
                     style: TextStyle(
                       color: Colors.white,
@@ -5677,10 +5101,8 @@ class _TutorialStarterButton extends StatelessWidget {
                       fontSize: 12,
                     ),
                   ),
-                  PopText(
+                  _AutoFitSingleLineText(
                     'Aprende dentro de tu primera partida',
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
                     style: TextStyle(
                       color: Color(0xFFE7FFF4),
                       fontSize: 10,
@@ -6222,6 +5644,7 @@ class _ModeCard extends StatefulWidget {
     this.tile = false,
     this.expanded = false,
     this.dense = false,
+    this.ultraCompact = false,
   });
   final Color color;
   final IconData icon;
@@ -6233,6 +5656,7 @@ class _ModeCard extends StatefulWidget {
   final bool tile;
   final bool expanded;
   final bool dense;
+  final bool ultraCompact;
 
   @override
   State<_ModeCard> createState() => _ModeCardState();
@@ -6249,7 +5673,11 @@ class _ModeCardState extends State<_ModeCard> {
     final minHeight = compact
         ? (widget.tile ? 58.0 : 78.0)
         : widget.tile
-        ? (widget.dense ? 128.0 : 146.0)
+        ? (widget.ultraCompact
+              ? 104.0
+              : widget.dense
+              ? 128.0
+              : 146.0)
         : widget.featured && widget.dense
         ? 116.0
         : widget.dense
@@ -6335,6 +5763,8 @@ class _ModeCardState extends State<_ModeCard> {
                             padding: EdgeInsets.all(
                               compact
                                   ? 4
+                                  : widget.ultraCompact
+                                  ? 4
                                   : widget.dense
                                   ? 12
                                   : narrow
@@ -6353,13 +5783,17 @@ class _ModeCardState extends State<_ModeCard> {
                                             icon: widget.icon,
                                             size: compact
                                                 ? 25
+                                                : widget.ultraCompact
+                                                ? 39
                                                 : widget.dense
                                                 ? 43
                                                 : 49,
                                           ),
-                                          const Spacer(),
+                                          if (!widget.ultraCompact)
+                                            const Spacer(),
                                           _ModePlayPill(
                                             color: dark,
+                                            compact: compact,
                                             iconOnly: true,
                                           ),
                                         ],
@@ -6373,7 +5807,11 @@ class _ModeCardState extends State<_ModeCard> {
                                             ? 16
                                             : 18,
                                       ),
-                                      SizedBox(height: compact ? 1 : 5),
+                                      SizedBox(
+                                        height: compact || widget.ultraCompact
+                                            ? 1
+                                            : 5,
+                                      ),
                                       PopText(
                                         appTranslate(context, widget.subtitle),
                                         maxLines: compact ? 1 : 2,
@@ -6382,6 +5820,8 @@ class _ModeCardState extends State<_ModeCard> {
                                           color: const Color(0xFFF4F7FF),
                                           fontSize: compact
                                               ? 7
+                                              : widget.ultraCompact
+                                              ? 8.5
                                               : widget.dense
                                               ? 9.5
                                               : 10.5,
@@ -7796,10 +7236,17 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
   bool diceThrowInProgress = false;
   int diceThrowSerial = 0;
   (int, int)? diceThrowResult;
+  // A network move can take one or two realtime snapshots to settle. Keep a
+  // single request in flight so a fast double tap cannot submit the same
+  // bonus move against two different revisions.
+  bool onlineMoveSubmitting = false;
   Timer? diceThrowTimer;
   Timer? hostRecoveryUiTimer;
+  Timer? screenAwakeRefreshTimer;
   StreamSubscription<OnlineSafeChatMessage>? onlineSafeChatSubscription;
   bool hostRecoveryRetrying = false;
+  bool screenAwakeRequested = false;
+  Future<void> screenAwakeOperation = Future<void>.value();
 
   /// The local seat is red for legacy CPU/tutorial matches, but an online
   /// room can assign this device any of the four clockwise colors.
@@ -8000,7 +7447,10 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
     super.initState();
     matchElapsed = widget.initialElapsed;
     WidgetsBinding.instance.addObserver(this);
-    unawaited(WakelockPlus.enable());
+    _keepScreenAwake();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) _keepScreenAwake();
+    });
     final level = widget.opponent.contains('Experto')
         ? 'Experto'
         : widget.opponent.contains('Fácil')
@@ -8222,6 +7672,45 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
     if (mounted) setState(() {});
   }
 
+  /// Keeps the display awake only while this match is the active route.
+  ///
+  /// Android can attach the activity/plugin a fraction after the widget is
+  /// created, so the request is reasserted after the first frame and while
+  /// the match remains open. This does not change the player's brightness
+  /// preference; it only prevents the display from dimming or sleeping.
+  void _keepScreenAwake() {
+    screenAwakeRequested = true;
+    screenAwakeRefreshTimer ??= Timer.periodic(const Duration(seconds: 15), (
+      _,
+    ) {
+      if (!mounted || !screenAwakeRequested) return;
+      _queueScreenAwake(true);
+    });
+    _queueScreenAwake(true);
+  }
+
+  void _allowScreenSleep() {
+    screenAwakeRequested = false;
+    screenAwakeRefreshTimer?.cancel();
+    screenAwakeRefreshTimer = null;
+    _queueScreenAwake(false);
+  }
+
+  void _queueScreenAwake(bool enabled) {
+    // Serialize enable/disable calls so a delayed platform response cannot
+    // re-enable the lock after the player has already left the match.
+    screenAwakeOperation = screenAwakeOperation.then((_) async {
+      if (enabled && (!mounted || !screenAwakeRequested)) return;
+      try {
+        await WakelockPlus.toggle(enable: enabled);
+      } catch (error) {
+        // Desktop/test hosts may not expose the native channel; mobile builds
+        // still receive the platform implementation from wakelock_plus.
+        debugPrint('Screen keep-awake request failed: $error');
+      }
+    });
+  }
+
   void _onOnlineSyncChanged() {
     if (!mounted) return;
     final sync = widget.onlineGameSync;
@@ -8305,7 +7794,7 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
   @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
-    unawaited(WakelockPlus.disable());
+    _allowScreenSleep();
     victoryTimer?.cancel();
     finalReturnTimer?.cancel();
     chatTimer?.cancel();
@@ -8332,6 +7821,7 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
         state == AppLifecycleState.hidden ||
         state == AppLifecycleState.detached;
     if (isLeaving) {
+      _allowScreenSleep();
       if (state == AppLifecycleState.detached) {
         if (engine.gameOver) {
           _logMatchCompleted(placement: engine.placementFor(_localPlayerColor));
@@ -8360,6 +7850,7 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
       return;
     }
     if (state == AppLifecycleState.resumed) {
+      _keepScreenAwake();
       rollGuideAppActive = true;
       localCpuTakeoverActive = false;
       if (widget.onlineGameSync case final sync?) {
@@ -8472,6 +7963,10 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
         engine.effectResolving) {
       return;
     }
+    // Do this at touch time instead of waiting for the engine listener. The
+    // dice guide and the actual dice share this callback, so both "Roll" and
+    // "Shake it" provide an immediate, noticeable response.
+    feedbackController.playInputHaptic(GameHapticCue.rollStart);
     final reduceMotion =
         MediaQuery.maybeOf(context)?.disableAnimations ?? false;
     _cancelRollGuide(notify: false);
@@ -8596,19 +8091,116 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
     required int die,
     required bool usesAllDice,
   }) async {
+    if (onlineMoveSubmitting) return;
+    if (mounted) setState(() => onlineMoveSubmitting = true);
+    OnlineGameCommandResultRecord? result;
     try {
-      final result = usesAllDice
-          ? await sync.submitMoveAll(tokenId: tokenId)
-          : await sync.submitMove(tokenId: tokenId, die: die);
-      await _waitForOnlineState(sync, result.stateRevision);
-      if (!result.accepted) {
+      for (var attempt = 0; attempt < 3; attempt++) {
+        final submittedAuthorityRevision = sync.revision;
+        result = usesAllDice
+            ? await sync.submitMoveAll(tokenId: tokenId)
+            : await sync.submitMove(tokenId: tokenId, die: die);
+        await _waitForOnlineState(sync, result.stateRevision);
+        if (result.accepted) return;
+
+        // A capture publishes a new checkpoint and may still be completing a
+        // short board/effect transition. If the tap crossed that boundary,
+        // refresh the authoritative revision and retry the same verified
+        // command once or twice. Rejections that mean the move itself is no
+        // longer legal are never retried.
+        final retryable =
+            result.rejection == OnlineCommandRejection.staleRevision ||
+            result.rejection == OnlineCommandRejection.actionInProgress;
+        if (!retryable || attempt == 2) break;
+        if (result.rejection == OnlineCommandRejection.staleRevision) {
+          await _waitForOnlineAuthorityRevision(
+            sync,
+            math.max(submittedAuthorityRevision + 1, result.authorityRevision),
+          );
+        }
+        await _waitForOnlineMoveReady(sync);
+        if (!_onlineMoveStillLegal(sync, tokenId, die, usesAllDice)) break;
+      }
+      final completed = result;
+      if (completed == null || !completed.accepted) {
         throw OnlineGameSyncException(
-          'El servidor rechazó el movimiento: ${result.rejection?.name ?? 'acción inválida'}.',
+          'El servidor rechazó el movimiento: ${completed?.rejection?.name ?? 'acción inválida'}.',
         );
       }
     } catch (error) {
-      if (mounted) _showOnlineActionError(error);
+      if (mounted) {
+        _restoreOnlineMoveSelection(sync, tokenId, die, usesAllDice);
+        _showOnlineActionError(error);
+      }
+    } finally {
+      if (mounted) setState(() => onlineMoveSubmitting = false);
     }
+  }
+
+  Future<void> _waitForOnlineAuthorityRevision(
+    OnlineGameSyncClient sync,
+    int requiredRevision,
+  ) async {
+    if (sync.revision >= requiredRevision) return;
+    final completer = Completer<void>();
+    void listener() {
+      if (sync.revision >= requiredRevision && !completer.isCompleted) {
+        completer.complete();
+      }
+    }
+
+    sync.addListener(listener);
+    try {
+      await completer.future.timeout(const Duration(seconds: 3));
+    } finally {
+      sync.removeListener(listener);
+    }
+  }
+
+  Future<void> _waitForOnlineMoveReady(OnlineGameSyncClient sync) async {
+    while (sync.engine.effectResolving) {
+      final nextRevision = sync.stateRevision + 1;
+      try {
+        await _waitForOnlineState(sync, nextRevision);
+      } on TimeoutException {
+        return;
+      }
+    }
+  }
+
+  bool _onlineMoveStillLegal(
+    OnlineGameSyncClient sync,
+    int tokenId,
+    int die,
+    bool usesAllDice,
+  ) {
+    if (sync.connectionState != OnlineGameConnectionState.connected ||
+        !_isLocallyControlledTurn ||
+        engine.gameOver ||
+        !engine.hasRolled ||
+        engine.effectResolving ||
+        tokenId < 0 ||
+        tokenId >= engine.currentPlayer.tokens.length) {
+      return false;
+    }
+    final token = engine.currentPlayer.tokens[tokenId];
+    return usesAllDice
+        ? engine.canMoveUsingAllDice(token)
+        : engine.remainingDice.contains(die) && engine.canMove(token, die);
+  }
+
+  void _restoreOnlineMoveSelection(
+    OnlineGameSyncClient sync,
+    int tokenId,
+    int die,
+    bool usesAllDice,
+  ) {
+    if (!mounted || !_onlineMoveStillLegal(sync, tokenId, die, usesAllDice)) {
+      return;
+    }
+    setState(() {
+      selectedToken = engine.currentPlayer.tokens[tokenId];
+    });
   }
 
   void _useHeldPowerFromHud() {
@@ -9903,6 +9495,7 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
   void _moveSelectedToken(int die) {
     final token = selectedToken;
     if (token == null ||
+        onlineMoveSubmitting ||
         engine.effectResolving ||
         !_tutorialAllowsMove(token, die) ||
         !engine.legalDiceFor(token).contains(die)) {
@@ -9927,6 +9520,7 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
   void _moveSelectedTokenUsingAllDice() {
     final token = selectedToken;
     if (token == null ||
+        onlineMoveSubmitting ||
         engine.effectResolving ||
         !_tutorialAllowsMove(
           token,

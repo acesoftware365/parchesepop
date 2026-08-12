@@ -7,7 +7,7 @@ import 'game_engine.dart';
 /// The controller deliberately describes intent instead of importing a
 /// platform haptics API. The UI layer can map these levels to iOS/Android
 /// feedback while tests remain deterministic.
-enum GameHapticCue { light, calm, strong, success, celebration }
+enum GameHapticCue { light, calm, strong, success, celebration, rollStart }
 
 abstract interface class GameFeedbackOutput {
   Future<void> playSound(GameEventType eventType);
@@ -39,6 +39,21 @@ class GameFeedbackController {
   Future<void> _operationTail = Future<void>.value();
 
   int get lastSequence => _lastSequence;
+
+  /// Gives immediate feedback for a direct player input, before the engine
+  /// publishes the resulting roll event. This keeps the dice/"Shake it"
+  /// interaction responsive while still allowing the event pipeline to play
+  /// the result feedback afterwards.
+  void playInputHaptic(GameHapticCue cue) {
+    if (!hapticsEnabled) return;
+    final operation = output.playHaptic(cue);
+    unawaited(
+      operation.then<void>(
+        (_) {},
+        onError: (Object error, StackTrace stack) {},
+      ),
+    );
+  }
 
   Future<void> process(Iterable<GameEvent> events) {
     final snapshot = List<GameEvent>.unmodifiable(events);

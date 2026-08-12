@@ -26,6 +26,7 @@ class PublicRoomSummary {
     required this.hostDisplayName,
     required this.mode,
     required this.occupiedSeats,
+    this.roomName,
   }) : assert(occupiedSeats >= 1 && occupiedSeats <= 4);
 
   final String roomId;
@@ -33,6 +34,7 @@ class PublicRoomSummary {
   final String hostDisplayName;
   final OnlineRoomGameMode mode;
   final int occupiedSeats;
+  final String? roomName;
 }
 
 /// Backend-agnostic boundary used by the mobile room UI.
@@ -53,6 +55,15 @@ abstract interface class OnlineRoomController implements Listenable {
   Future<void> createRoom({
     required OnlineRoomGameMode mode,
     required RoomVisibility visibility,
+    String? roomName,
+  });
+
+  /// Reports a public room for moderation. The backend should rate-limit and
+  /// deduplicate reports; the UI never exposes reporter identity to other
+  /// players.
+  Future<void> reportPublicRoom({
+    required String roomId,
+    required String reason,
   });
 
   Future<void> cancelPendingCreate();
@@ -103,8 +114,9 @@ class QuickTableHubScreen extends StatelessWidget {
   Widget build(BuildContext context) => Scaffold(
     backgroundColor: _RoomColors.cloud,
     appBar: AppBar(
-      backgroundColor: Colors.white,
-      foregroundColor: _RoomColors.navy,
+      backgroundColor: _RoomColors.navy,
+      foregroundColor: Colors.white,
+      surfaceTintColor: Colors.transparent,
       title: const PopText(
         'MESA RÁPIDA',
         style: TextStyle(fontWeight: FontWeight.w900),
@@ -148,7 +160,7 @@ class QuickTableHubScreen extends StatelessWidget {
                           color: _RoomColors.blue,
                           icon: Icons.add_home_work_rounded,
                           title: 'CREAR SALA',
-                          subtitle: 'Pública o privada · 4 jugadores',
+                          subtitle: 'Pública o privada · 2–4 jugadores',
                           onTap: () => _open(
                             context,
                             CreateRoomScreen(
@@ -236,6 +248,7 @@ class CreateRoomScreen extends StatefulWidget {
 }
 
 class _CreateRoomScreenState extends State<CreateRoomScreen> {
+  final roomNameController = TextEditingController();
   OnlineRoomGameMode mode = OnlineRoomGameMode.classic;
   RoomVisibility visibility = RoomVisibility.private;
   bool submitting = false;
@@ -257,6 +270,7 @@ class _CreateRoomScreenState extends State<CreateRoomScreen> {
 
   @override
   void dispose() {
+    roomNameController.dispose();
     if (submitting && !createTerminalLogged) {
       createTerminalLogged = true;
       unawaited(_cancelPendingRoomCreate(widget.controller));
@@ -283,7 +297,12 @@ class _CreateRoomScreenState extends State<CreateRoomScreen> {
     },
     child: Scaffold(
       backgroundColor: _RoomColors.cloud,
-      appBar: AppBar(title: const PopText('CREAR SALA')),
+      appBar: AppBar(
+        backgroundColor: _RoomColors.navy,
+        foregroundColor: Colors.white,
+        surfaceTintColor: Colors.transparent,
+        title: const PopText('CREAR SALA'),
+      ),
       body: SafeArea(
         child: Padding(
           padding: const EdgeInsets.fromLTRB(18, 18, 18, 14),
@@ -316,6 +335,30 @@ class _CreateRoomScreenState extends State<CreateRoomScreen> {
                 showSelectedIcon: false,
                 style: const ButtonStyle(
                   visualDensity: VisualDensity(vertical: 2),
+                ),
+              ),
+              const SizedBox(height: 18),
+              const _SectionLabel(
+                icon: Icons.edit_rounded,
+                label: 'NOMBRE DE LA SALA',
+              ),
+              const SizedBox(height: 8),
+              TextField(
+                key: const ValueKey('create-room-name-field'),
+                controller: roomNameController,
+                enabled: !submitting,
+                maxLength: 28,
+                textCapitalization: TextCapitalization.sentences,
+                decoration: InputDecoration(
+                  hintText: 'Ej. Noche de amigos',
+                  helperText: 'Opcional · visible en salas públicas',
+                  filled: true,
+                  fillColor: Colors.white,
+                  prefixIcon: const Icon(Icons.label_outline_rounded),
+                  border: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(16),
+                    borderSide: BorderSide.none,
+                  ),
                 ),
               ),
               const SizedBox(height: 24),
@@ -409,7 +452,11 @@ class _CreateRoomScreenState extends State<CreateRoomScreen> {
     setState(() => submitting = true);
     try {
       await widget.controller
-          .createRoom(mode: mode, visibility: visibility)
+          .createRoom(
+            mode: mode,
+            visibility: visibility,
+            roomName: _cleanRoomName(roomNameController.text),
+          )
           .timeout(
             widget.createTimeout,
             onTimeout: () async {
@@ -550,7 +597,12 @@ class _JoinRoomCodeScreenState extends State<JoinRoomCodeScreen> {
   @override
   Widget build(BuildContext context) => Scaffold(
     backgroundColor: _RoomColors.cloud,
-    appBar: AppBar(title: const PopText('ENTRAR CON CÓDIGO')),
+    appBar: AppBar(
+      backgroundColor: _RoomColors.navy,
+      foregroundColor: Colors.white,
+      surfaceTintColor: Colors.transparent,
+      title: const PopText('ENTRAR CON CÓDIGO'),
+    ),
     body: SafeArea(
       child: Padding(
         padding: const EdgeInsets.fromLTRB(20, 22, 20, 14),
@@ -869,6 +921,9 @@ class _PublicRoomsScreenState extends State<PublicRoomsScreen> {
   Widget build(BuildContext context) => Scaffold(
     backgroundColor: _RoomColors.cloud,
     appBar: AppBar(
+      backgroundColor: _RoomColors.navy,
+      foregroundColor: Colors.white,
+      surfaceTintColor: Colors.transparent,
       title: const PopText('SALAS PÚBLICAS'),
       actions: [
         IconButton(
@@ -920,6 +975,7 @@ class _PublicRoomsScreenState extends State<PublicRoomsScreen> {
                   room: room,
                   joining: joiningRoomId == room.roomId,
                   onJoin: joiningRoomId == null ? () => _join(room) : null,
+                  onReport: () => _report(room),
                 );
               },
             ),
@@ -995,6 +1051,28 @@ class _PublicRoomsScreenState extends State<PublicRoomsScreen> {
       if (mounted) _showRoomError(context, error);
     } finally {
       if (mounted) setState(() => joiningRoomId = null);
+    }
+  }
+
+  Future<void> _report(PublicRoomSummary room) async {
+    final reason = await _askReportReason(context);
+    if (reason == null || !mounted) return;
+    try {
+      await widget.controller.reportPublicRoom(
+        roomId: room.roomId,
+        reason: reason,
+      );
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: PopText(
+              'Reporte enviado. Gracias por ayudar a mantener la comunidad segura.',
+            ),
+          ),
+        );
+      }
+    } catch (error) {
+      if (mounted) _showRoomError(context, error);
     }
   }
 }
@@ -1146,6 +1224,9 @@ class _RoomLobbyScreenState extends State<RoomLobbyScreen> {
     child: Scaffold(
       backgroundColor: _RoomColors.cloud,
       appBar: AppBar(
+        backgroundColor: _RoomColors.navy,
+        foregroundColor: Colors.white,
+        surfaceTintColor: Colors.transparent,
         title: const PopText('SALA ONLINE'),
         automaticallyImplyLeading: false,
       ),
@@ -1575,11 +1656,13 @@ class _PublicRoomCard extends StatelessWidget {
     required this.room,
     required this.joining,
     required this.onJoin,
+    required this.onReport,
   });
 
   final PublicRoomSummary room;
   final bool joining;
   final VoidCallback? onJoin;
+  final VoidCallback onReport;
 
   @override
   Widget build(BuildContext context) => Container(
@@ -1608,7 +1691,9 @@ class _PublicRoomCard extends StatelessWidget {
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               PopText(
-                room.hostDisplayName,
+                room.roomName?.isNotEmpty == true
+                    ? room.roomName!
+                    : room.hostDisplayName,
                 maxLines: 1,
                 overflow: TextOverflow.ellipsis,
                 style: const TextStyle(
@@ -1618,28 +1703,81 @@ class _PublicRoomCard extends StatelessWidget {
               ),
               PopText(
                 '${room.mode == OnlineRoomGameMode.chaos ? 'CAOS' : 'CLÁSICO'}'
-                ' · ${room.occupiedSeats}/4 · ${room.roomCode.value}',
+                ' · ${room.occupiedSeats}/4 · ${room.roomCode.value}'
+                '${room.roomName?.isNotEmpty == true ? ' · ${room.hostDisplayName}' : ''}',
                 style: const TextStyle(color: Color(0xFF667085)),
               ),
             ],
           ),
         ),
-        FilledButton(
-          key: ValueKey('join-public-room-${room.roomId}'),
-          onPressed: onJoin,
-          child: joining
-              ? const SizedBox.square(
-                  dimension: 18,
-                  child: CircularProgressIndicator(
-                    strokeWidth: 2.2,
-                    color: Colors.white,
-                  ),
-                )
-              : const PopText('ENTRAR'),
+        Column(
+          children: [
+            FilledButton(
+              key: ValueKey('join-public-room-${room.roomId}'),
+              onPressed: onJoin,
+              child: joining
+                  ? const SizedBox.square(
+                      dimension: 18,
+                      child: CircularProgressIndicator(
+                        strokeWidth: 2.2,
+                        color: Colors.white,
+                      ),
+                    )
+                  : const PopText('ENTRAR'),
+            ),
+            IconButton(
+              key: ValueKey('report-public-room-${room.roomId}'),
+              tooltip: appTranslate(context, 'Reportar sala'),
+              onPressed: joining ? null : onReport,
+              icon: const Icon(Icons.flag_outlined, color: _RoomColors.red),
+              visualDensity: VisualDensity.compact,
+            ),
+          ],
         ),
       ],
     ),
   );
+}
+
+Future<String?> _askReportReason(BuildContext context) async {
+  const reasons = <String>[
+    'Nombre o contenido ofensivo',
+    'Trampa o comportamiento abusivo',
+    'Sala sospechosa o spam',
+  ];
+  return showDialog<String>(
+    context: context,
+    builder: (dialogContext) => AlertDialog(
+      title: const PopText('REPORTAR SALA'),
+      content: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          const PopText(
+            'Elige el motivo. Revisaremos los reportes antes de tomar medidas.',
+          ),
+          const SizedBox(height: 12),
+          for (final reason in reasons)
+            ListTile(
+              dense: true,
+              leading: const Icon(Icons.flag_outlined, color: _RoomColors.red),
+              title: PopText(reason),
+              onTap: () => Navigator.of(dialogContext).pop(reason),
+            ),
+        ],
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.of(dialogContext).pop(),
+          child: const PopText('CANCELAR'),
+        ),
+      ],
+    ),
+  );
+}
+
+String? _cleanRoomName(String raw) {
+  final clean = raw.trim();
+  return clean.isEmpty ? null : clean;
 }
 
 class _LobbyHeader extends StatelessWidget {
@@ -1664,94 +1802,152 @@ class _LobbyHeader extends StatelessWidget {
   final bool exitClosesRoom;
 
   @override
-  Widget build(BuildContext context) => Container(
-    padding: const EdgeInsets.fromLTRB(12, 9, 8, 9),
-    decoration: BoxDecoration(
-      color: _RoomColors.navy,
-      borderRadius: BorderRadius.circular(20),
-    ),
-    child: Row(
-      children: [
-        Container(
-          padding: const EdgeInsets.symmetric(horizontal: 11, vertical: 7),
-          decoration: BoxDecoration(
-            color: Colors.white,
-            borderRadius: BorderRadius.circular(13),
-          ),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
+  Widget build(BuildContext context) {
+    final modeLabel = mode == OnlineRoomGameMode.chaos
+        ? '⚡ CAOS'
+        : '🏆 CLÁSICO';
+    final title = lobby.roomName?.isNotEmpty == true
+        ? lobby.roomName!
+        : modeLabel;
+    final subtitle = lobby.roomName?.isNotEmpty == true
+        ? '$modeLabel · ${lobby.occupiedSeatCount}/4 jugadores'
+        : '${lobby.occupiedSeatCount}/4 jugadores';
+
+    return Container(
+      padding: const EdgeInsets.fromLTRB(12, 10, 8, 10),
+      decoration: BoxDecoration(
+        color: _RoomColors.navy,
+        borderRadius: BorderRadius.circular(20),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.center,
             children: [
-              const PopText(
-                'CÓDIGO',
-                style: TextStyle(
-                  color: Color(0xFF667085),
-                  fontSize: 9,
-                  fontWeight: FontWeight.w900,
+              Container(
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 11,
+                  vertical: 7,
                 ),
-              ),
-              PopText(
-                lobby.roomCode.value,
-                style: const TextStyle(
-                  color: _RoomColors.navy,
-                  fontSize: 19,
-                  fontWeight: FontWeight.w900,
-                  letterSpacing: 2,
-                ),
-              ),
-            ],
-          ),
-        ),
-        const SizedBox(width: 9),
-        Expanded(
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              PopText(
-                mode == OnlineRoomGameMode.chaos ? '⚡ CAOS' : '🏆 CLÁSICO',
-                style: const TextStyle(
+                decoration: BoxDecoration(
                   color: Colors.white,
-                  fontWeight: FontWeight.w900,
+                  borderRadius: BorderRadius.circular(13),
+                ),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    const PopText(
+                      'CÓDIGO',
+                      style: TextStyle(
+                        color: Color(0xFF667085),
+                        fontSize: 9,
+                        fontWeight: FontWeight.w900,
+                      ),
+                    ),
+                    PopText(
+                      lobby.roomCode.value,
+                      style: const TextStyle(
+                        color: _RoomColors.navy,
+                        fontSize: 19,
+                        fontWeight: FontWeight.w900,
+                        letterSpacing: 2,
+                      ),
+                    ),
+                  ],
                 ),
               ),
-              PopText(
-                '${lobby.occupiedSeatCount}/4 jugadores',
-                style: const TextStyle(color: Colors.white70, fontSize: 12),
+              const Spacer(),
+              _LobbyHeaderIconButton(
+                key: const ValueKey('lobby-copy-code'),
+                tooltip: appTranslate(context, 'Copiar código'),
+                onPressed: busy ? null : onCopy,
+                icon: Icons.copy_rounded,
+              ),
+              Builder(
+                builder: (buttonContext) => _LobbyHeaderIconButton(
+                  key: const ValueKey('lobby-share-invite'),
+                  tooltip: appTranslate(context, 'Compartir invitación'),
+                  onPressed: busy ? null : () => onShare(buttonContext),
+                  icon: Icons.ios_share_rounded,
+                ),
+              ),
+              _LobbyHeaderIconButton(
+                key: ValueKey(
+                  exitClosesRoom ? 'lobby-close-room' : 'lobby-leave-room',
+                ),
+                tooltip: appTranslate(
+                  context,
+                  exitClosesRoom ? 'Cerrar sala' : 'Salir de la sala',
+                ),
+                onPressed: busy ? null : onExit,
+                icon: exitClosesRoom
+                    ? Icons.close_rounded
+                    : Icons.logout_rounded,
+                color: _RoomColors.red,
               ),
             ],
           ),
-        ),
-        IconButton(
-          key: const ValueKey('lobby-copy-code'),
-          tooltip: appTranslate(context, 'Copiar código'),
-          onPressed: busy ? null : onCopy,
-          color: Colors.white,
-          icon: const Icon(Icons.copy_rounded),
-        ),
-        Builder(
-          builder: (buttonContext) => IconButton(
-            key: const ValueKey('lobby-share-invite'),
-            tooltip: appTranslate(context, 'Compartir invitación'),
-            onPressed: busy ? null : () => onShare(buttonContext),
-            color: Colors.white,
-            icon: const Icon(Icons.ios_share_rounded),
+          const SizedBox(height: 7),
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 3),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                PopText(
+                  title,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(
+                    color: Colors.white,
+                    fontSize: 16,
+                    fontWeight: FontWeight.w900,
+                  ),
+                ),
+                const SizedBox(height: 2),
+                PopText(
+                  subtitle,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(
+                    color: Colors.white70,
+                    fontSize: 11,
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+              ],
+            ),
           ),
-        ),
-        IconButton(
-          key: ValueKey(
-            exitClosesRoom ? 'lobby-close-room' : 'lobby-leave-room',
-          ),
-          tooltip: appTranslate(
-            context,
-            exitClosesRoom ? 'Cerrar sala' : 'Salir de la sala',
-          ),
-          onPressed: busy ? null : onExit,
-          color: _RoomColors.red,
-          icon: Icon(
-            exitClosesRoom ? Icons.close_rounded : Icons.logout_rounded,
-          ),
-        ),
-      ],
-    ),
+        ],
+      ),
+    );
+  }
+}
+
+class _LobbyHeaderIconButton extends StatelessWidget {
+  const _LobbyHeaderIconButton({
+    super.key,
+    required this.tooltip,
+    required this.onPressed,
+    required this.icon,
+    this.color = Colors.white,
+  });
+
+  final String tooltip;
+  final VoidCallback? onPressed;
+  final IconData icon;
+  final Color color;
+
+  @override
+  Widget build(BuildContext context) => IconButton(
+    tooltip: tooltip,
+    onPressed: onPressed,
+    padding: EdgeInsets.zero,
+    constraints: const BoxConstraints.tightFor(width: 36, height: 40),
+    visualDensity: VisualDensity.compact,
+    color: color,
+    icon: Icon(icon, size: 24),
   );
 }
 

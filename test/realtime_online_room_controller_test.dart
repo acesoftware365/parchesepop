@@ -234,6 +234,75 @@ void main() {
     );
 
     test(
+      'two humans start with deterministic CPU seats and complete the opening roll',
+      () async {
+        final store = InMemoryOnlineRealtimeStore(initialNowMs: 15_000);
+        final host = _controller(
+          store,
+          uid: 'two-host',
+          name: 'Host',
+          transportSeed: 15,
+          openingRollRandom: _SequenceRandom(<int>[0, 1, 2, 3]),
+        );
+        final guest = _controller(
+          store,
+          uid: 'two-guest',
+          name: 'Guest',
+          transportSeed: 16,
+        );
+        addTearDown(() async {
+          await host.shutdown();
+          await guest.shutdown();
+          host.dispose();
+          guest.dispose();
+        });
+
+        await host.createRoom(
+          mode: OnlineRoomGameMode.classic,
+          visibility: RoomVisibility.private,
+        );
+        await guest.joinRoomByCode(host.lobby!.roomCode);
+        await _eventually(() => host.lobby?.occupiedSeatCount == 2);
+
+        await host.setReady(true);
+        await guest.setReady(true);
+        await _eventually(
+          () => host.lobby?.canStart == true && guest.lobby?.canStart == true,
+        );
+
+        await host.startOpeningRoll();
+        await _eventually(
+          () =>
+              host.lobby?.status == RoomStatus.openingRoll &&
+              guest.lobby?.status == RoomStatus.openingRoll &&
+              host.lobby?.occupiedSeatCount == 4,
+        );
+        expect(host.lobby!.participants.map((p) => p.participantId), [
+          'two-host',
+          'two-guest',
+          'cpu_${host.lobby!.roomCode.value}_yellow',
+          'cpu_${host.lobby!.roomCode.value}_blue',
+        ]);
+        expect(
+          host.lobby!.openingRoll!.currentRolls.keys,
+          containsAll([
+            'cpu_${host.lobby!.roomCode.value}_yellow',
+            'cpu_${host.lobby!.roomCode.value}_blue',
+          ]),
+        );
+
+        await host.rollOpeningDie();
+        await guest.rollOpeningDie();
+        await _eventually(
+          () =>
+              host.lobby?.status == RoomStatus.starting &&
+              guest.lobby?.status == RoomStatus.starting &&
+              host.lobby?.openingRoll?.clockwiseParticipantIds.length == 4,
+        );
+      },
+    );
+
+    test(
       'privacy, kick, leave, and close remain live across controllers',
       () async {
         final store = InMemoryOnlineRealtimeStore(initialNowMs: 20_000);

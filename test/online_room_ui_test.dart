@@ -71,6 +71,8 @@ class _FakeOnlineRoomController extends ChangeNotifier
   String? joinedPublicRoomId;
   OnlineRoomGameMode? createdMode;
   RoomVisibility? createdVisibility;
+  String? createdRoomName;
+  final reportedRooms = <String, String>{};
   int leaveCalls = 0;
   int closeCalls = 0;
   int dismissClosedCalls = 0;
@@ -107,6 +109,7 @@ class _FakeOnlineRoomController extends ChangeNotifier
   Future<void> createRoom({
     required OnlineRoomGameMode mode,
     required RoomVisibility visibility,
+    String? roomName,
   }) async {
     pendingCreateCancelled = false;
     await createGate?.future;
@@ -115,6 +118,7 @@ class _FakeOnlineRoomController extends ChangeNotifier
     }
     createdMode = mode;
     createdVisibility = visibility;
+    createdRoomName = roomName;
     _roomMode = mode;
     _lobby = OnlineLobby.create(
       roomId: 'created-room',
@@ -122,8 +126,17 @@ class _FakeOnlineRoomController extends ChangeNotifier
       hostParticipantId: localParticipantId,
       hostDisplayName: 'Juan',
       visibility: visibility,
+      roomName: roomName,
     );
     notifyListeners();
+  }
+
+  @override
+  Future<void> reportPublicRoom({
+    required String roomId,
+    required String reason,
+  }) async {
+    reportedRooms[roomId] = reason;
   }
 
   @override
@@ -399,6 +412,18 @@ void main() {
     expect(tester.takeException(), isNull);
   });
 
+  testWidgets('room lobby header stays readable on a narrow phone', (
+    tester,
+  ) async {
+    final controller = _FakeOnlineRoomController();
+    controller.createFullHostRoom();
+    await _pumpPhone(tester, RoomLobbyScreen(controller: controller));
+
+    expect(find.text('🏆 CLÁSICO'), findsOneWidget);
+    expect(find.text('4/4 jugadores'), findsOneWidget);
+    expect(tester.takeException(), isNull);
+  });
+
   testWidgets('hub keeps the three online actions visible without scrolling', (
     tester,
   ) async {
@@ -442,11 +467,16 @@ void main() {
     await tester.pump();
     await tester.tap(find.text('PÚBLICA'));
     await tester.pump();
+    await tester.enterText(
+      find.byKey(const ValueKey('create-room-name-field')),
+      'Noche de amigos',
+    );
     await tester.tap(find.byKey(const ValueKey('create-room-submit')));
     await tester.pumpAndSettle();
 
     expect(controller.createdMode, OnlineRoomGameMode.chaos);
     expect(controller.createdVisibility, RoomVisibility.public);
+    expect(controller.createdRoomName, 'Noche de amigos');
     expect(
       analytics.onlineEvents.map((event) => event.stage),
       containsAllInOrder([
@@ -678,6 +708,32 @@ void main() {
     );
     expect(find.byType(RoomLobbyScreen), findsOneWidget);
     expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('public directory shows room name and can report it', (
+    tester,
+  ) async {
+    final controller = _FakeOnlineRoomController()
+      ..rooms = [
+        PublicRoomSummary(
+          roomId: 'reported-room',
+          roomCode: RoomCode.parse('BCD234'),
+          hostDisplayName: 'Host Maria',
+          mode: OnlineRoomGameMode.classic,
+          occupiedSeats: 2,
+          roomName: 'Noche de amigos',
+        ),
+      ];
+    await _pumpPhone(tester, PublicRoomsScreen(controller: controller));
+    await tester.pumpAndSettle();
+    expect(find.text('Noche de amigos'), findsOneWidget);
+    await tester.tap(
+      find.byKey(const ValueKey('report-public-room-reported-room')),
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Sala sospechosa o spam'));
+    await tester.pumpAndSettle();
+    expect(controller.reportedRooms['reported-room'], 'Sala sospechosa o spam');
   });
 
   testWidgets('pull refresh records a fresh public-directory search', (

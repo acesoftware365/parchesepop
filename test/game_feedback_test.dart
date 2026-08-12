@@ -80,6 +80,23 @@ void main() {
     expect(output.haptics, [GameHapticCue.calm]);
   });
 
+  test(
+    'input haptic is immediate and respects the vibration setting',
+    () async {
+      final output = _RecordingOutput();
+      final controller = GameFeedbackController(output: output);
+
+      controller.playInputHaptic(GameHapticCue.rollStart);
+      await Future<void>.delayed(Duration.zero);
+      expect(output.haptics, [GameHapticCue.rollStart]);
+
+      controller.hapticsEnabled = false;
+      controller.playInputHaptic(GameHapticCue.rollStart);
+      await Future<void>.delayed(Duration.zero);
+      expect(output.haptics, [GameHapticCue.rollStart]);
+    },
+  );
+
   test('sound and haptics can be disabled independently', () async {
     final output = _RecordingOutput();
     final controller = GameFeedbackController(

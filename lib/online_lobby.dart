@@ -4,7 +4,7 @@ import 'dart:math';
 /// Visibility of a lobby while it is accepting players.
 enum RoomVisibility { public, private }
 
-/// Server-owned lifecycle for a four-player room.
+/// Server-owned lifecycle for a two-to-four-player room.
 enum RoomStatus { waiting, openingRoll, starting, inGame, closed }
 
 /// Stable clockwise seats used by the lobby and opening-roll order.
@@ -12,6 +12,21 @@ enum LobbySeatColor { red, green, yellow, blue }
 
 /// Whether a participant currently has a live connection to the room.
 enum LobbyPresence { connected, disconnected }
+
+/// Quick Table always has four board colors, but a room may start with only
+/// two or three humans. The remaining seats are represented by deterministic
+/// CPU participants once the host starts the opening roll.
+const int minimumOnlinePlayers = 2;
+
+String cpuParticipantIdForSeat(RoomCode roomCode, LobbySeatColor seat) =>
+    'cpu_${roomCode.value}_${seat.name}';
+
+String cpuDisplayNameForSeat(LobbySeatColor seat) => switch (seat) {
+  LobbySeatColor.red => 'CPU Rojo',
+  LobbySeatColor.green => 'CPU Verde',
+  LobbySeatColor.yellow => 'CPU Amarillo',
+  LobbySeatColor.blue => 'CPU Azul',
+};
 
 enum LobbyErrorCode {
   invalidRoomCode,
@@ -256,10 +271,11 @@ class OpeningRollState {
       }
       seatByParticipantId[participant.participantId] = participant.seat;
     }
-    if (seatByParticipantId.length != LobbySeatColor.values.length) {
+    if (seatByParticipantId.length < minimumOnlinePlayers ||
+        seatByParticipantId.length > LobbySeatColor.values.length) {
       throw const LobbyException(
         LobbyErrorCode.notEnoughPlayers,
-        'The opening roll requires all four seats.',
+        'The opening roll requires at least two participants.',
       );
     }
     return OpeningRollState._(seatByParticipantId: seatByParticipantId);
@@ -274,9 +290,10 @@ class OpeningRollState {
       for (final participant in playerList)
         participant.participantId: participant.seat,
     };
-    if (expectedSeats.length != LobbySeatColor.values.length) {
+    if (expectedSeats.length < minimumOnlinePlayers ||
+        expectedSeats.length > LobbySeatColor.values.length) {
       throw const LobbyJsonException(
-        'An opening roll requires four unique participants.',
+        'An opening roll requires between two and four unique participants.',
       );
     }
 
@@ -438,11 +455,19 @@ class OpeningRollState {
     final participantBySeat = <LobbySeatColor, String>{
       for (final entry in _seatByParticipantId.entries) entry.value: entry.key,
     };
-    return List<String>.generate(LobbySeatColor.values.length, (offset) {
+    final order = <String>[];
+    for (
+      var offset = 0;
+      offset < LobbySeatColor.values.length &&
+          order.length < _seatByParticipantId.length;
+      offset++
+    ) {
       final seat = LobbySeatColor
           .values[(winnerIndex + offset) % LobbySeatColor.values.length];
-      return participantBySeat[seat]!;
-    });
+      final participant = participantBySeat[seat];
+      if (participant != null) order.add(participant);
+    }
+    return order;
   }
 
   static List<String> _sortBySeat(
@@ -557,7 +582,7 @@ class OpeningRollState {
       participantIds.toSet().length == participantIds.length;
 }
 
-/// Pure-Dart aggregate for one four-seat online lobby.
+/// Pure-Dart aggregate for a two-to-four-player online lobby.
 ///
 /// Authentication and transport are deliberately outside this type. A trusted
 /// backend must derive [actorParticipantId] from the authenticated connection
@@ -570,6 +595,7 @@ class OnlineLobby {
     required this.roomCode,
     required this.hostParticipantId,
     required this.visibility,
+    required this.roomName,
     required LobbyParticipant host,
   }) : _participantsById = {host.participantId: host};
 
@@ -578,6 +604,7 @@ class OnlineLobby {
     required this.roomCode,
     required this.hostParticipantId,
     required this.visibility,
+    required this.roomName,
     required this.status,
     required this.revision,
     required Map<String, LobbyParticipant> participantsById,
@@ -591,6 +618,7 @@ class OnlineLobby {
     required String hostParticipantId,
     required String hostDisplayName,
     RoomVisibility visibility = RoomVisibility.private,
+    String? roomName,
   }) {
     _validateIdentity(hostParticipantId, hostDisplayName);
     if (roomId.trim().isEmpty) {
@@ -604,6 +632,7 @@ class OnlineLobby {
       roomCode: roomCode,
       hostParticipantId: hostParticipantId.trim(),
       visibility: visibility,
+      roomName: _optionalCleanRoomName(roomName),
       host: LobbyParticipant(
         participantId: hostParticipantId.trim(),
         displayName: hostDisplayName.trim(),
@@ -644,6 +673,7 @@ class OnlineLobby {
       RoomVisibility.values,
       'lobby.visibility',
     );
+    final roomName = _optionalCleanRoomName(json['roomName']);
     final status = _requiredEnum(
       json,
       'status',
@@ -722,6 +752,7 @@ class OnlineLobby {
       roomCode: roomCode,
       hostParticipantId: hostParticipantId,
       visibility: visibility,
+      roomName: roomName,
       status: status,
       revision: revision,
       participantsById: participantsById,
@@ -734,6 +765,7 @@ class OnlineLobby {
   final String roomId;
   final RoomCode roomCode;
   final String hostParticipantId;
+  final String? roomName;
   final Map<String, LobbyParticipant> _participantsById;
   RoomVisibility visibility;
   RoomStatus status = RoomStatus.waiting;
@@ -749,11 +781,12 @@ class OnlineLobby {
   OpeningRollState? get openingRoll => _openingRoll;
   int get occupiedSeatCount => _participantsById.length;
   bool get isFull => occupiedSeatCount == fixedClockwiseSeats.length;
+  bool get hasMinimumPlayers => occupiedSeatCount >= minimumOnlinePlayers;
   bool get allReady =>
-      isFull &&
+      hasMinimumPlayers &&
       _participantsById.values.every((participant) => participant.ready);
   bool get allConnected =>
-      isFull &&
+      hasMinimumPlayers &&
       _participantsById.values.every((participant) => participant.connected);
   bool get canStart => status == RoomStatus.waiting && allReady && allConnected;
 
@@ -763,6 +796,7 @@ class OnlineLobby {
     'roomCode': roomCode.value,
     'hostParticipantId': hostParticipantId,
     'visibility': visibility.name,
+    if (roomName != null) 'roomName': roomName,
     'status': status.name,
     'revision': revision,
     'participants': [
@@ -894,28 +928,56 @@ class OnlineLobby {
   OpeningRollState startOpeningRoll({required String actorParticipantId}) {
     _requireHost(actorParticipantId);
     _requireWaiting();
-    if (!isFull) {
+    if (!hasMinimumPlayers) {
       throw const LobbyException(
         LobbyErrorCode.notEnoughPlayers,
-        'All four seats must be occupied before the opening roll.',
+        'At least two seats must be occupied before the opening roll.',
       );
     }
+    // A Quick Table always uses the four board colors. If the room has only
+    // two or three humans, fill the remaining colors with deterministic CPU
+    // seats before selecting the opening-roll order.
+    fillMissingSeatsWithCpu();
     if (!allConnected) {
       throw const LobbyException(
         LobbyErrorCode.participantsDisconnected,
-        'All four participants must be connected before the opening roll.',
+        'All participants must be connected before the opening roll.',
       );
     }
     if (!allReady) {
       throw const LobbyException(
         LobbyErrorCode.participantsNotReady,
-        'All four participants must be ready before the opening roll.',
+        'All participants must be ready before the opening roll.',
       );
     }
     _openingRoll = OpeningRollState.start(participants);
     status = RoomStatus.openingRoll;
     revision++;
     return _openingRoll!;
+  }
+
+  /// Adds ready CPU participants for any unoccupied board colors.
+  ///
+  /// This is intentionally host-side lobby state. Guests still see the room
+  /// as 2/4 or 3/4 while waiting; the CPU seats appear when the host starts.
+  void fillMissingSeatsWithCpu() {
+    _requireWaiting();
+    final occupiedSeats = _participantsById.values
+        .map((participant) => participant.seat)
+        .toSet();
+    for (final seat in fixedClockwiseSeats) {
+      if (occupiedSeats.contains(seat)) continue;
+      final participantId = cpuParticipantIdForSeat(roomCode, seat);
+      _participantsById[participantId] = LobbyParticipant(
+        participantId: participantId,
+        displayName: cpuDisplayNameForSeat(seat),
+        seat: seat,
+        ready: true,
+        presence: LobbyPresence.connected,
+      );
+      occupiedSeats.add(seat);
+    }
+    revision++;
   }
 
   int rollOpeningDie({
@@ -1077,6 +1139,20 @@ String? _requiredNullableCleanString(
     );
   }
   return value;
+}
+
+String? _optionalCleanRoomName(Object? value) {
+  if (value == null) return null;
+  if (value is! String) {
+    throw const LobbyJsonException('lobby.roomName must be a string.');
+  }
+  final clean = value.trim();
+  if (clean.isEmpty || clean.length > 28) {
+    throw const LobbyJsonException(
+      'lobby.roomName must contain between 1 and 28 characters.',
+    );
+  }
+  return clean;
 }
 
 bool _requiredBool(Map<String, Object?> json, String key, String path) {

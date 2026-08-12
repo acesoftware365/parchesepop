@@ -33,6 +33,11 @@ void _useViewport(WidgetTester tester, Size size) {
   });
 }
 
+void _useCompactSystemText(WidgetTester tester, double scale) {
+  tester.platformDispatcher.textScaleFactorTestValue = scale;
+  addTearDown(tester.platformDispatcher.clearTextScaleFactorTestValue);
+}
+
 void _useSpanish() {
   final binding = TestWidgetsFlutterBinding.ensureInitialized();
   binding.platformDispatcher.localeTestValue = const Locale('es');
@@ -125,6 +130,94 @@ void main() {
         preferences.getInt('active_match_board_layout_version'),
         activeMatchBoardLayoutVersion,
       );
+    },
+  );
+
+  testWidgets('A51 font scale keeps home cards and dialogs readable', (
+    tester,
+  ) async {
+    _useViewport(tester, const Size(360, 800));
+    _useCompactSystemText(tester, 1.8);
+    SharedPreferences.setMockInitialValues({});
+
+    await _pumpLoadedHome(tester);
+    expect(tester.takeException(), isNull);
+    await tester.tap(find.byKey(const ValueKey('home-mode-cpu')));
+    await tester.pumpAndSettle();
+
+    expect(find.byKey(const ValueKey('cpu-mode-step')), findsOneWidget);
+    expect(find.byKey(const ValueKey('cpu-mode-traditional')), findsOneWidget);
+    expect(find.byKey(const ValueKey('cpu-mode-chaos')), findsOneWidget);
+    final dialog = tester.getRect(
+      find.byKey(const ValueKey('cpu-mode-step')).first,
+    );
+    expect(dialog.left, greaterThanOrEqualTo(0));
+    expect(dialog.right, lessThanOrEqualTo(360));
+    expect(dialog.top, greaterThanOrEqualTo(0));
+    expect(dialog.bottom, lessThanOrEqualTo(800));
+    for (final key in const [
+      ValueKey<String>('cpu-mode-traditional'),
+      ValueKey<String>('cpu-mode-chaos'),
+    ]) {
+      final card = tester.getRect(find.byKey(key));
+      expect(card.left, greaterThanOrEqualTo(0));
+      expect(card.right, lessThanOrEqualTo(360));
+    }
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('foldable cover portrait keeps the compact home in one view', (
+    tester,
+  ) async {
+    _useSpanish();
+    const viewport = Size(360, 600);
+    _useViewport(tester, viewport);
+    SharedPreferences.setMockInitialValues({});
+
+    await _pumpLoadedHome(tester);
+
+    for (final label in const [
+      'QUICK POP',
+      'MESA RÁPIDA',
+      'CONTRA CPU',
+      'PASS & PLAY',
+      'Tienda',
+      'Misiones',
+      'Cómo jugar',
+      'Trampas',
+    ]) {
+      _expectInitiallyVisibleControl(tester, label, viewport);
+    }
+    expect(
+      tester.getRect(find.byKey(const ValueKey('home-menu-dock'))).bottom,
+      lessThanOrEqualTo(viewport.height),
+    );
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets(
+    'foldable cover still fits after banner-safe height is reserved',
+    (tester) async {
+      _useSpanish();
+      const viewport = Size(360, 540);
+      _useViewport(tester, viewport);
+      SharedPreferences.setMockInitialValues({});
+
+      await _pumpLoadedHome(tester);
+
+      for (final label in const [
+        'QUICK POP',
+        'MESA RÁPIDA',
+        'CONTRA CPU',
+        'PASS & PLAY',
+        'Tienda',
+        'Misiones',
+        'Cómo jugar',
+        'Trampas',
+      ]) {
+        _expectInitiallyVisibleControl(tester, label, viewport);
+      }
+      expect(tester.takeException(), isNull);
     },
   );
 
@@ -250,38 +343,6 @@ void main() {
     for (final center in centers.skip(1)) {
       expect(center, closeTo(centers.first, .1));
     }
-    expect(tester.takeException(), isNull);
-  });
-
-  testWidgets('small New Home button opens the proposed home preview', (
-    tester,
-  ) async {
-    _useSpanish();
-    _useViewport(tester, const Size(390, 844));
-    SharedPreferences.setMockInitialValues({});
-
-    await _pumpLoadedHome(tester);
-
-    final newHome = find.byKey(const ValueKey('home-new-home-button'));
-    expect(newHome, findsOneWidget);
-    expect(newHome.hitTestable(), findsOneWidget);
-    await tester.tap(newHome);
-    await tester.pumpAndSettle();
-
-    expect(find.byType(NewHomePreviewScreen), findsOneWidget);
-    expect(find.byKey(const ValueKey('new-home-preview-hero')), findsOneWidget);
-    expect(find.text('NEW HOME'), findsOneWidget);
-    expect(find.text('JUGAR AHORA'), findsOneWidget);
-
-    final quickTable = find.byKey(const ValueKey('new-home-mode-quickTable'));
-    expect(quickTable, findsOneWidget);
-    await tester.tap(quickTable);
-    await tester.pump(const Duration(milliseconds: 200));
-    expect(find.text('Modo seleccionado: Quick Table'), findsOneWidget);
-
-    await tester.tap(find.byKey(const ValueKey('new-home-preview-back')));
-    await tester.pumpAndSettle();
-    expect(find.byType(HomeScreen), findsOneWidget);
     expect(tester.takeException(), isNull);
   });
 

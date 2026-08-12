@@ -546,6 +546,89 @@ void main() {
       },
     );
 
+    test(
+      'Quick Pop capture keeps the +20 bonus playable on both online replicas',
+      () async {
+        final store = InMemoryOnlineRealtimeStore(initialNowMs: 1200);
+        final hostEngine = _engine(
+          localColor: PlayerColor.red,
+          random: Random(401),
+          initialPlayer: PlayerColor.green,
+          matchFormat: MatchFormat.quickPop,
+        );
+        final guestEngine = _engine(
+          localColor: PlayerColor.green,
+          random: Random(402),
+          initialPlayer: PlayerColor.green,
+          matchFormat: MatchFormat.quickPop,
+        );
+        final mover = hostEngine.players[PlayerColor.green.index].tokens.first
+          ..progress = 1;
+        hostEngine.players[PlayerColor.green.index].tokens.last.progress = 12;
+        final captureGlobal = hostEngine.loopIndex(mover.owner, 4);
+        hostEngine.players[PlayerColor.red.index].tokens.first.progress =
+            (captureGlobal - GameEngine.startOffset[PlayerColor.red]!) %
+            GameEngine.loopLength;
+        hostEngine
+          ..currentPlayerIndex = PlayerColor.green.index
+          ..hasRolled = true
+          ..dice = const <int>[3, 6];
+        hostEngine.remainingDice.addAll(const <int>[3, 6]);
+
+        final host = OnlineGameSyncClient(
+          transport: _transport(store, uid: 'host_red'),
+          roomId: 'room_sync_001',
+          session: _quickPopSessionFor(PlayerColor.red),
+          engine: hostEngine,
+          isHost: true,
+        );
+        final guest = OnlineGameSyncClient(
+          transport: _transport(store, uid: 'guest_green'),
+          roomId: 'room_sync_001',
+          session: _quickPopSessionFor(PlayerColor.green),
+          engine: guestEngine,
+          isHost: false,
+        );
+        addTearDown(() {
+          guest.dispose();
+          host.dispose();
+          guestEngine.dispose();
+          hostEngine.dispose();
+        });
+
+        await _seedInGameRoom(
+          store,
+          host.session,
+          matchFormat: MatchFormat.quickPop,
+        );
+        await host.start();
+        await guest.start();
+        expect(guest.engine.currentPlayer.color, PlayerColor.green);
+
+        final capture = await guest.submitMove(
+          tokenId: 0,
+          die: 3,
+          actionId: 'quick_pop_capture_20_001',
+        );
+        expect(capture.status, OnlineCommandStatus.accepted);
+
+        final bonus = await guest.submitMove(
+          tokenId: 0,
+          die: 20,
+          actionId: 'quick_pop_capture_20_play_001',
+        );
+        expect(bonus.status, OnlineCommandStatus.accepted);
+        await _eventually(() => guest.revision == bonus.stateRevision);
+        expect(host.engine.remainingDice, const <int>[6]);
+        expect(guest.engine.remainingDice, const <int>[6]);
+        expect(
+          guest.engine.players[PlayerColor.green.index].tokens.first.progress,
+          24,
+        );
+        expect(_checkpoint(guest.engine), _checkpoint(host.engine));
+      },
+    );
+
     test('guest accepts a Firebase-normalized initial checkpoint', () async {
       final store = InMemoryOnlineRealtimeStore(initialNowMs: 1500);
       final firebaseGuestStore = _FirebaseNormalizedStore(store);

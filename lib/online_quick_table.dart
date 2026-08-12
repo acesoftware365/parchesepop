@@ -108,6 +108,8 @@ PreparedOnlineQuickTableMatch prepareOnlineQuickTableMatchFromSnapshot({
         color: playerColorForLobbySeat(participant.seat),
         kind: participant.participantId == localParticipantId
             ? ParticipantKind.local
+            : participant.participantId.startsWith('cpu_')
+            ? ParticipantKind.virtual
             : ParticipantKind.remoteHuman,
         loadout: const CosmeticLoadout(),
       ),
@@ -190,7 +192,7 @@ void _validateQuickTableSnapshot({
   if (lobby.participants.length != PlayerColor.values.length ||
       room.members.length != PlayerColor.values.length) {
     throw const OnlineQuickTablePreparationException(
-      'A live Quick Table match requires all four members.',
+      'Quick Table must contain four board seats after CPU fill.',
     );
   }
 

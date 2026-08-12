@@ -814,7 +814,7 @@ const _english = <String, String>{
   'Crea una sala, entra con código o busca una mesa pública.':
       'Create a room, join with a code, or find a public table.',
   'CREAR SALA': 'CREATE ROOM',
-  'Pública o privada · 4 jugadores': 'Public or private · 4 players',
+  'Pública o privada · 2–4 jugadores': 'Public or private · 2–4 players',
   'ENTRAR CON CÓDIGO': 'JOIN WITH CODE',
   'Usa el código de seis caracteres': 'Use the six-character code',
   'SALAS PÚBLICAS': 'PUBLIC ROOMS',
