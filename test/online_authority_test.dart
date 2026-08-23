@@ -414,6 +414,101 @@ void main() {
   });
 
   group('disconnect and gateway contracts', () {
+    test(
+      'reconnect at a clean dice boundary does not strand the returning seat',
+      () {
+        final authority = OnlineMatchAuthority.fresh(
+          session: _session(),
+          serverRandom: _SequenceRandom(const <int>[4, 1, 2, 3]),
+        );
+        addTearDown(authority.dispose);
+        final now = DateTime.utc(2026, 8, 8, 13);
+
+        // Red completes its turn, leaving green at a fresh dice boundary.
+        expect(authority.submit(_roll()).accepted, isTrue);
+        authority.engine.endTurn();
+        expect(authority.engine.currentPlayer.color, PlayerColor.green);
+        expect(authority.engine.hasRolled, isFalse);
+
+        expect(
+          authority.markDisconnected('player_green', now: now),
+          PresenceMutationResult.changed,
+        );
+        expect(
+          authority
+              .reconnect(
+                'player_green',
+                now: now.add(const Duration(seconds: 1)),
+              )
+              .status,
+          OnlineReconnectStatus.reconnected,
+        );
+        expect(authority.awaitingNextTurn, isEmpty);
+
+        final roll = authority.submit(
+          _roll(
+            participantId: 'player_green',
+            actionId: 'green_roll_after_home_0001',
+            expectedRevision: authority.revision,
+          ),
+        );
+        expect(roll.status, OnlineCommandStatus.accepted);
+      },
+    );
+
+    test(
+      'reconnect during an active double waits, then releases on the next turn',
+      () {
+        final authority = OnlineMatchAuthority.fresh(
+          session: _session(),
+          serverRandom: _SequenceRandom(const <int>[4, 4, 1, 2]),
+        );
+        addTearDown(authority.dispose);
+        final now = DateTime.utc(2026, 8, 8, 13, 30);
+
+        expect(authority.submit(_roll()).accepted, isTrue);
+        expect(authority.engine.hasRolled, isTrue);
+        expect(authority.engine.dice, const <int>[5, 5]);
+        expect(
+          authority.markDisconnected('player_red', now: now),
+          PresenceMutationResult.changed,
+        );
+        expect(
+          authority
+              .reconnect('player_red', now: now.add(const Duration(seconds: 1)))
+              .status,
+          OnlineReconnectStatus.reconnected,
+        );
+        expect(
+          authority.awaitingNextTurn['player_red'],
+          authority.engine.turnNumber,
+        );
+        expect(
+          authority
+              .submit(
+                _roll(
+                  actionId: 'red_roll_while_double_waiting',
+                  expectedRevision: authority.revision,
+                ),
+              )
+              .rejection,
+          OnlineCommandRejection.participantUnavailable,
+        );
+
+        authority.engine.endTurn();
+        authority.createCheckpoint();
+        expect(authority.engine.currentPlayer.color, PlayerColor.red);
+        expect(authority.awaitingNextTurn, isEmpty);
+        final nextRoll = authority.submit(
+          _roll(
+            actionId: 'red_roll_after_double_home_0001',
+            expectedRevision: authority.revision,
+          ),
+        );
+        expect(nextRoll.status, OnlineCommandStatus.accepted);
+      },
+    );
+
     test('grace reconnect succeeds and locked CPU takeover stays locked', () {
       const policy = OnlineDisconnectPolicy(
         gracePeriod: Duration(seconds: 10),
@@ -531,6 +626,9 @@ void main() {
           ),
         );
 
+        // Reconnect while an actual dice turn is active: this is the case
+        // where the returning player must wait for the host to finish it.
+        authority.engine.roll();
         authority.markDisconnected('player_red', now: now);
         gateway.now = now.add(const Duration(seconds: 2));
         final reconnected = await gateway.reconnect(
@@ -550,7 +648,6 @@ void main() {
         );
         // The host CPU completes the interrupted dice turn. The authority
         // then releases the returning seat for its next dice turn.
-        authority.engine.roll();
         authority.engine.endTurn();
         authority.createCheckpoint();
         final roll = await gateway.submit(

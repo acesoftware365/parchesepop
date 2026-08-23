@@ -6,13 +6,16 @@ const String onlineTransportRoot = 'onlineV2';
 
 /// Shared online matchmaking budget.
 ///
-/// Ten seconds gives two devices enough time to authenticate, publish their
-/// queue tickets, complete the verified claim and open the shared room before
-/// either client falls back to CPU. The value is mirrored in Firebase Rules;
-/// keep the protocol and UI on this single contract.
-const Duration quickPopSearchWindow = Duration(seconds: 10);
-const Duration quickPopSettlementPeerWait = Duration(milliseconds: 1200);
-const Duration quickPopSettlementOperationTimeout = Duration(seconds: 2);
+/// Thirty seconds gives several devices enough time to authenticate, publish
+/// their queue tickets, see the same active cohort and open the shared room
+/// before either client falls back to CPU. The value is mirrored in Firebase
+/// Rules; keep the protocol and UI on this single contract.
+const Duration quickPopSearchWindow = Duration(seconds: 30);
+// A matched peer can still be finishing Firebase room/bootstrap work after the
+// host commits `inGame`. Keep the provisional room open long enough for that
+// already-verified participant to publish its final settlement marker.
+const Duration quickPopSettlementPeerWait = Duration(seconds: 10);
+const Duration quickPopSettlementOperationTimeout = Duration(seconds: 15);
 
 Map<String, Object?> onlineMap(Object? value) {
   if (value is! Map) return <String, Object?>{};
@@ -32,6 +35,18 @@ String _requiredString(Map<String, Object?> map, String key) {
   final value = map[key];
   if (value is String && value.trim().isNotEmpty) return value.trim();
   throw FormatException('Missing or invalid $key.');
+}
+
+OnlineLobby? _optionalLobbyState(Object? raw) {
+  if (raw == null) return null;
+  try {
+    return OnlineLobby.fromJson(onlineMap(raw));
+  } catch (_) {
+    // Older room records and synchronizer tests can contain an unrelated
+    // opaque child under this key. It is not an authoritative lobby unless it
+    // satisfies the complete OnlineLobby wire contract.
+    return null;
+  }
 }
 
 String? _optionalString(Map<String, Object?> map, String key) {
@@ -197,6 +212,7 @@ final class OnlineRoomRecord {
     required this.mode,
     required this.matchFormat,
     this.roomName,
+    this.lobbyState,
     required Map<String, OnlineRoomMemberRecord> members,
     required Map<String, OnlinePresenceRecord> presence,
     required this.revision,
@@ -216,6 +232,12 @@ final class OnlineRoomRecord {
   /// Optional player-facing name shown in the public directory and lobby.
   /// Older room snapshots legitimately omit this field.
   final String? roomName;
+
+  /// Authoritative lobby snapshot stored below the room root.
+  ///
+  /// Keeping it on the decoded aggregate gives every client a fallback when
+  /// a platform misses a child-listener event during a lifecycle transition.
+  final OnlineLobby? lobbyState;
   final Map<String, OnlineRoomMemberRecord> members;
   final Map<String, OnlinePresenceRecord> presence;
   final int revision;
@@ -251,6 +273,7 @@ final class OnlineRoomRecord {
     'mode': mode,
     'matchFormat': matchFormat,
     if (roomName != null && roomName!.isNotEmpty) 'roomName': roomName,
+    if (lobbyState != null) 'lobbyState': lobbyState!.toJson(),
     'members': <String, Object?>{
       for (final entry in members.entries) entry.key: entry.value.toJson(),
     },
@@ -279,6 +302,7 @@ final class OnlineRoomRecord {
       mode: _requiredString(map, 'mode'),
       matchFormat: _requiredString(map, 'matchFormat'),
       roomName: _optionalString(map, 'roomName'),
+      lobbyState: _optionalLobbyState(map['lobbyState']),
       members: <String, OnlineRoomMemberRecord>{
         for (final entry in membersRaw.entries)
           entry.key: OnlineRoomMemberRecord.fromJson(
@@ -436,8 +460,10 @@ final class QuickPopQueueTicket {
     required this.deadlineAtMs,
     this.state = QuickPopTicketState.waiting,
     this.claimId,
+    this.groupId,
     this.roomId,
     this.opponentUid,
+    this.opponentUids = const <String>[],
   });
 
   final String ticketId;
@@ -448,8 +474,13 @@ final class QuickPopQueueTicket {
   final int deadlineAtMs;
   final QuickPopTicketState state;
   final String? claimId;
+
+  /// New Quick Pop searches use a group id instead of a two-player claim.
+  /// The legacy claim id remains supported for old snapshots and tests.
+  final String? groupId;
   final String? roomId;
   final String? opponentUid;
+  final List<String> opponentUids;
 
   /// Server-query visibility for matchmaking enumeration.
   ///
@@ -473,8 +504,10 @@ final class QuickPopQueueTicket {
     'activeUntil': activeUntilMs,
     'state': state.name,
     if (claimId != null) 'claimId': claimId,
+    if (groupId != null) 'groupId': groupId,
     if (roomId != null) 'roomId': roomId,
     if (opponentUid != null) 'opponentUid': opponentUid,
+    if (opponentUids.isNotEmpty) 'opponentUids': opponentUids,
   };
 
   factory QuickPopQueueTicket.fromJson(Object? raw, {String? uid}) {
@@ -504,8 +537,16 @@ final class QuickPopQueueTicket {
       deadlineAtMs: deadlineAtMs,
       state: state,
       claimId: _optionalString(map, 'claimId'),
+      groupId: _optionalString(map, 'groupId'),
       roomId: _optionalString(map, 'roomId'),
       opponentUid: _optionalString(map, 'opponentUid'),
+      opponentUids: [
+        for (final value
+            in (map['opponentUids'] is List
+                ? map['opponentUids'] as List
+                : const <Object?>[]))
+          if (value is String && value.trim().isNotEmpty) value.trim(),
+      ],
     );
   }
 }
@@ -519,6 +560,8 @@ final class QuickPopResolution {
     this.opponentUid,
     this.queueKey,
     this.claimId,
+    this.groupId,
+    this.participantUids = const <String>[],
   });
 
   final String ticketId;
@@ -528,6 +571,8 @@ final class QuickPopResolution {
   final String? opponentUid;
   final String? queueKey;
   final String? claimId;
+  final String? groupId;
+  final List<String> participantUids;
 }
 
 final class QuickPopClaimAcceptance {
@@ -572,6 +617,7 @@ final class QuickPopClaimResolution {
     required this.resolvedAtMs,
     this.firstUid,
     this.secondUid,
+    this.memberUids = const <String>[],
   });
 
   final QuickPopResolutionKind kind;
@@ -579,6 +625,7 @@ final class QuickPopClaimResolution {
   final int resolvedAtMs;
   final String? firstUid;
   final String? secondUid;
+  final List<String> memberUids;
 
   Map<String, Object?> toJson() => <String, Object?>{
     'kind': kind.name,
@@ -586,6 +633,7 @@ final class QuickPopClaimResolution {
     'resolvedAt': resolvedAtMs,
     if (firstUid != null) 'firstUid': firstUid,
     if (secondUid != null) 'secondUid': secondUid,
+    if (memberUids.isNotEmpty) 'memberUids': memberUids,
   };
 
   factory QuickPopClaimResolution.fromJson(Object? raw) {
@@ -600,6 +648,13 @@ final class QuickPopClaimResolution {
       resolvedAtMs: _requiredInt(map, 'resolvedAt'),
       firstUid: _optionalString(map, 'firstUid'),
       secondUid: _optionalString(map, 'secondUid'),
+      memberUids: [
+        for (final value
+            in (map['memberUids'] is List
+                ? map['memberUids'] as List
+                : const <Object?>[]))
+          if (value is String && value.trim().isNotEmpty) value.trim(),
+      ],
     );
   }
 }

@@ -5,6 +5,7 @@ import 'dart:math';
 import 'package:flutter/foundation.dart';
 
 import 'online_lobby.dart';
+import 'online_mode_services.dart';
 import 'online_room_ui.dart';
 import 'online_transport.dart';
 import 'online_transport_models.dart';
@@ -18,15 +19,21 @@ final class RealtimeOnlineRoomController extends ChangeNotifier
     implements OnlineRoomController {
   RealtimeOnlineRoomController({
     required this.transport,
+    OnlineQuickTableService? quickTableService,
     Random? openingRollRandom,
-    this.joinTimeout = const Duration(seconds: 15),
+    this.joinTimeout = const Duration(seconds: 30),
+    this.roomReconciliationInterval = const Duration(seconds: 1),
     this.onGameReady,
-  }) : _openingRollRandom = openingRollRandom ?? Random.secure() {
+  }) : quickTableService =
+           quickTableService ?? OnlineQuickTableService(transport),
+       _openingRollRandom = openingRollRandom ?? Random.secure() {
     _listenToPublicRooms();
   }
 
   final OnlineTransportClient transport;
+  final OnlineQuickTableService quickTableService;
   final Duration joinTimeout;
+  final Duration roomReconciliationInterval;
   final ValueChanged<OnlineLobby>? onGameReady;
   final Random _openingRollRandom;
 
@@ -41,6 +48,10 @@ final class RealtimeOnlineRoomController extends ChangeNotifier
   StreamSubscription<Object?>? _lobbyStateSubscription;
   StreamSubscription<Object?>? _openingRollRequestsSubscription;
   OnlineHostRoomLease? _hostRoomLease;
+  Timer? _presenceRecoveryTimer;
+  Timer? _roomReconciliationTimer;
+  bool _recoveringPresence = false;
+  bool _reconcilingRoom = false;
 
   OnlineLobby? _lobby;
   OnlineRoomRecord? _roomRecord;
@@ -143,10 +154,9 @@ final class RealtimeOnlineRoomController extends ChangeNotifier
     final attempt = ++_createAttempt;
     await transport.syncProfile();
     _throwIfCreateCancelled(attempt);
-    final room = await transport.createRoom(
+    final room = await quickTableService.createRoom(
       visibility: visibility,
-      mode: mode.name,
-      matchFormat: 'quickTable',
+      mode: mode,
       roomName: roomName,
     );
     if (_createCancelled(attempt)) {
@@ -321,7 +331,7 @@ final class RealtimeOnlineRoomController extends ChangeNotifier
     OnlineRoomJoinRequestRecord request,
   ) async {
     try {
-      final room = await transport.readRoom(request.roomId);
+      final room = await quickTableService.readRoom(request.roomId);
       if (room != null && room.members.containsKey(localParticipantId)) {
         await _cleanupCancelledJoin(room, request);
       }
@@ -484,16 +494,12 @@ final class RealtimeOnlineRoomController extends ChangeNotifier
       roomWithCpuSeats,
       status: RoomStatus.waiting,
     );
-    await transport.store.set(
-      _lobbyStatePath(room.id),
-      waitingWithCpu.toJson(),
-    );
     _setLobby(waitingWithCpu);
-    final lobby = await _mutateHostLobby(
+    await _publishWaitingLobby(waitingWithCpu, _roomEpoch);
+    await _transitionHostLobby(
       (snapshot) =>
           snapshot.startOpeningRoll(actorParticipantId: localParticipantId),
     );
-    await _syncRoomStatus(lobby.status);
     // CPU seats have no device that can press the opening-roll button. The
     // host rolls those seats immediately, while human players still roll on
     // their own phones. This keeps a 2- or 3-player room from waiting for an
@@ -536,14 +542,14 @@ final class RealtimeOnlineRoomController extends ChangeNotifier
 
   @override
   Future<void> markGameStarted() async {
-    final lobby = await _mutateHostLobby(
+    await _transitionHostLobby(
       (snapshot) =>
           snapshot.markGameStarted(actorParticipantId: localParticipantId),
     );
-    await _syncRoomStatus(lobby.status);
   }
 
   Future<void> _attachRoom(OnlineRoomRecord room) async {
+    quickTableService.assertRoom(room);
     await _detachRoom(clearState: false);
     _ensureActive();
     final epoch = ++_roomEpoch;
@@ -551,6 +557,8 @@ final class RealtimeOnlineRoomController extends ChangeNotifier
     _roomMode = _parseMode(room.mode);
     _roomError = null;
     _lastPublishedWaitingFingerprint = null;
+    _startPresenceRecovery(room.id, epoch);
+    _startRoomReconciliation(room.id, epoch);
 
     if (room.status == RoomStatus.waiting) {
       final waiting = _lobbyFromRoom(room, status: RoomStatus.waiting);
@@ -597,6 +605,81 @@ final class RealtimeOnlineRoomController extends ChangeNotifier
     _notify();
   }
 
+  /// Reconciles the visible lobby with authoritative Firebase reads.
+  ///
+  /// Realtime Database listeners normally deliver every lifecycle update, but
+  /// a native client can occasionally reconnect without replaying an event
+  /// that moved the room from waiting to openingRoll. A small foreground poll
+  /// prevents that missed event from leaving one phone on an obsolete screen.
+  /// Reads only run while a room is attached and never write game state.
+  void _startRoomReconciliation(String roomId, int epoch) {
+    _roomReconciliationTimer?.cancel();
+    if (roomReconciliationInterval <= Duration.zero) return;
+    _roomReconciliationTimer = Timer.periodic(roomReconciliationInterval, (_) {
+      if (_disposed || epoch != _roomEpoch || _reconcilingRoom) return;
+      _reconcilingRoom = true;
+      unawaited(
+        _reconcileAttachedRoom(roomId, epoch).whenComplete(() {
+          _reconcilingRoom = false;
+        }),
+      );
+    });
+  }
+
+  Future<void> _reconcileAttachedRoom(String roomId, int epoch) async {
+    try {
+      final room = await quickTableService.readRoom(roomId);
+      if (_disposed || epoch != _roomEpoch) return;
+      debugPrint(
+        'Room reconciliation read ${room?.status.name ?? 'missing'} '
+        'for $roomId (visible ${_lobby?.status.name ?? 'none'}).',
+      );
+      _acceptRoomRecord(room, epoch);
+      if (room == null || room.status == RoomStatus.closed) return;
+
+      // Read the child independently too. This also repairs older room roots
+      // created before lobbyState was embedded in the aggregate record.
+      final rawLobby = await transport.store.read(_lobbyStatePath(roomId));
+      if (_disposed || epoch != _roomEpoch) return;
+      _acceptLobbyState(rawLobby, epoch);
+    } catch (error) {
+      debugPrint('Room reconciliation failed for $roomId: $error');
+      // A transient poll failure must not replace the live listener's state or
+      // show a false room error. The next tick retries; presence recovery and
+      // listener errors remain responsible for user-facing connectivity UI.
+    }
+  }
+
+  void _startPresenceRecovery(String roomId, int epoch) {
+    _presenceRecoveryTimer?.cancel();
+    _presenceRecoveryTimer = Timer.periodic(const Duration(seconds: 2), (_) {
+      if (_disposed || epoch != _roomEpoch || _recoveringPresence) return;
+      final snapshot = _roomRecord;
+      if (snapshot == null ||
+          snapshot.id != roomId ||
+          snapshot.status == RoomStatus.closed ||
+          snapshot.presenceFor(localParticipantId) == LobbyPresence.connected) {
+        return;
+      }
+      _recoveringPresence = true;
+      unawaited(
+        transport
+            .connectRoomPresence(roomId)
+            .then((_) async {
+              if (_disposed || epoch != _roomEpoch) return;
+              final restored = await quickTableService.readRoom(roomId);
+              if (restored != null && !_disposed && epoch == _roomEpoch) {
+                _acceptRoomRecord(restored, epoch);
+              }
+            })
+            .catchError((Object error, StackTrace stackTrace) {
+              _acceptRoomError(error, epoch);
+            })
+            .whenComplete(() => _recoveringPresence = false),
+      );
+    });
+  }
+
   void _acceptRoomRecord(OnlineRoomRecord? snapshot, int epoch) {
     if (_disposed || epoch != _roomEpoch) return;
     try {
@@ -604,16 +687,59 @@ final class RealtimeOnlineRoomController extends ChangeNotifier
         unawaited(_detachRoom(clearState: true));
         return;
       }
+      final previousRoom = _roomRecord;
+      if (previousRoom != null && previousRoom.id == snapshot.id) {
+        final snapshotRank = _roomStatusRank(snapshot.status);
+        final previousRank = _roomStatusRank(previousRoom.status);
+        if (snapshotRank < previousRank ||
+            (snapshotRank == previousRank &&
+                snapshot.revision < previousRoom.revision)) {
+          return;
+        }
+      }
       if (!snapshot.members.containsKey(localParticipantId) &&
           snapshot.status != RoomStatus.closed) {
         unawaited(_detachRoom(clearState: true));
         return;
       }
 
+      final currentLobby = _lobby;
+      final lobbyAlreadyAdvanced =
+          currentLobby != null &&
+          currentLobby.roomId == snapshot.id &&
+          currentLobby.status != RoomStatus.waiting;
+
       _roomRecord = snapshot;
       _roomMode = _parseMode(snapshot.mode);
       _roomError = null;
-      if (snapshot.status == RoomStatus.waiting) {
+      // Firebase can occasionally reconnect a child `lobbyState` listener
+      // without delivering the write that advanced the room lifecycle. The
+      // room-root listener receives that same serialized lobby atomically, so
+      // use it as the authoritative fallback instead of leaving the UI on the
+      // waiting screen while the server is already in openingRoll/starting.
+      final embeddedLobby = snapshot.lobbyState;
+      if (embeddedLobby != null) {
+        if (embeddedLobby.roomId == snapshot.id) {
+          final visibleLobby = _lobby;
+          final embeddedRank = _roomStatusRank(embeddedLobby.status);
+          final visibleRank = visibleLobby == null
+              ? -1
+              : _roomStatusRank(visibleLobby.status);
+          if (visibleLobby == null ||
+              visibleLobby.roomId != snapshot.id ||
+              embeddedRank > visibleRank ||
+              (embeddedRank == visibleRank &&
+                  embeddedLobby.revision >= visibleLobby.revision)) {
+            _setLobby(embeddedLobby);
+          }
+        }
+      }
+      // The room aggregate and lobbyState are updated in two separate
+      // Firebase transactions. A delayed room-root `waiting` snapshot may
+      // arrive after lobbyState has already entered the opening roll. Never
+      // let that older aggregate roll the visible lobby backwards or publish
+      // a fresh waiting lobby over the authoritative opening-roll state.
+      if (snapshot.status == RoomStatus.waiting && !lobbyAlreadyAdvanced) {
         final waiting = _lobbyFromRoom(snapshot, status: RoomStatus.waiting);
         _setLobby(waiting);
         if (snapshot.hostUid == localParticipantId) {
@@ -646,6 +772,19 @@ final class RealtimeOnlineRoomController extends ChangeNotifier
     try {
       final snapshot = OnlineLobby.fromJson(onlineMap(raw));
       if (snapshot.roomId != _roomRecord?.id) return;
+      final current = _lobby;
+      if (current != null && current.roomId == snapshot.roomId) {
+        final snapshotRank = _roomStatusRank(snapshot.status);
+        final currentRank = _roomStatusRank(current.status);
+        // Realtime listeners can deliver a cached waiting snapshot after the
+        // host has already committed openingRoll/starting/inGame. Lifecycle
+        // never moves backwards, and an older same-state revision is stale.
+        if (snapshotRank < currentRank ||
+            (snapshotRank == currentRank &&
+                snapshot.revision < current.revision)) {
+          return;
+        }
+      }
       _roomError = null;
       _setLobby(snapshot);
     } catch (error) {
@@ -666,8 +805,25 @@ final class RealtimeOnlineRoomController extends ChangeNotifier
     if (_lastPublishedWaitingFingerprint == fingerprint) return;
     _lastPublishedWaitingFingerprint = fingerprint;
     try {
+      if (_disposed ||
+          epoch != _roomEpoch ||
+          _lobby?.roomId != lobby.roomId ||
+          _lobby?.status != RoomStatus.waiting) {
+        return;
+      }
+      // The database rules reject a waiting snapshot once either the room or
+      // its existing lobbyState has advanced. A direct write avoids Android's
+      // native transaction-cache warm-up stall during room creation while the
+      // server still provides the authoritative anti-rollback guard.
       await transport.store.set(_lobbyStatePath(lobby.roomId), json);
     } catch (error) {
+      // A scheduled waiting publisher can legitimately lose a race against
+      // the atomic opening-roll transition. That denial is success: never
+      // surface it as an online-room error after the lobby has advanced.
+      if (_lobby?.roomId == lobby.roomId &&
+          _lobby?.status != RoomStatus.waiting) {
+        return;
+      }
       _acceptRoomError(error, epoch);
     }
   }
@@ -701,29 +857,40 @@ final class RealtimeOnlineRoomController extends ChangeNotifier
     });
   }
 
-  Future<OnlineLobby> _mutateHostLobby(
+  /// Applies a host-owned lifecycle change to both serialized lobbyState and
+  /// the room aggregate in one Firebase multi-location update.
+  ///
+  /// Keeping these values in one commit prevents a client from observing an
+  /// opening lobby while the room still says waiting (and subsequently
+  /// republishing waiting over the opening roll).
+  Future<OnlineLobby> _transitionHostLobby(
     void Function(OnlineLobby lobby) mutate,
   ) async {
-    final room = _requireRoom();
-    final fallback = _requireLobby().toJson();
-    final result = await transport.store.transaction(_lobbyStatePath(room.id), (
-      raw,
-    ) {
-      final snapshot = OnlineLobby.fromJson(
-        raw == null ? onlineMap(fallback) : onlineMap(raw),
+    final previous = _requireLobby();
+    if (previous.hostParticipantId != localParticipantId) {
+      throw const LobbyException(
+        LobbyErrorCode.notHost,
+        'Only the room host can change the authoritative lobby.',
       );
-      if (snapshot.hostParticipantId != localParticipantId) {
-        throw const LobbyException(
-          LobbyErrorCode.notHost,
-          'Only the room host can change the authoritative lobby.',
-        );
-      }
-      mutate(snapshot);
-      return OnlineStoreTransactionDecision.commit(snapshot.toJson());
-    });
-    final updated = OnlineLobby.fromJson(onlineMap(result.value));
+    }
+    final updated = _cloneLobby(previous);
+    mutate(updated);
+
+    // Advance local state before the network commit so a delayed waiting room
+    // callback cannot schedule a stale publisher during the write itself.
     _setLobby(updated);
-    return updated;
+    try {
+      await _commitRoomLifecycle(updated);
+      return _requireLobby();
+    } catch (_) {
+      final current = _lobby;
+      if (current?.roomId == updated.roomId &&
+          current?.status == updated.status &&
+          current?.revision == updated.revision) {
+        _setLobby(previous);
+      }
+      rethrow;
+    }
   }
 
   void _scheduleOpeningRequestDrain(int epoch) {
@@ -897,18 +1064,29 @@ final class RealtimeOnlineRoomController extends ChangeNotifier
   }
 
   Future<void> _syncRoomStatus(RoomStatus status) async {
+    final lobby = _requireLobby();
+    if (lobby.status != status) {
+      throw StateError(
+        'Lobby ${lobby.status.name} cannot synchronize room ${status.name}.',
+      );
+    }
+    await _commitRoomLifecycle(lobby);
+  }
+
+  Future<void> _commitRoomLifecycle(OnlineLobby lobby) async {
     final room = _requireRoom();
-    if (room.hostUid != localParticipantId) {
+    if (room.hostUid != localParticipantId ||
+        lobby.hostParticipantId != localParticipantId) {
       throw const OnlineTransportException(
         OnlineTransportErrorCode.notHost,
         'Only the host can update room lifecycle state.',
       );
     }
-    if (room.status == status) return;
-    final now = await transport.store.serverNowMs();
-    final result = await transport.store.transaction('$_roomsPath/${room.id}', (
-      raw,
-    ) {
+    final roomPath = '$_roomsPath/${room.id}';
+    OnlineRoomRecord? syncedRoom;
+    OnlineLobby? syncedLobby;
+    for (var attempt = 0; attempt < 3; attempt++) {
+      final raw = await transport.store.read(roomPath);
       if (raw == null) {
         throw const OnlineTransportException(
           OnlineTransportErrorCode.roomNotFound,
@@ -922,21 +1100,111 @@ final class RealtimeOnlineRoomController extends ChangeNotifier
           'Only the host can update room lifecycle state.',
         );
       }
-      final map = onlineMap(raw);
-      map
-        ..['status'] = status.name
-        ..['revision'] = current.revision + 1
-        ..['updatedAt'] = now;
-      return OnlineStoreTransactionDecision.commit(map);
-    });
-    _roomRecord = OnlineRoomRecord.fromJson(result.value);
-    if (status != RoomStatus.waiting) {
+      final roomMap = onlineMap(raw);
+      final remoteLobbyRaw = roomMap['lobbyState'];
+      final remoteLobby = remoteLobbyRaw == null
+          ? null
+          : OnlineLobby.fromJson(onlineMap(remoteLobbyRaw));
+      final currentRank = _roomStatusRank(current.status);
+      final targetRank = _roomStatusRank(lobby.status);
+      if (currentRank > targetRank) {
+        if (remoteLobby != null &&
+            _roomStatusRank(remoteLobby.status) >= targetRank) {
+          syncedRoom = current;
+          syncedLobby = remoteLobby;
+          break;
+        }
+        throw StateError(
+          'Room ${current.status.name} cannot move back to ${lobby.status.name}.',
+        );
+      }
+      if (current.status == lobby.status &&
+          remoteLobby?.status == lobby.status &&
+          remoteLobby!.revision >= lobby.revision) {
+        syncedRoom = current;
+        syncedLobby = remoteLobby;
+        break;
+      }
+      final now = await _lifecycleTimestamp(current);
+      try {
+        await transport.store.update(roomPath, <String, Object?>{
+          'lobbyState': lobby.toJson(),
+          'status': lobby.status.name,
+          'revision': current.revision + 1,
+          'updatedAt': now,
+        });
+      } catch (error) {
+        debugPrint(
+          'Room lifecycle ${current.status.name} -> ${lobby.status.name} '
+          'failed on attempt ${attempt + 1} (${error.runtimeType}): $error',
+        );
+        if (attempt == 2) rethrow;
+        continue;
+      }
+      final verifiedRaw = await transport.store.read(roomPath);
+      if (verifiedRaw == null) {
+        throw const OnlineTransportException(
+          OnlineTransportErrorCode.roomNotFound,
+          'The room no longer exists.',
+        );
+      }
+      final verified = OnlineRoomRecord.fromJson(verifiedRaw);
+      final verifiedMap = onlineMap(verifiedRaw);
+      final verifiedLobbyRaw = verifiedMap['lobbyState'];
+      final verifiedLobby = verifiedLobbyRaw == null
+          ? null
+          : OnlineLobby.fromJson(onlineMap(verifiedLobbyRaw));
+      if (verified.status == lobby.status &&
+          verifiedLobby?.status == lobby.status &&
+          verifiedLobby!.revision >= lobby.revision) {
+        syncedRoom = verified;
+        syncedLobby = verifiedLobby;
+        break;
+      }
+    }
+    if (syncedRoom == null || syncedLobby == null) {
+      throw StateError(
+        'The room lifecycle did not reach ${lobby.status.name} atomically.',
+      );
+    }
+    _roomRecord = syncedRoom;
+    _setLobby(syncedLobby);
+    if (lobby.status != RoomStatus.waiting) {
       await transport.store.set(
         '$onlineTransportRoot/publicRooms/${room.id}',
         null,
       );
     }
     _notify();
+  }
+
+  static int _roomStatusRank(RoomStatus status) => switch (status) {
+    RoomStatus.waiting => 0,
+    RoomStatus.openingRoll => 1,
+    RoomStatus.starting => 2,
+    RoomStatus.inGame => 3,
+    RoomStatus.closed => 4,
+  };
+
+  Future<int> _lifecycleTimestamp(OnlineRoomRecord current) async {
+    final localNow = DateTime.now().toUtc().millisecondsSinceEpoch;
+    try {
+      // `.info/serverTimeOffset` is a live Firebase location. On some Android
+      // reconnects its first event can be delayed even though ordinary room
+      // reads and writes are already available. A lifecycle transition must
+      // not remain half-applied (lobbyState advanced, room root waiting) only
+      // because that optional clock sample did not arrive.
+      final serverNow = await transport.store.serverNowMs().timeout(
+        const Duration(seconds: 2),
+      );
+      return max(current.updatedAtMs, max(localNow, serverNow));
+    } catch (error) {
+      debugPrint(
+        'Room lifecycle clock fell back to the device clock '
+        '(${error.runtimeType}).',
+      );
+      return max(current.updatedAtMs, localNow);
+    }
   }
 
   void _setLobby(OnlineLobby snapshot) {
@@ -987,6 +1255,12 @@ final class RealtimeOnlineRoomController extends ChangeNotifier
   Future<void> _detachRoom({required bool clearState}) async {
     _roomEpoch++;
     _drainingOpeningRollRequests = false;
+    _presenceRecoveryTimer?.cancel();
+    _presenceRecoveryTimer = null;
+    _roomReconciliationTimer?.cancel();
+    _roomReconciliationTimer = null;
+    _recoveringPresence = false;
+    _reconcilingRoom = false;
     final roomSubscription = _roomSubscription;
     final lobbySubscription = _lobbyStateSubscription;
     final openingSubscription = _openingRollRequestsSubscription;
@@ -1073,6 +1347,10 @@ final class RealtimeOnlineRoomController extends ChangeNotifier
     _joinAttempt++;
     final pendingJoin = _pendingJoinRequest;
     _pendingJoinRequest = null;
+    _presenceRecoveryTimer?.cancel();
+    _presenceRecoveryTimer = null;
+    _roomReconciliationTimer?.cancel();
+    _roomReconciliationTimer = null;
     if (pendingJoin != null) {
       unawaited(transport.cancelRoomJoinRequest(pendingJoin));
     }

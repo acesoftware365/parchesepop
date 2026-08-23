@@ -44,7 +44,7 @@ void main() {
       'Buscando un jugador online…': 'Searching for an online player…',
       'Luego jugarás contra CPU automáticamente':
           'Then you will automatically play against the CPU',
-      'JUGAR ONLINE · BUSCAR 10 S': 'PLAY ONLINE · SEARCH 10 S',
+      'JUGAR ONLINE · BUSCAR 30 S': 'PLAY ONLINE · SEARCH 30 S',
       'JUGAR AHORA CONTRA CPU': 'PLAY NOW AGAINST CPU',
       'El modo online necesita conexión con un servidor seguro. Mientras lo terminamos, puedes probar Quick Pop contra el CPU.':
           'Online play requires a secure server connection. While we finish it, you can try Quick Pop against the CPU.',

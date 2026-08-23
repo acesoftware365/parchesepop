@@ -18,7 +18,11 @@ class MatchRules {
     required this.initialStackFormsBarrier,
   });
 
+  // Keep the Classic contract stable while versioning the changed Quick Pop
+  // opening position independently. An old Quick Pop room must never mix
+  // with the new base-start rules.
   static const int currentRulesVersion = 1;
+  static const int quickPopRulesVersion = 2;
 
   static const MatchRules classic = MatchRules._(
     format: MatchFormat.classic,
@@ -32,9 +36,11 @@ class MatchRules {
 
   static const MatchRules quickPop = MatchRules._(
     format: MatchFormat.quickPop,
-    rulesVersion: currentRulesVersion,
+    rulesVersion: quickPopRulesVersion,
     tokenCount: 2,
-    initialTokenProgress: 0,
+    // Quick Pop keeps both pieces in base until the first roll. Any die may
+    // release one; there is no required 5, and no visible starting stack.
+    initialTokenProgress: -1,
     tokensRequiredToWin: 2,
     requiresFiveToExit: false,
     initialStackFormsBarrier: false,

@@ -112,8 +112,8 @@ const queueTicket = (uid, ticketId, queueKey, joinedAt) => ({
   displayName: uid === 'leader' ? 'Leader' : 'Follower',
   queueKey,
   joinedAt,
-  deadlineAt: joinedAt + 10000,
-  activeUntil: joinedAt + 10000,
+  deadlineAt: joinedAt + 30000,
+  activeUntil: joinedAt + 30000,
   state: 'waiting',
 });
 
@@ -330,7 +330,7 @@ test('Realtime Database rules enforce the online security contract', async (t) =
         'historical',
         'ticket_historical',
         queueKey,
-        now - 12000,
+        now - 17000,
       ),
       displayName: 'Historical',
       state: 'cancelled',
@@ -343,9 +343,9 @@ test('Realtime Database rules enforce the online security contract', async (t) =
     assert.equal(activeQueue.hasChild('peer'), true);
     assert.equal(activeQueue.hasChild('historical'), false);
     await assertFails(
-      get(activeQueueQuery('active', queuePath, now - 10000)),
+      get(activeQueueQuery('active', queuePath, now - 15000)),
     );
-    await assertFails(
+    await assertSucceeds(
       get(
         query(
           pathRef('active', queuePath),
@@ -382,12 +382,12 @@ test('Realtime Database rules enforce the online security contract', async (t) =
     await assertFails(get(pathRef('active', `${queuePath}/peer`)));
 
     await seed(`${queuePath}/expired`, {
-        ...queueTicket('expired', 'ticket_expired_private', queueKey, now - 12000),
+        ...queueTicket('expired', 'ticket_expired_private', queueKey, now - 30100),
       displayName: 'Expired',
     });
     await assertSucceeds(get(pathRef('expired', `${queuePath}/expired`)));
     await assertFails(
-      get(activeQueueQuery('expired', queuePath, now - 12000)),
+      get(activeQueueQuery('expired', queuePath, now - 30100)),
     );
     await assertFails(get(pathRef('expired', `${queuePath}/peer`)));
   });
@@ -682,7 +682,7 @@ test('Realtime Database rules enforce the online security contract', async (t) =
     );
   });
 
-  await t.test('CPU fallback is denied before the ten-second deadline', async () => {
+  await t.test('CPU fallback is denied before the thirty-second deadline', async () => {
     await environment.clearDatabase();
     const now = Date.now();
     const queueKey = 'chaos_quickPop';
@@ -705,7 +705,7 @@ test('Realtime Database rules enforce the online security contract', async (t) =
     );
 
     const expired = {
-      ...queueTicket('expired', 'ticket_expired', queueKey, now - 10100),
+      ...queueTicket('expired', 'ticket_expired', queueKey, now - 30100),
       displayName: 'Expired',
     };
     await assertSucceeds(
@@ -729,8 +729,8 @@ test('Realtime Database rules enforce the online security contract', async (t) =
     await assertFails(
       set(pathRef('too-long', `onlineV2/quickQueues/${queueKey}/too-long`), {
         ...queueTicket('too-long', 'ticket_too_long', queueKey, now),
-        deadlineAt: now + 10001,
-        activeUntil: now + 10001,
+        deadlineAt: now + 30001,
+        activeUntil: now + 30001,
       }),
     );
     const missingActiveUntil = queueTicket(
@@ -1031,8 +1031,50 @@ test('Realtime Database rules enforce the online security contract', async (t) =
     );
     await assertFails(set(pathRef('follower', statusPath), 'inGame'));
     await assertSucceeds(set(pathRef('leader', statusPath), 'inGame'));
-    // Quick Pop's capture bonus is a verified twenty-step die. The command
-    // envelope accepts it only for this already-valid Quick Pop room.
+    for (const die of [1, 2, 3, 4, 5, 6]) {
+      const actionId = `quick-pop-normal-${die}`;
+      await assertSucceeds(
+        set(
+          pathRef(
+            'leader',
+            `onlineV2/rooms/${roomId}/commands/leader/${actionId}`,
+          ),
+          {
+            kind: 'move',
+            matchId: roomId,
+            participantId: 'leader',
+            submittedById: 'leader',
+            actionId,
+            expectedRevision: 0,
+            submittedAt: Date.now(),
+            tokenId: 0,
+            die,
+          },
+        ),
+      );
+    }
+    // Goal and capture bonuses are authoritative ten/twenty-step dice. The
+    // command envelope must let both reach the host; the match authority then
+    // verifies that the corresponding bonus is actually pending.
+    await assertSucceeds(
+      set(
+        pathRef(
+          'leader',
+          `onlineV2/rooms/${roomId}/commands/leader/quick-pop-ten`,
+        ),
+        {
+          kind: 'move',
+          matchId: roomId,
+          participantId: 'leader',
+          submittedById: 'leader',
+          actionId: 'quick-pop-ten',
+          expectedRevision: 0,
+          submittedAt: Date.now(),
+          tokenId: 0,
+          die: 10,
+        },
+      ),
+    );
     await assertSucceeds(
       set(
         pathRef(
@@ -1357,6 +1399,51 @@ test('Realtime Database rules enforce the online security contract', async (t) =
     await assertFails(
       update(pathRef('guest', commandPath), { expectedRevision: 1 }),
     );
+
+    for (const bonus of [10, 20]) {
+      const actionId = `quick-table-bonus-${bonus}`;
+      await assertSucceeds(
+        set(
+          pathRef(
+            'guest',
+            `onlineV2/rooms/room-1/commands/guest/${actionId}`,
+          ),
+          {
+            kind: 'move',
+            matchId: 'match-1',
+            participantId: 'guest',
+            submittedById: 'guest',
+            actionId,
+            expectedRevision: 0,
+            submittedAt: now + bonus,
+            tokenId: 0,
+            die: bonus,
+          },
+        ),
+      );
+    }
+    for (const invalidDie of [7, 9, 11, 19, 21]) {
+      const actionId = `invalid-special-${invalidDie}`;
+      await assertFails(
+        set(
+          pathRef(
+            'guest',
+            `onlineV2/rooms/room-1/commands/guest/${actionId}`,
+          ),
+          {
+            kind: 'move',
+            matchId: 'match-1',
+            participantId: 'guest',
+            submittedById: 'guest',
+            actionId,
+            expectedRevision: 0,
+            submittedAt: now + invalidDie,
+            tokenId: 0,
+            die: invalidDie,
+          },
+        ),
+      );
+    }
 
     await assertSucceeds(
       set(

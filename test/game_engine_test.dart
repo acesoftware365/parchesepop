@@ -304,6 +304,32 @@ void main() {
     }
   });
 
+  for (final format in MatchFormat.values) {
+    for (final mode in GameMode.values) {
+      test('${format.name} ${mode.name} keeps the +10 goal bonus playable', () {
+        final game = GameEngine(matchFormat: format, mode: mode);
+        final player = game.currentPlayer;
+        final finisher = player.tokens.first
+          ..progress = GameEngine.finishProgress - 1;
+        final bonusMover = player.tokens.last..progress = 4;
+        game
+          ..hasRolled = true
+          ..dice = const <int>[1, 6];
+        game.remainingDice.addAll(const <int>[1, 6]);
+
+        expect(game.moveToken(finisher, die: 1), isTrue);
+        expect(finisher.finished, isTrue);
+        expect(game.gameOver, isFalse);
+        expect(game.remainingDice, const <int>[6, 10]);
+        expect(game.canMove(bonusMover, 10), isTrue);
+        expect(game.moveToken(bonusMover, die: 10), isTrue);
+        expect(bonusMover.progress, 14);
+        expect(game.remainingDice, const <int>[6]);
+        game.dispose();
+      });
+    }
+  }
+
   test('a five must be used for salida while a token remains in the nest', () {
     final game = GameEngine();
     final outside = game.currentPlayer.tokens.first..progress = 4;

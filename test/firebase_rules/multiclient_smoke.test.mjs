@@ -62,8 +62,8 @@ const queueTicket = (uid, displayName, queueKey, joinedAt) => ({
   displayName,
   queueKey,
   joinedAt,
-  deadlineAt: joinedAt + 10000,
-  activeUntil: joinedAt + 10000,
+  deadlineAt: joinedAt + 30000,
+  activeUntil: joinedAt + 30000,
   state: 'waiting',
 });
 
@@ -91,7 +91,7 @@ async function clearAndVerifyIsolation() {
 }
 
 test('Firebase multi-client online smoke', async (t) => {
-  await t.test('Quick Pop matches two realtime clients before ten seconds', async () => {
+  await t.test('Quick Pop matches two realtime clients before thirty seconds', async () => {
     await environment.clearDatabase();
     const startedAt = Date.now();
     const queueKey = 'traditional_quickPop';
@@ -287,8 +287,8 @@ test('Firebase multi-client online smoke', async (t) => {
     );
     assert.equal(await secondObservedLaunch, 'inGame');
     assert.ok(
-      Date.now() - startedAt < 10000,
-      'the provisional human commit must occur before ten seconds',
+      Date.now() - startedAt < 30000,
+      'the provisional human commit must occur before thirty seconds',
     );
     await delay(Math.max(0, first.deadlineAt - Date.now() + 50));
     await Promise.all([
@@ -414,7 +414,7 @@ test('Firebase multi-client online smoke', async (t) => {
     await clearAndVerifyIsolation();
   });
 
-  await t.test('Quick Pop solo falls back to CPU only after ten seconds', async () => {
+  await t.test('Quick Pop solo falls back to CPU only after thirty seconds', async () => {
     await environment.clearDatabase();
     const uid = 'smoke_solo';
     const queueKey = 'traditional_quickPop';
@@ -434,7 +434,7 @@ test('Firebase multi-client online smoke', async (t) => {
     const observedFallback = waitForValue(
       pathRef(uid, ticketPath),
       (value) => value?.state === 'cpuFallback',
-      12000,
+      32000,
     );
     await delay(Math.max(0, ticket.deadlineAt - Date.now() + 100));
     await assertSucceeds(
@@ -446,7 +446,7 @@ test('Firebase multi-client online smoke', async (t) => {
     );
     const fallback = await observedFallback;
     assert.equal(fallback.roomId, 'smoke_cpu_room');
-    assert.ok(Date.now() - joinedAt >= 10000);
+    assert.ok(Date.now() - joinedAt >= 30000);
     await clearAndVerifyIsolation();
   });
 
@@ -557,23 +557,33 @@ test('Firebase multi-client online smoke', async (t) => {
     };
     const lobbyPath = `${roomPath}/lobbyState`;
     await assertSucceeds(
+      update(pathRef(uids[0], roomPath), {
+        lobbyState: {
+          schemaVersion: 1,
+          roomId,
+          roomCode: code,
+          hostParticipantId: uids[0],
+          visibility: 'private',
+          status: 'openingRoll',
+          revision: 4,
+          participants,
+          openingRoll: opening,
+        },
+        status: 'openingRoll',
+        revision: 4,
+        updatedAt: Date.now(),
+      }),
+    );
+    await assertFails(
       set(pathRef(uids[0], lobbyPath), {
         schemaVersion: 1,
         roomId,
         roomCode: code,
         hostParticipantId: uids[0],
         visibility: 'private',
-        status: 'openingRoll',
-        revision: 4,
+        status: 'waiting',
+        revision: 5,
         participants,
-        openingRoll: opening,
-      }),
-    );
-    await assertSucceeds(
-      update(pathRef(uids[0], roomPath), {
-        status: 'openingRoll',
-        revision: 4,
-        updatedAt: Date.now(),
       }),
     );
 
@@ -615,20 +625,18 @@ test('Firebase multi-client online smoke', async (t) => {
       clockwiseParticipantIds,
     };
     await assertSucceeds(
-      set(pathRef(uids[0], lobbyPath), {
-        schemaVersion: 1,
-        roomId,
-        roomCode: code,
-        hostParticipantId: uids[0],
-        visibility: 'private',
-        status: 'starting',
-        revision: 5,
-        participants,
-        openingRoll: completedOpening,
-      }),
-    );
-    await assertSucceeds(
       update(pathRef(uids[0], roomPath), {
+        lobbyState: {
+          schemaVersion: 1,
+          roomId,
+          roomCode: code,
+          hostParticipantId: uids[0],
+          visibility: 'private',
+          status: 'starting',
+          revision: 5,
+          participants,
+          openingRoll: completedOpening,
+        },
         status: 'starting',
         revision: 5,
         updatedAt: Date.now(),
@@ -647,20 +655,18 @@ test('Firebase multi-client online smoke', async (t) => {
       );
     }
     await assertSucceeds(
-      set(pathRef(uids[0], lobbyPath), {
-        schemaVersion: 1,
-        roomId,
-        roomCode: code,
-        hostParticipantId: uids[0],
-        visibility: 'private',
-        status: 'closed',
-        revision: 6,
-        participants,
-        openingRoll: completedOpening,
-      }),
-    );
-    await assertSucceeds(
       update(pathRef(uids[0], roomPath), {
+        lobbyState: {
+          schemaVersion: 1,
+          roomId,
+          roomCode: code,
+          hostParticipantId: uids[0],
+          visibility: 'private',
+          status: 'closed',
+          revision: 6,
+          participants,
+          openingRoll: completedOpening,
+        },
         status: 'closed',
         revision: 6,
         updatedAt: Date.now(),

@@ -49,7 +49,7 @@ typedef QuickPopDeadlineScheduler =
 ///
 /// A human result is deliberately not terminal. The result must first be
 /// prepared, start its replicated game sync, and pass the shared two-player
-/// readiness barrier injected through [synchronize]. The five-second window
+/// readiness barrier injected through [synchronize]. The search window
 /// decides whether to keep searching; [humanPreparationGrace] gives a verified
 /// pair a separate bounded window to finish opening the playable table.
 ///
@@ -60,6 +60,7 @@ final class QuickPopDeadlineSearch<Connection, Ticket, Resolution, Prepared> {
   QuickPopDeadlineSearch({
     required this.window,
     this.humanPreparationGrace = const Duration(seconds: 10),
+    this.deferFallbackUntilDeadline = false,
     required Duration Function() elapsed,
     required Future<Connection> Function() connect,
     required Future<Ticket> Function(Connection connection) enqueue,
@@ -149,10 +150,18 @@ final class QuickPopDeadlineSearch<Connection, Ticket, Resolution, Prepared> {
   ///
   /// Match preparation opens Firebase auth, the room checkpoint, presence
   /// leases, and the two-player readiness barrier. Those operations can take
-  /// longer than the five-second search without meaning that the opponent
+  /// longer than the search window without meaning that the opponent
   /// disappeared. A CPU fallback is still decided at [window] when no human
   /// resolution exists; this grace only protects a verified human launch.
   final Duration humanPreparationGrace;
+
+  /// Keeps the visible search promise intact when a transient online
+  /// operation fails before a human result exists. Desktop Firebase startup
+  /// can briefly fail while anonymous Auth or the Realtime Database socket is
+  /// opening; falling back immediately makes the advertised ten-second search
+  /// look broken. The caller still receives a deterministic CPU fallback at
+  /// the same absolute deadline.
+  final bool deferFallbackUntilDeadline;
   final Duration pollInterval;
   final Future<Connection> Function() _connect;
   final Future<Ticket> Function(Connection connection) _enqueue;
@@ -226,9 +235,12 @@ final class QuickPopDeadlineSearch<Connection, Ticket, Resolution, Prepared> {
       _QuickPopLaunchCommitState.none;
   bool _settlementStarted = false;
   Object? _settlementFailure;
+  bool _resolutionDeadlineExtended = false;
   bool _humanPreparationDeadlineExtended = false;
 
   QuickPopDeadlineOutcome get outcome => _outcome;
+
+  Resolution? get resolution => _resolution;
 
   bool get isActive =>
       _started && _outcome == QuickPopDeadlineOutcome.searching;
@@ -302,10 +314,24 @@ final class QuickPopDeadlineSearch<Connection, Ticket, Resolution, Prepared> {
       if (resolution == null || !isActive) return;
       _resolution = resolution;
       if (!_isHumanResolution(resolution)) {
+        if (!await _waitForDeferredFallback()) return;
         _finishFallback();
         return;
       }
 
+      if (_resolutionDeadlineExtended &&
+          humanPreparationGrace > Duration.zero) {
+        // The absolute search timer may have fired while the authoritative
+        // deadline resolution was still crossing Firebase. Once that in-flight
+        // operation returns a verified human group, restart the separate room
+        // preparation budget instead of charging it for the network race.
+        _cancelDeadline?.call();
+        _humanPreparationDeadlineExtended = true;
+        _cancelDeadline = _scheduleDeadline(
+          humanPreparationGrace,
+          () => unawaited(_settleAtDeadline()),
+        );
+      }
       _setPhase(QuickPopSearchPhase.preparing);
       final prepared = await _prepare(connection, ticket, resolution);
       _prepared = prepared;
@@ -359,20 +385,84 @@ final class QuickPopDeadlineSearch<Connection, Ticket, Resolution, Prepared> {
         _settlementFailure = error;
         return;
       }
+      if (await _retryOnlineAttemptBeforeDeadline()) {
+        await _runOnlineSearch();
+        return;
+      }
+      if (!await _waitForDeferredFallback()) return;
       _finishFallback(failurePhase: _phase, failure: error);
     }
+  }
+
+  /// Desktop Firebase can fail while its native Auth/Database plugins are
+  /// warming up. Retry the whole pre-match attempt during the same visible
+  /// search window so a real opponent can still be found, while preserving
+  /// the original absolute ten-second fallback boundary.
+  Future<bool> _retryOnlineAttemptBeforeDeadline() async {
+    if (!deferFallbackUntilDeadline ||
+        _resolution != null ||
+        !isActive ||
+        remaining <= Duration.zero) {
+      return false;
+    }
+    final wait = remaining < pollInterval ? remaining : pollInterval;
+    await _delay(wait);
+    if (!isActive) {
+      await _abandonOnlineWork();
+      return false;
+    }
+    unawaited(_abandonOnlineWork());
+    _connection = null;
+    _ticket = null;
+    _resolution = null;
+    _prepared = null;
+    _ticketCancellationStarted = false;
+    _resolutionAbandonmentStarted = false;
+    _preparedDisposalStarted = false;
+    _connectionReleased = false;
+    _launchCommitState = _QuickPopLaunchCommitState.none;
+    _settlementStarted = false;
+    _settlementFailure = null;
+    _resolutionDeadlineExtended = false;
+    _humanPreparationDeadlineExtended = false;
+    return true;
+  }
+
+  /// Returns false when the scheduled deadline has already completed the
+  /// search while this operation was waiting for the absolute boundary.
+  Future<bool> _waitForDeferredFallback() async {
+    if (!deferFallbackUntilDeadline || remaining <= Duration.zero) {
+      return isActive;
+    }
+    await _delay(remaining);
+    if (!isActive) {
+      await _abandonOnlineWork();
+      return false;
+    }
+    return true;
   }
 
   Future<bool> _waitForNextPoll() async {
     final nextDelay = remaining;
     if (nextDelay <= Duration.zero) {
-      unawaited(_settleAtDeadline());
+      if (!_resolutionDeadlineExtended) {
+        await _settleAtDeadline();
+      }
+      if (isActive && _resolutionDeadlineExtended && _resolution == null) {
+        await _delay(pollInterval);
+        return isActive;
+      }
       return false;
     }
     await _delay(nextDelay < pollInterval ? nextDelay : pollInterval);
     if (!isActive) return false;
     if (_elapsed() >= window) {
-      unawaited(_settleAtDeadline());
+      if (!_resolutionDeadlineExtended) {
+        await _settleAtDeadline();
+      }
+      if (isActive && _resolutionDeadlineExtended && _resolution == null) {
+        return true;
+      }
       return false;
     }
     return true;
@@ -401,17 +491,40 @@ final class QuickPopDeadlineSearch<Connection, Ticket, Resolution, Prepared> {
     final ticket = _ticket;
     final resolution = _resolution;
     final prepared = _prepared;
+    // Group resolution is intentionally committed at the shared search
+    // deadline. The local timer and the final Firebase read can therefore
+    // race by a few milliseconds. Keep an already-running resolution call
+    // alive for one bounded preparation window; CPU results still finish as
+    // soon as that call returns, while a verified human result receives a
+    // fresh preparation budget below.
+    if (deferFallbackUntilDeadline &&
+        resolution == null &&
+        _phase == QuickPopSearchPhase.resolving &&
+        connection != null &&
+        ticket != null &&
+        !_resolutionDeadlineExtended &&
+        humanPreparationGrace > Duration.zero) {
+      _resolutionDeadlineExtended = true;
+      _cancelDeadline?.call();
+      _cancelDeadline = _scheduleDeadline(
+        humanPreparationGrace,
+        () => unawaited(_settleAtDeadline()),
+      );
+      return;
+    }
     // A verified human may have been found just before the search deadline
     // while Firebase is still preparing the shared table. Keep that launch
     // alive for a short, bounded grace period instead of tearing down both
-    // clients at exactly the shared search deadline. If no readiness commit arrives during
-    // the grace, this method runs again and falls back normally.
-    if (_launchCommitState == _QuickPopLaunchCommitState.none &&
+    // clients at exactly the shared search deadline. This gives a provisional
+    // launch (where synchronization has already started) or a late-resolving
+    // human match the necessary window to finish opening the playable table.
+    // If no settlement commit arrives during the grace, this method runs
+    // again and falls back normally.
+    if (_launchCommitState != _QuickPopLaunchCommitState.provisional &&
         resolution != null &&
         _isHumanResolution(resolution) &&
         connection != null &&
         ticket != null &&
-        prepared == null &&
         !_humanPreparationDeadlineExtended &&
         humanPreparationGrace > Duration.zero) {
       _humanPreparationDeadlineExtended = true;
@@ -474,7 +587,7 @@ final class QuickPopDeadlineSearch<Connection, Ticket, Resolution, Prepared> {
     _completeTerminal();
     // Start every available cleanup before opening local play, but do not
     // await the network: a best-effort Firebase write must never extend the
-    // player's five-second promise.
+    // player's search-window promise.
     unawaited(_abandonOnlineWork());
     _onFallback(failurePhase, failure);
   }
@@ -513,6 +626,7 @@ final class QuickPopDeadlineSearch<Connection, Ticket, Resolution, Prepared> {
     if (connection != null &&
         ticket != null &&
         resolution != null &&
+        _isHumanResolution(resolution) &&
         !_resolutionAbandonmentStarted) {
       _resolutionAbandonmentStarted = true;
       operations.add(

@@ -8,6 +8,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/semantics.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_localizations/flutter_localizations.dart';
+import 'package:package_info_plus/package_info_plus.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:url_launcher/url_launcher.dart';
 import 'package:wakelock_plus/wakelock_plus.dart';
@@ -30,6 +31,7 @@ import 'online_deep_link.dart';
 import 'online_invite.dart';
 import 'online_lobby.dart';
 import 'online_match.dart';
+import 'online_mode_services.dart';
 import 'online_quick_pop.dart';
 import 'online_quick_table.dart';
 import 'online_room_ui.dart';
@@ -38,8 +40,10 @@ import 'online_transport_models.dart';
 import 'orientation_policy.dart';
 import 'player_auth.dart';
 import 'player_progression.dart';
+import 'pop_dialog.dart';
 import 'progress_hub.dart';
 import 'quick_pop_search_deadline.dart';
+import 'quick_pop_online_diagnostics.dart';
 import 'report_issue.dart';
 import 'safe_chat.dart';
 import 'tutorial_controller.dart';
@@ -80,6 +84,135 @@ class PopColors {
   static const cloud = Color(0xFFF4F7FC);
 }
 
+/// Shared surface used by setup dialogs. Keeping the navy/purple game
+/// backdrop behind every mode picker makes the flow feel like one part of
+/// Parchís Pop instead of a system dialog pasted over the home screen.
+class _PopSetupSurface extends StatelessWidget {
+  const _PopSetupSurface({required this.child, this.padding = EdgeInsets.zero});
+
+  final Widget child;
+  final EdgeInsetsGeometry padding;
+
+  @override
+  Widget build(BuildContext context) => PopDialogSurface(
+    borderRadius: 30,
+    child: Padding(padding: padding, child: child),
+  );
+}
+
+class _PopSetupDialogShell extends StatelessWidget {
+  const _PopSetupDialogShell({
+    super.key,
+    required this.child,
+    this.maxWidth = 640,
+    this.maxHeight,
+    this.insetPadding = const EdgeInsets.all(16),
+    this.padding = EdgeInsets.zero,
+  });
+
+  final Widget child;
+  final double maxWidth;
+  final double? maxHeight;
+  final EdgeInsets insetPadding;
+  final EdgeInsetsGeometry padding;
+
+  @override
+  Widget build(BuildContext context) {
+    final constraints = maxHeight == null
+        ? BoxConstraints(maxWidth: maxWidth)
+        : BoxConstraints(maxWidth: maxWidth, maxHeight: maxHeight!);
+    return Dialog(
+      insetPadding: insetPadding,
+      backgroundColor: Colors.transparent,
+      elevation: 0,
+      clipBehavior: Clip.antiAlias,
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(30)),
+      child: ConstrainedBox(
+        constraints: constraints,
+        child: _PopSetupSurface(padding: padding, child: child),
+      ),
+    );
+  }
+}
+
+class _PopSetupCloseButton extends StatelessWidget {
+  const _PopSetupCloseButton();
+
+  @override
+  Widget build(BuildContext context) => IconButton(
+    tooltip: appTranslate(context, 'Cerrar'),
+    onPressed: () => Navigator.pop(context),
+    icon: const Icon(Icons.close_rounded, color: Colors.white),
+    style: IconButton.styleFrom(
+      backgroundColor: Colors.white.withValues(alpha: .16),
+      foregroundColor: Colors.white,
+    ),
+  );
+}
+
+class _PopSetupHeader extends StatelessWidget {
+  const _PopSetupHeader({
+    required this.icon,
+    required this.title,
+    required this.subtitle,
+    this.color = PopColors.yellow,
+    this.trailing,
+  });
+
+  final IconData icon;
+  final String title;
+  final String subtitle;
+  final Color color;
+  final Widget? trailing;
+
+  @override
+  Widget build(BuildContext context) => Row(
+    crossAxisAlignment: CrossAxisAlignment.start,
+    children: [
+      Container(
+        width: 54,
+        height: 54,
+        decoration: BoxDecoration(
+          color: color,
+          shape: BoxShape.circle,
+          border: Border.all(color: Colors.white, width: 2),
+        ),
+        child: Icon(icon, color: Colors.white, size: 29),
+      ),
+      const SizedBox(width: 12),
+      Expanded(
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            _AutoFitSingleLineText(
+              title,
+              alignment: Alignment.centerLeft,
+              textAlign: TextAlign.start,
+              style: const TextStyle(
+                color: Colors.white,
+                fontSize: 23,
+                height: 1,
+                fontWeight: FontWeight.w900,
+              ),
+            ),
+            const SizedBox(height: 5),
+            PopText(
+              subtitle,
+              maxLines: 3,
+              softWrap: true,
+              style: TextStyle(
+                color: Colors.white.withValues(alpha: .72),
+                fontWeight: FontWeight.w700,
+              ),
+            ),
+          ],
+        ),
+      ),
+      trailing ?? const _PopSetupCloseButton(),
+    ],
+  );
+}
+
 class _PlatformGameFeedbackOutput implements GameFeedbackOutput {
   const _PlatformGameFeedbackOutput();
 
@@ -104,6 +237,18 @@ const int activeMatchBoardLayoutVersion = 4;
 
 const String settingsRollGuideKey = 'settings_roll_guide';
 const String settingsDiceHandKey = 'settings_dice_hand';
+const String settingsDiceHandEffectKey = 'settings_dice_hand_effect';
+const String settingsMinimapKey = 'settings_minimap';
+
+/// Whether the board shows the large movement-choice speech bubbles.
+///
+/// Highlights and direct board taps remain available when this is disabled so
+/// players can use the clean board without losing a way to make a move.
+const String settingsMoveCalloutsKey = 'settings_move_callouts';
+
+/// Whether the compact step selector below a desktop/landscape board is shown.
+/// When hidden, the player can still choose a move directly by tapping a die.
+const String settingsMoveChoicePanelKey = 'settings_move_choice_panel';
 const String diceRollGuideHandAsset = 'assets/images/dice_hand_grip_empty.png';
 const String diceRollGuideReleaseAsset =
     'assets/images/dice_hand_release_empty.png';
@@ -128,6 +273,19 @@ DiceHandPreference diceHandPreferenceFromStorage(String? value) =>
     ? DiceHandPreference.left
     : DiceHandPreference.right;
 
+/// Tablet/iPad layouts have enough board area to inspect the board directly.
+/// Keep the optional minimap and hand artwork opt-in there while preserving
+/// the familiar phone defaults.
+bool _isTabletGameViewport(BuildContext context) {
+  if (kIsWeb) return false;
+  final platform = defaultTargetPlatform;
+  if (platform != TargetPlatform.iOS && platform != TargetPlatform.android) {
+    return false;
+  }
+  final size = MediaQuery.maybeSizeOf(context);
+  return size != null && size.shortestSide >= 600;
+}
+
 /// Uses the more legible board artwork only on compact iOS/Android screens.
 ///
 /// The game topology is deliberately identical on every platform.  This flag
@@ -142,6 +300,11 @@ bool _usesCompactPhoneBoard(BuildContext context) {
   final size = MediaQuery.maybeSizeOf(context);
   return size != null && size.shortestSide < 600;
 }
+
+bool get _isDesktopPlatform =>
+    !kIsWeb &&
+    (defaultTargetPlatform == TargetPlatform.macOS ||
+        defaultTargetPlatform == TargetPlatform.windows);
 
 class _UpdateRequiredScreen extends StatelessWidget {
   const _UpdateRequiredScreen({required this.availability});
@@ -305,6 +468,21 @@ class _AutoFitSingleLineText extends StatelessWidget {
   );
 }
 
+/// Keeps action labels on one readable line when a button is narrower than
+/// the translation or the device uses a larger accessibility font.
+class _FitButtonLabel extends StatelessWidget {
+  const _FitButtonLabel(this.text);
+
+  final String text;
+
+  @override
+  Widget build(BuildContext context) => FittedBox(
+    fit: BoxFit.scaleDown,
+    alignment: Alignment.center,
+    child: PopText(text, maxLines: 1, softWrap: false),
+  );
+}
+
 String _participantRoleLabel(
   OnlineParticipant participant, {
   bool uppercase = false,
@@ -407,7 +585,7 @@ List<MoveDestinationPreview> _moveDestinationPreviews(
       );
       final cell = engine.destinationCellFor(candidate, value);
       if (destinationProgress == null || cell == null) continue;
-      final isExit = candidate.inNest && value == 5;
+      final isExit = candidate.inNest;
       final isHomeEntryCapture = engine.isHomeEntryCaptureMove(
         candidate,
         value,
@@ -1167,6 +1345,41 @@ class _ParchesePopAppState extends State<ParchesePopApp>
                 displayColor: PopColors.navy,
                 fontFamily: 'Arial',
               ),
+              dialogTheme: DialogThemeData(
+                backgroundColor: const Color(0xFF17284D),
+                surfaceTintColor: Colors.transparent,
+                shadowColor: const Color(0x9907132D),
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(26),
+                  side: const BorderSide(color: Color(0xFF7B61FF), width: 2),
+                ),
+                titleTextStyle: const TextStyle(
+                  color: Colors.white,
+                  fontSize: 21,
+                  fontWeight: FontWeight.w900,
+                  fontFamily: 'Arial',
+                ),
+                contentTextStyle: const TextStyle(
+                  color: Color(0xFFEAF0FF),
+                  fontSize: 14,
+                  height: 1.25,
+                  fontWeight: FontWeight.w700,
+                  fontFamily: 'Arial',
+                ),
+                barrierColor: Color(0xB8071B40),
+                insetPadding: const EdgeInsets.all(16),
+              ),
+              bottomSheetTheme: BottomSheetThemeData(
+                backgroundColor: const Color(0xFF17284D),
+                modalBackgroundColor: const Color(0xFF17284D),
+                surfaceTintColor: Colors.transparent,
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.vertical(top: Radius.circular(28)),
+                  side: const BorderSide(color: Color(0xFF7B61FF), width: 1.5),
+                ),
+                dragHandleColor: Colors.white54,
+                dragHandleSize: const Size(42, 4),
+              ),
               filledButtonTheme: FilledButtonThemeData(
                 style: FilledButton.styleFrom(
                   padding: const EdgeInsets.symmetric(
@@ -1898,9 +2111,9 @@ class HomeScreen extends StatefulWidget {
   State<HomeScreen> createState() => _HomeScreenState();
 }
 
-class _HomeScreenState extends State<HomeScreen>
-    with SingleTickerProviderStateMixin {
+class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
   late final AnimationController entranceController;
+  late final AnimationController ambientController;
   bool entranceStarted = false;
 
   @override
@@ -1910,28 +2123,50 @@ class _HomeScreenState extends State<HomeScreen>
       vsync: this,
       duration: const Duration(milliseconds: 950),
     );
+    ambientController = AnimationController(
+      vsync: this,
+      duration: const Duration(seconds: 9),
+    );
   }
 
   @override
   void didChangeDependencies() {
     super.didChangeDependencies();
-    if (entranceStarted) return;
-    entranceStarted = true;
-    if (MediaQuery.of(context).disableAnimations) {
-      entranceController.value = 1;
-    } else {
-      entranceController.forward();
+    final reduceMotion = MediaQuery.of(context).disableAnimations;
+    if (!entranceStarted) {
+      entranceStarted = true;
+      if (reduceMotion) {
+        entranceController.value = 1;
+      } else {
+        entranceController.forward();
+      }
+    }
+    _syncAmbientAnimation(reduceMotion);
+  }
+
+  void _syncAmbientAnimation(bool reduceMotion) {
+    final routeIsVisible = ModalRoute.of(context)?.isCurrent ?? true;
+    if (reduceMotion || !routeIsVisible) {
+      ambientController.stop();
+      if (reduceMotion) ambientController.value = 0;
+    } else if (!ambientController.isAnimating) {
+      ambientController.repeat();
     }
   }
 
   @override
   void dispose() {
     entranceController.dispose();
+    ambientController.dispose();
     super.dispose();
   }
 
   @override
   Widget build(BuildContext context) {
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      _syncAmbientAnimation(MediaQuery.of(context).disableAnimations);
+    });
     return Scaffold(
       backgroundColor: PopColors.navy,
       body: _HomeArcadeBackdrop(
@@ -1939,6 +2174,7 @@ class _HomeScreenState extends State<HomeScreen>
           parent: entranceController,
           curve: Curves.easeOutCubic,
         ),
+        ambientAnimation: ambientController,
         child: SafeArea(
           child: PlayHome(
             profile: widget.profile,
@@ -1959,9 +2195,14 @@ class _HomeScreenState extends State<HomeScreen>
 }
 
 class _HomeArcadeBackdrop extends StatelessWidget {
-  const _HomeArcadeBackdrop({required this.animation, required this.child});
+  const _HomeArcadeBackdrop({
+    required this.animation,
+    required this.child,
+    this.ambientAnimation = const AlwaysStoppedAnimation<double>(0),
+  });
 
   final Animation<double> animation;
+  final Animation<double> ambientAnimation;
   final Widget child;
 
   @override
@@ -1976,9 +2217,10 @@ class _HomeArcadeBackdrop extends StatelessWidget {
         ),
       ),
       child: AnimatedBuilder(
-        animation: animation,
+        animation: Listenable.merge([animation, ambientAnimation]),
         builder: (context, _) {
           final progress = animation.value;
+          final ambient = ambientAnimation.value;
           return Stack(
             fit: StackFit.expand,
             children: [
@@ -1986,7 +2228,8 @@ class _HomeArcadeBackdrop extends StatelessWidget {
                 key: const ValueKey('home-animated-decoration'),
                 child: RepaintBoundary(
                   child: CustomPaint(
-                    painter: _HomeArcadeBackdropPainter(progress),
+                    key: const ValueKey('home-live-light-effects'),
+                    painter: _HomeArcadeBackdropPainter(progress, ambient),
                   ),
                 ),
               ),
@@ -2006,37 +2249,58 @@ class _HomeArcadeBackdrop extends StatelessWidget {
 }
 
 class _HomeArcadeBackdropPainter extends CustomPainter {
-  const _HomeArcadeBackdropPainter(this.progress);
+  const _HomeArcadeBackdropPainter(this.progress, this.ambient);
 
   final double progress;
+  final double ambient;
 
   @override
   void paint(Canvas canvas, Size size) {
     final eased = Curves.easeOutBack.transform(progress.clamp(0, 1));
+    final phase = ambient * math.pi * 2;
+    final pulse = .82 + math.sin(phase) * .18;
+    _paintLightSweep(canvas, size, phase);
     _paintGlow(
       canvas,
-      Offset(size.width * .11, size.height * .10),
-      size.shortestSide * .42,
+      Offset(
+        size.width * (.11 + math.sin(phase) * .035),
+        size.height * (.10 + math.cos(phase * .75) * .018),
+      ),
+      size.shortestSide * (.38 + .04 * pulse),
       PopColors.blue,
+      pulse,
     );
     _paintGlow(
       canvas,
-      Offset(size.width * .88, size.height * .08),
-      size.shortestSide * .34,
+      Offset(
+        size.width * (.88 + math.cos(phase * .8) * .028),
+        size.height * (.08 + math.sin(phase) * .018),
+      ),
+      size.shortestSide * (.31 + .035 * (2 - pulse)),
       PopColors.yellow,
+      2 - pulse,
     );
     _paintGlow(
       canvas,
-      Offset(size.width * .84, size.height * .90),
-      size.shortestSide * .46,
+      Offset(
+        size.width * (.84 + math.sin(phase * .65) * .035),
+        size.height * (.90 + math.cos(phase * .7) * .018),
+      ),
+      size.shortestSide * (.42 + .04 * pulse),
       PopColors.red,
+      pulse,
     );
     _paintGlow(
       canvas,
-      Offset(size.width * .12, size.height * .88),
-      size.shortestSide * .40,
+      Offset(
+        size.width * (.12 + math.cos(phase * .7) * .03),
+        size.height * (.88 + math.sin(phase * .8) * .02),
+      ),
+      size.shortestSide * (.36 + .04 * (2 - pulse)),
       PopColors.green,
+      2 - pulse,
     );
+    _paintFloatingLights(canvas, size, phase);
 
     final grid = Paint()
       ..color = Colors.white.withValues(alpha: .055 * progress)
@@ -2128,14 +2392,88 @@ class _HomeArcadeBackdropPainter extends CustomPainter {
     );
   }
 
-  void _paintGlow(Canvas canvas, Offset center, double radius, Color color) {
+  void _paintLightSweep(Canvas canvas, Size size, double phase) {
+    final travel = (math.sin(phase * .55) + 1) / 2;
+    final centerX = -size.width * .25 + travel * size.width * 1.5;
+    final rect = Rect.fromLTWH(0, 0, size.width, size.height);
+    canvas.save();
+    canvas.clipRect(rect);
+    canvas.translate(centerX, size.height * .42);
+    canvas.rotate(-.28);
+    canvas.drawOval(
+      Rect.fromCenter(
+        center: Offset.zero,
+        width: size.shortestSide * .24,
+        height: size.longestSide * 1.7,
+      ),
+      Paint()
+        ..shader =
+            const LinearGradient(
+              begin: Alignment.centerLeft,
+              end: Alignment.centerRight,
+              colors: [
+                Colors.transparent,
+                Color(0x12FFFFFF),
+                Colors.transparent,
+              ],
+            ).createShader(
+              Rect.fromCenter(
+                center: Offset.zero,
+                width: size.shortestSide * .24,
+                height: size.longestSide * 1.7,
+              ),
+            ),
+    );
+    canvas.restore();
+  }
+
+  void _paintFloatingLights(Canvas canvas, Size size, double phase) {
+    const colors = [
+      PopColors.yellow,
+      PopColors.blue,
+      PopColors.green,
+      PopColors.red,
+      Color(0xFF9C7BFF),
+    ];
+    for (var index = 0; index < 12; index++) {
+      final lane = (index * .61803398875) % 1;
+      final drift = (ambient * (.22 + index * .013) + lane) % 1;
+      final x =
+          size.width *
+          ((lane + math.sin(phase + index * .91) * .035).clamp(0.02, .98));
+      final y = size.height * (1.08 - drift * 1.16);
+      final radius = 1.5 + (index % 3) * .85;
+      final alpha = (.10 + .08 * math.sin(phase * 1.4 + index)).clamp(.04, .18);
+      final color = colors[index % colors.length];
+      canvas.drawCircle(
+        Offset(x, y),
+        radius * 3.2,
+        Paint()
+          ..color = color.withValues(alpha: alpha * progress)
+          ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 7),
+      );
+      canvas.drawCircle(
+        Offset(x, y),
+        radius,
+        Paint()..color = Colors.white.withValues(alpha: alpha * 2 * progress),
+      );
+    }
+  }
+
+  void _paintGlow(
+    Canvas canvas,
+    Offset center,
+    double radius,
+    Color color,
+    double intensity,
+  ) {
     canvas.drawCircle(
       center,
       radius,
       Paint()
         ..shader = RadialGradient(
           colors: [
-            color.withValues(alpha: .24 * progress),
+            color.withValues(alpha: .20 * intensity * progress),
             color.withValues(alpha: 0),
           ],
         ).createShader(Rect.fromCircle(center: center, radius: radius)),
@@ -2243,7 +2581,7 @@ class _HomeArcadeBackdropPainter extends CustomPainter {
 
   @override
   bool shouldRepaint(_HomeArcadeBackdropPainter oldDelegate) =>
-      oldDelegate.progress != progress;
+      oldDelegate.progress != progress || oldDelegate.ambient != ambient;
 }
 
 class PageShell extends StatelessWidget {
@@ -2313,6 +2651,13 @@ class PlayHome extends StatelessWidget {
           narrow && !compactLandscape && viewport.maxHeight < 760;
       final densePortrait =
           narrow && !compactLandscape && viewport.maxHeight < 820;
+      // On a portrait tablet the four large cards, tutorial and persistent
+      // banner can otherwise leave the bottom dock underneath the ad strip.
+      // Use the same compact card rhythm as a dense phone before that happens;
+      // this keeps Shop, Missions and How to play fully visible and tappable.
+      final bannerConstrainedTablet =
+          !narrow && !compactLandscape && viewport.maxHeight < 1130;
+      final denseHome = densePortrait || bannerConstrainedTablet;
       final padding = compactLandscape
           ? const EdgeInsets.fromLTRB(10, 6, 10, 2)
           : narrow
@@ -2351,10 +2696,10 @@ class PlayHome extends StatelessWidget {
                   icon: Icons.bolt_rounded,
                   title: 'QUICK POP',
                   subtitle: 'Partida rápida online',
-                  badge: 'ONLINE · CPU EN 10 S',
+                  badge: 'ONLINE · CPU EN 30 S',
                   featured: !compactModeTiles,
                   tile: compactModeTiles,
-                  dense: densePortrait,
+                  dense: denseHome,
                   ultraCompact: ultraCompactPortrait,
                   expanded: !compactModeTiles && !compactLandscape,
                   onTap: () => _showQuickPopEntry(context),
@@ -2366,7 +2711,7 @@ class PlayHome extends StatelessWidget {
                   title: 'MESA RÁPIDA',
                   subtitle: 'Amigos online · crea una sala',
                   tile: compactModeTiles,
-                  dense: densePortrait,
+                  dense: denseHome,
                   ultraCompact: ultraCompactPortrait,
                   expanded: !compactModeTiles && !compactLandscape,
                   onTap: () => _startOnline(context),
@@ -2378,7 +2723,7 @@ class PlayHome extends StatelessWidget {
                   title: 'CONTRA CPU',
                   subtitle: 'Juega contra el CPU',
                   tile: compactModeTiles,
-                  dense: densePortrait,
+                  dense: denseHome,
                   ultraCompact: ultraCompactPortrait,
                   expanded: !compactModeTiles && !compactLandscape,
                   onTap: () => _showCpuDialog(context),
@@ -2391,7 +2736,7 @@ class PlayHome extends StatelessWidget {
                   subtitle: 'Pasa el teléfono · 2–4 jugadores',
                   badge: '2–4 JUGADORES',
                   tile: compactModeTiles,
-                  dense: densePortrait,
+                  dense: denseHome,
                   ultraCompact: ultraCompactPortrait,
                   expanded: !compactModeTiles && !compactLandscape,
                   onTap: () => _showPassAndPlayDialog(context),
@@ -2414,6 +2759,7 @@ class PlayHome extends StatelessWidget {
                         profile: profile,
                         wallet: wallet,
                         compactLandscape: compactLandscape,
+                        showDesktopInfo: _isDesktopPlatform,
                         onProfileTap: () => _openProfile(context),
                         onSettings: () => Navigator.push(
                           context,
@@ -2576,18 +2922,6 @@ class PlayHome extends StatelessWidget {
                                       !compactLandscape &&
                                       viewport.maxHeight < 800 &&
                                       (tutorial?.shouldOffer ?? false),
-                                ),
-                              ),
-                              _RoundMenuButton(
-                                key: const ValueKey('home-traps'),
-                                color: PopColors.red,
-                                icon: Icons.science_rounded,
-                                label: 'Trampas',
-                                onTap: () => Navigator.push(
-                                  context,
-                                  MaterialPageRoute(
-                                    builder: (_) => const TrapPowerLabScreen(),
-                                  ),
                                 ),
                               ),
                             ],
@@ -2874,44 +3208,57 @@ class PlayHome extends StatelessWidget {
       context: context,
       showDragHandle: true,
       isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      barrierColor: const Color(0xB8071B40),
       builder: (sheetContext) => SafeArea(
-        child: Padding(
-          key: const ValueKey('learning-options-sheet'),
-          padding: const EdgeInsets.fromLTRB(20, 6, 20, 18),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              const PopText(
-                '¿CÓMO QUIERES APRENDER?',
-                textAlign: TextAlign.center,
-                style: TextStyle(
-                  color: PopColors.navy,
-                  fontSize: 20,
-                  fontWeight: FontWeight.w900,
-                ),
+        child: ClipRRect(
+          borderRadius: const BorderRadius.vertical(top: Radius.circular(28)),
+          child: _PopSetupSurface(
+            child: Padding(
+              key: const ValueKey('learning-options-sheet'),
+              padding: const EdgeInsets.fromLTRB(20, 6, 20, 18),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  const PopText(
+                    '¿CÓMO QUIERES APRENDER?',
+                    textAlign: TextAlign.center,
+                    style: TextStyle(
+                      color: Colors.white,
+                      fontSize: 20,
+                      fontWeight: FontWeight.w900,
+                    ),
+                  ),
+                  const SizedBox(height: 6),
+                  const PopText(
+                    'Empieza una partida guiada o consulta todas las reglas.',
+                    textAlign: TextAlign.center,
+                    style: TextStyle(color: Color(0xFFC8D6F2)),
+                  ),
+                  const SizedBox(height: 16),
+                  FilledButton.icon(
+                    key: const ValueKey('learning-start-tutorial'),
+                    onPressed: () => Navigator.pop(sheetContext, true),
+                    icon: const Icon(Icons.school_rounded),
+                    label: const PopText('TUTORIAL JUGABLE'),
+                  ),
+                  const SizedBox(height: 9),
+                  OutlinedButton.icon(
+                    key: const ValueKey('learning-open-guide'),
+                    onPressed: () => Navigator.pop(sheetContext, false),
+                    icon: const Icon(Icons.menu_book_rounded),
+                    label: const PopText('GUÍA COMPLETA'),
+                    style: OutlinedButton.styleFrom(
+                      foregroundColor: Colors.white,
+                      side: BorderSide(
+                        color: Colors.white.withValues(alpha: .65),
+                      ),
+                    ),
+                  ),
+                ],
               ),
-              const SizedBox(height: 6),
-              const PopText(
-                'Empieza una partida guiada o consulta todas las reglas.',
-                textAlign: TextAlign.center,
-                style: TextStyle(color: Color(0xFF667085)),
-              ),
-              const SizedBox(height: 16),
-              FilledButton.icon(
-                key: const ValueKey('learning-start-tutorial'),
-                onPressed: () => Navigator.pop(sheetContext, true),
-                icon: const Icon(Icons.school_rounded),
-                label: const PopText('TUTORIAL JUGABLE'),
-              ),
-              const SizedBox(height: 9),
-              OutlinedButton.icon(
-                key: const ValueKey('learning-open-guide'),
-                onPressed: () => Navigator.pop(sheetContext, false),
-                icon: const Icon(Icons.menu_book_rounded),
-                label: const PopText('GUÍA COMPLETA'),
-              ),
-            ],
+            ),
           ),
         ),
       ),
@@ -2956,78 +3303,33 @@ class _QuickTableEntryDialog extends StatelessWidget {
   const _QuickTableEntryDialog();
 
   @override
-  Widget build(BuildContext context) => Dialog(
+  Widget build(BuildContext context) => _PopSetupDialogShell(
     key: const ValueKey('quick-table-entry-dialog'),
-    insetPadding: const EdgeInsets.all(18),
-    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(28)),
-    child: ConstrainedBox(
-      constraints: const BoxConstraints(maxWidth: 520),
-      child: Padding(
-        padding: const EdgeInsets.fromLTRB(20, 20, 20, 18),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            Row(
-              children: [
-                Container(
-                  width: 50,
-                  height: 50,
-                  decoration: BoxDecoration(
-                    color: PopColors.blue,
-                    borderRadius: BorderRadius.circular(16),
-                  ),
-                  child: const Icon(
-                    Icons.groups_rounded,
-                    color: Colors.white,
-                    size: 30,
-                  ),
-                ),
-                const SizedBox(width: 12),
-                const Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      PopText(
-                        'MESA RÁPIDA',
-                        style: TextStyle(
-                          color: PopColors.navy,
-                          fontSize: 22,
-                          fontWeight: FontWeight.w900,
-                        ),
-                      ),
-                      PopText(
-                        'Elige cómo quieres reunir la mesa',
-                        style: TextStyle(
-                          color: Color(0xFF667085),
-                          fontWeight: FontWeight.w700,
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-                IconButton(
-                  tooltip: appTranslate(context, 'Cerrar'),
-                  onPressed: () => Navigator.pop(context),
-                  icon: const Icon(Icons.close_rounded),
-                ),
-              ],
-            ),
-            const SizedBox(height: 18),
-            FilledButton.icon(
-              key: const ValueKey('quick-table-online'),
-              onPressed: () =>
-                  Navigator.pop(context, _QuickTableEntryChoice.online),
-              icon: const Icon(Icons.public_rounded),
-              label: const PopText('JUGAR CON AMIGOS ONLINE'),
-              style: FilledButton.styleFrom(
-                minimumSize: const Size.fromHeight(56),
-                backgroundColor: PopColors.blue,
-              ),
-            ),
-          ],
+    maxWidth: 520,
+    padding: const EdgeInsets.fromLTRB(22, 22, 22, 18),
+    child: Column(
+      mainAxisSize: MainAxisSize.min,
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        const _PopSetupHeader(
+          icon: Icons.groups_rounded,
+          title: 'MESA RÁPIDA',
+          subtitle: 'Elige cómo quieres reunir la mesa',
+          color: PopColors.blue,
         ),
-      ),
+        const SizedBox(height: 18),
+        FilledButton.icon(
+          key: const ValueKey('quick-table-online'),
+          onPressed: () =>
+              Navigator.pop(context, _QuickTableEntryChoice.online),
+          icon: const Icon(Icons.public_rounded),
+          label: const _FitButtonLabel('JUGAR CON AMIGOS ONLINE'),
+          style: FilledButton.styleFrom(
+            minimumSize: const Size.fromHeight(56),
+            backgroundColor: PopColors.blue,
+          ),
+        ),
+      ],
     ),
   );
 }
@@ -3109,6 +3411,7 @@ class _QuickTableOnlineShellState extends State<_QuickTableOnlineShell> {
       if (!mounted) return;
       final roomController = RealtimeOnlineRoomController(
         transport: online.transport,
+        quickTableService: OnlineQuickTableService(online.transport),
       );
       connection = online;
       controller = roomController;
@@ -3164,6 +3467,11 @@ class _QuickTableOnlineShellState extends State<_QuickTableOnlineShell> {
       }
     } catch (caught) {
       if (!mounted || inviteJoinTerminalLogged) return;
+      final failure = describeQuickPopOnlineFailure(caught);
+      debugPrint(
+        'Quick Table online failed [${failure.diagnosticCode}] '
+        '(${caught.runtimeType}).',
+      );
       inviteJoinTerminalLogged = true;
       unawaited(
         widget.analytics.logEvent(
@@ -3589,6 +3897,25 @@ class _QuickPopOnlineSearchScreenState
   final QuickPopCancelGate cancelGate = QuickPopCancelGate();
   bool settlementInProgress = false;
   bool settlementUnavailable = false;
+  bool cpuFallbackReady = false;
+  bool cpuFallbackStarting = false;
+  OnlineFlowFailureReason? cpuFallbackFailureReason;
+  final QuickPopDiagnosticLog diagnosticLog = QuickPopDiagnosticLog();
+  final Set<String> diagnosticErrorKeys = <String>{};
+  final Set<QuickPopSearchPhase> diagnosticPhasesLogged =
+      <QuickPopSearchPhase>{};
+  bool diagnosticWaitingForPlayersLogged = false;
+  bool diagnosticSyncLogged = false;
+  bool diagnosticCopied = false;
+  String? diagnosticUid;
+  String? diagnosticTicketId;
+  String? diagnosticQueueKey;
+  String? diagnosticGroupId;
+  String? diagnosticRoomId;
+  String? diagnosticLastQueueSignature;
+  String? searchIdentifier;
+  String? searchQueueKey;
+  int searchPlayers = 1;
 
   MatchLaunchSource get launchSource =>
       widget.isRematch ? MatchLaunchSource.rematch : MatchLaunchSource.home;
@@ -3622,8 +3949,140 @@ class _QuickPopOnlineSearchScreenState
     super.dispose();
   }
 
+  String diagnosticDeviceName() => defaultTargetPlatform.name;
+
+  void _addDiagnostic(
+    String step, {
+    QuickPopDiagnosticState state = QuickPopDiagnosticState.info,
+    String detail = '',
+    String? code,
+    String? path,
+  }) {
+    diagnosticLog.add(
+      elapsedMilliseconds: searchElapsedMilliseconds,
+      step: step,
+      state: state,
+      detail: detail,
+      code: code,
+      path: path,
+    );
+    if (mounted) setState(() {});
+  }
+
+  void _addDiagnosticError(String step, Object error, {String? path}) {
+    final failure = describeQuickPopOnlineFailure(error);
+    final code = error is FirebaseException
+        ? error.code
+        : error is OnlineTransportException
+        ? error.code.name
+        : error is OnlineGameSyncException
+        ? 'game-sync'
+        : failure.diagnosticCode;
+    final key = '$step|$code|${error.runtimeType}';
+    if (!diagnosticErrorKeys.add(key)) return;
+    final message = error is FirebaseException
+        ? error.message ?? error.toString()
+        : error is OnlineTransportException
+        ? error.message
+        : error is OnlineGameSyncException
+        ? error.message
+        : error.toString();
+    _addDiagnostic(
+      step,
+      state: QuickPopDiagnosticState.error,
+      detail: message,
+      code: code,
+      path: path,
+    );
+  }
+
+  String _shortSearchIdentifier(String prefix, String? value) {
+    final clean = value?.trim() ?? '';
+    if (clean.isEmpty) return '$prefix-…';
+    final suffix = clean.length > 10
+        ? clean.substring(clean.length - 10)
+        : clean;
+    return '$prefix-$suffix';
+  }
+
+  void _updateSearchPresenceFromDiagnostic(String step, String detail) {
+    int? readCount(String key) {
+      final match = RegExp('\\b$key=(\\d+)').firstMatch(detail);
+      return match == null ? null : int.tryParse(match.group(1)!);
+    }
+
+    final waiting = readCount('waiting');
+    final members = readCount('members');
+    final count = members ?? waiting;
+    final queueMatch = RegExp(r'\bqueueKey=([^\s]+)').firstMatch(detail);
+    final groupMatch = RegExp(r'\bgroupId=([^\s]+)').firstMatch(detail);
+    final roomMatch = RegExp(r'\broomId=([^\s]+)').firstMatch(detail);
+    if (queueMatch != null) searchQueueKey = queueMatch.group(1);
+    if (roomMatch != null) {
+      searchIdentifier = _shortSearchIdentifier('ROOM', roomMatch.group(1));
+    } else if (groupMatch != null && groupMatch.group(1) != 'none') {
+      searchIdentifier = _shortSearchIdentifier('GROUP', groupMatch.group(1));
+    }
+    if (step == 'QUEUE_TICKET_CREATED') {
+      final ticketMatch = RegExp(r'\bticketId=([^\s]+)').firstMatch(detail);
+      if (ticketMatch != null) {
+        searchIdentifier = _shortSearchIdentifier(
+          'SEARCH',
+          ticketMatch.group(1),
+        );
+      }
+    }
+    if (count == null) return;
+    final normalized = math.min(4, math.max(1, count));
+    if (normalized != searchPlayers && mounted) {
+      setState(() => searchPlayers = normalized);
+    }
+  }
+
+  Future<void> _copyDiagnostics() async {
+    final text = diagnosticLog.toConsole(
+      device: diagnosticDeviceName(),
+      appVersion: diagnosticAppVersion,
+      searchWindow: '${quickPopSearchWindow.inSeconds}s',
+    );
+    await Clipboard.setData(ClipboardData(text: text));
+    if (!mounted) return;
+    setState(() => diagnosticCopied = true);
+    ScaffoldMessenger.of(
+      context,
+    ).showSnackBar(const SnackBar(content: Text('Diagnóstico copiado')));
+  }
+
+  String diagnosticAppVersion = 'unknown';
+
+  Future<void> _loadDiagnosticAppVersion() async {
+    try {
+      final package = await PackageInfo.fromPlatform();
+      if (!mounted) return;
+      setState(() {
+        diagnosticAppVersion = package.buildNumber.trim().isEmpty
+            ? package.version
+            : '${package.version}+${package.buildNumber}';
+      });
+    } catch (_) {
+      // The trace remains useful even if package metadata is unavailable.
+    }
+  }
+
   Future<void> _beginSearch() async {
     if (!mounted) return;
+    _addDiagnostic(
+      'PLAY_ONLINE_PRESSED',
+      state: QuickPopDiagnosticState.success,
+      detail:
+          'protocol=quickPop searchWindow=${quickPopSearchWindow.inSeconds}s',
+    );
+    _addDiagnostic(
+      'SEARCH_DEADLINE_STARTED',
+      state: QuickPopDiagnosticState.waiting,
+      detail: 'countdown=${quickPopSearchWindow.inSeconds}s',
+    );
+    unawaited(_loadDiagnosticAppVersion());
     unawaited(
       widget.analytics.logEvent(
         OnlineFlowEvent(
@@ -3652,34 +4111,144 @@ class _QuickPopOnlineSearchScreenState
           OnlineQuickPopPreparedMatch
         >(
           window: quickPopSearchWindow,
+          // Desktop Firebase may need a short warm-up for anonymous Auth and
+          // the Realtime Database socket. Keep the advertised ten-second
+          // search visible instead of dropping straight into CPU on a
+          // transient startup failure.
+          deferFallbackUntilDeadline: true,
           elapsed: () => widget.searchStopwatch.elapsed,
-          connect: () => FirebaseOnlineConnection.connect(
-            displayName: widget.profile.name,
-            avatarId: widget.wallet.equippedProductId(CosmeticCategory.avatar),
-          ),
-          enqueue: (online) => online.transport.enqueueQuickPop(
-            mode: GameMode.traditional.name,
-            matchFormat: MatchFormat.quickPop.name,
-            searchWindow: search.remaining,
-          ),
-          resolve: (online, queued) => online.transport.resolveQuickPop(queued),
+          connect: () async {
+            _addDiagnostic(
+              'FIREBASE_CONNECTION',
+              state: QuickPopDiagnosticState.waiting,
+              detail:
+                  'connecting project=parchese-pop database=$parchesePopRealtimeDatabaseUrl',
+            );
+            final connection = await FirebaseOnlineConnection.connect(
+              displayName: widget.profile.name,
+              avatarId: widget.wallet.equippedProductId(
+                CosmeticCategory.avatar,
+              ),
+              quickPopDebugSink: _handleTransportDiagnostic,
+            );
+            diagnosticUid = connection.uid;
+            _addDiagnostic(
+              'FIREBASE_CONNECTION',
+              state: QuickPopDiagnosticState.success,
+              detail: 'connected uid=${connection.uid}',
+            );
+            return connection;
+          },
+          enqueue: (online) async {
+            _addDiagnostic(
+              'QUEUE_TICKET_CREATE',
+              state: QuickPopDiagnosticState.waiting,
+              detail: 'mode=${GameMode.traditional.name}',
+              path:
+                  'onlineV2/quickQueues/${GameMode.traditional.name}_${OnlineQuickPopService.queueMatchFormat}/${online.uid}',
+            );
+            final ticket = await OnlineQuickPopService(online.transport)
+                .enqueue(
+                  mode: GameMode.traditional,
+                  searchWindow: search.remaining,
+                );
+            diagnosticTicketId = ticket.ticketId;
+            diagnosticQueueKey = ticket.queueKey;
+            searchIdentifier = _shortSearchIdentifier(
+              'SEARCH',
+              ticket.ticketId,
+            );
+            searchQueueKey = ticket.queueKey;
+            searchPlayers = 1;
+            _addDiagnostic(
+              'QUEUE_TICKET_CREATED',
+              state: QuickPopDiagnosticState.success,
+              detail:
+                  'queueKey=${ticket.queueKey} ticketId=${ticket.ticketId} deadline=${ticket.deadlineAtMs}',
+              path: 'onlineV2/quickQueues/${ticket.queueKey}/${ticket.uid}',
+            );
+            return ticket;
+          },
+          // Quick Pop keeps the queue open for the full advertised window so
+          // the same match can collect up to four human players. A CPU is
+          // added only after the 30-second deadline if fewer than four arrive.
+          resolve: (online, queued) async {
+            if (!diagnosticWaitingForPlayersLogged) {
+              diagnosticWaitingForPlayersLogged = true;
+              _addDiagnostic(
+                'WAITING_FOR_PLAYERS',
+                state: QuickPopDiagnosticState.waiting,
+                detail:
+                    'players=1/4 uid=${online.uid} queueKey=${queued.queueKey}',
+                path: 'onlineV2/quickQueues/${queued.queueKey}',
+              );
+            }
+            final resolution = await OnlineQuickPopService(
+              online.transport,
+            ).resolve(queued);
+            if (resolution == null) return null;
+            diagnosticGroupId = resolution.groupId;
+            diagnosticRoomId = resolution.roomId;
+            searchIdentifier = _shortSearchIdentifier(
+              'ROOM',
+              resolution.roomId,
+            );
+            searchPlayers = math.min(
+              4,
+              math.max(1, resolution.participantUids.length),
+            );
+            _addDiagnostic(
+              'MATCH_RESOLUTION',
+              state: QuickPopDiagnosticState.success,
+              detail:
+                  'kind=${resolution.kind == QuickPopResolutionKind.cpu ? 'cpu_fallback' : 'human'} players=${resolution.participantUids.length} roomId=${resolution.roomId} groupId=${resolution.groupId ?? 'none'}',
+              path: resolution.groupId == null
+                  ? 'onlineV2/quickClaims/${resolution.queueKey ?? queued.queueKey}'
+                  : 'onlineV2/quickPopGroups/${resolution.queueKey ?? queued.queueKey}/${resolution.groupId}',
+            );
+            return resolution;
+          },
           prepare: (online, queued, resolution) async {
             _logPlayerFound();
-            final prepared = await OnlineQuickPopBootstrap.prepare(
-              transport: online.transport,
+            diagnosticRoomId = resolution.roomId;
+            diagnosticGroupId = resolution.groupId;
+            _addDiagnostic(
+              'PREPARING_MATCH',
+              state: QuickPopDiagnosticState.waiting,
+              detail:
+                  'roomId=${resolution.roomId} humans=${resolution.participantUids.length}',
+            );
+            final prepared = await OnlineQuickPopService(online.transport).prepare(
               ticket: queued,
               resolution: resolution,
-              // The five-second budget is only for finding a human. Once the
+              // The search-window budget is only for finding a human. Once the
               // verified pair exists, Firebase auth, the shared checkpoint,
               // presence leases, and the readiness barrier need their own
               // bounded setup window; tying this to search.remaining caused
-              // both emulators to abandon a valid match at the deadline.
+              // all clients to abandon a valid match at the deadline.
               hostTimeout: const Duration(seconds: 15),
+            );
+            _addDiagnostic(
+              'ROOM_READY',
+              state: QuickPopDiagnosticState.success,
+              detail:
+                  'roomId=${prepared.room.id} participants=${prepared.session.participants.length}',
+              path: 'onlineV2/rooms/${prepared.room.id}',
             );
             try {
               await _startOnlineSyncWithRetry(
                 prepared.sync,
-                timeout: search.remaining,
+                // A four-player group is intentionally resolved at the end
+                // of the search window (or immediately when all four seats
+                // are full). At that point `search.remaining` can be zero;
+                // sync setup still needs its own window to authenticate,
+                // subscribe and pass the shared readiness barrier.
+                timeout: const Duration(seconds: 15),
+              );
+              _addDiagnostic(
+                'FIREBASE_SYNC_READY',
+                state: QuickPopDiagnosticState.success,
+                detail: 'roomId=${prepared.room.id} listeners=ready',
               );
               return prepared;
             } catch (_) {
@@ -3687,17 +4256,45 @@ class _QuickPopOnlineSearchScreenState
               rethrow;
             }
           },
-          synchronize: (online, queued, resolution, prepared) =>
-              online.transport.synchronizeQuickPopLaunch(
-                ticket: queued,
-                resolution: resolution,
-              ),
+          synchronize: (online, queued, resolution, prepared) async {
+            if (!diagnosticSyncLogged) {
+              diagnosticSyncLogged = true;
+              _addDiagnostic(
+                'SYNC_CHECKPOINT',
+                state: QuickPopDiagnosticState.waiting,
+                detail: 'roomId=${resolution.roomId} publishing=ready',
+                path: 'onlineV2/rooms/${resolution.roomId}',
+              );
+            }
+            final synchronized = await OnlineQuickPopService(
+              online.transport,
+            ).synchronize(ticket: queued, resolution: resolution);
+            if (synchronized) {
+              _addDiagnostic(
+                'SYNC_CHECKPOINT',
+                state: QuickPopDiagnosticState.success,
+                detail: 'roomId=${resolution.roomId} checkpoint=accepted',
+              );
+            }
+            return synchronized;
+          },
           settle: (online, queued, resolution, prepared) async {
-            final decision = await online.transport.settleQuickPopLaunch(
-              ticket: queued,
-              resolution: resolution,
-              operationTimeout:
-                  search.remaining + quickPopSettlementOperationTimeout,
+            _addDiagnostic(
+              'SETTLEMENT',
+              state: QuickPopDiagnosticState.waiting,
+              detail: 'roomId=${resolution.roomId} confirming=human-or-cpu',
+            );
+            final decision = await OnlineQuickPopService(online.transport)
+                .settle(
+                  ticket: queued,
+                  resolution: resolution,
+                  operationTimeout:
+                      search.remaining + quickPopSettlementOperationTimeout,
+                );
+            _addDiagnostic(
+              'SETTLEMENT_RESULT',
+              state: QuickPopDiagnosticState.success,
+              detail: 'decision=${decision.name} roomId=${resolution.roomId}',
             );
             return switch (decision) {
               QuickPopLaunchSettlement.human =>
@@ -3708,10 +4305,19 @@ class _QuickPopOnlineSearchScreenState
                 QuickPopDeadlineSettlement.unavailable,
             };
           },
-          cancelTicket: (online, queued) =>
-              online.transport.cancelQuickPop(queued),
-          abandonResolution: (online, queued, resolution) => online.transport
-              .abandonQuickPopLaunch(ticket: queued, resolution: resolution),
+          cancelTicket: (online, queued) async {
+            _addDiagnostic(
+              'QUEUE_CLEANUP',
+              state: QuickPopDiagnosticState.info,
+              detail: 'ticketId=${queued.ticketId}',
+              path: 'onlineV2/quickQueues/${queued.queueKey}/${queued.uid}',
+            );
+            await OnlineQuickPopService(online.transport).cancel(queued);
+          },
+          abandonResolution: (online, queued, resolution) =>
+              OnlineQuickPopService(
+                online.transport,
+              ).abandon(ticket: queued, resolution: resolution),
           disposePrepared: (prepared) => prepared.sync.dispose(),
           releaseConnection: (online) async => online.release(),
           isHumanResolution: (resolution) =>
@@ -3732,18 +4338,66 @@ class _QuickPopOnlineSearchScreenState
     await search.start();
   }
 
+  void _handleTransportDiagnostic(
+    String step, {
+    String detail = '',
+    String? path,
+    bool success = false,
+    bool error = false,
+  }) {
+    _updateSearchPresenceFromDiagnostic(step, detail);
+    // Queue polling happens several times per second. A stable snapshot is
+    // useful once, while every changed membership/group event remains visible.
+    if (step == 'QUEUE_SCAN_RESULT' && detail == diagnosticLastQueueSignature) {
+      return;
+    }
+    if (step == 'QUEUE_SCAN_RESULT') diagnosticLastQueueSignature = detail;
+    _addDiagnostic(
+      step,
+      state: error
+          ? QuickPopDiagnosticState.error
+          : success
+          ? QuickPopDiagnosticState.success
+          : QuickPopDiagnosticState.waiting,
+      detail: detail,
+      path: path,
+    );
+  }
+
   void _handleSearchPhase(QuickPopSearchPhase phase) {
     if (!mounted || cancelled || navigationCommitted) return;
+    if (diagnosticPhasesLogged.add(phase)) {
+      final phaseDetail = switch (phase) {
+        QuickPopSearchPhase.connecting => 'starting Firebase/Auth connection',
+        QuickPopSearchPhase.enqueueing =>
+          'publishing this player ticket to quickQueues',
+        QuickPopSearchPhase.resolving => 'polling for a shared Quick Pop group',
+        QuickPopSearchPhase.preparing => 'building the verified shared room',
+        QuickPopSearchPhase.synchronizing =>
+          'waiting for the shared game checkpoint',
+        QuickPopSearchPhase.settling =>
+          'confirming the authoritative launch decision',
+      };
+      _addDiagnostic(
+        'PHASE_${phase.name.toUpperCase()}',
+        state: QuickPopDiagnosticState.waiting,
+        detail: phaseDetail,
+      );
+    }
+    final roomId = deadlineSearch?.resolution?.roomId;
+    final shortRoomId = roomId != null
+        ? ' (${roomId.substring(math.max(0, roomId.length - 6))})'
+        : '';
     final nextStatus = switch (phase) {
       QuickPopSearchPhase.connecting => 'Conectando con Parchís Pop…',
       QuickPopSearchPhase.enqueueing => 'Preparando la búsqueda online…',
       QuickPopSearchPhase.resolving => 'Buscando un jugador online…',
       QuickPopSearchPhase.preparing =>
-        'Jugador encontrado · preparando la mesa…',
+        'Jugador encontrado · preparando la mesa…$shortRoomId',
       QuickPopSearchPhase.synchronizing =>
-        'Sincronizando la mesa con el otro jugador…',
+        'Sincronizando la mesa con el otro jugador…$shortRoomId',
       QuickPopSearchPhase.settling =>
-        'Confirmando la partida con el otro jugador…',
+        'Confirmando la partida con el otro jugador…$shortRoomId',
     };
     final nextOpening =
         phase == QuickPopSearchPhase.preparing ||
@@ -3763,6 +4417,13 @@ class _QuickPopOnlineSearchScreenState
     Object caught,
     StackTrace stackTrace,
   ) {
+    _addDiagnosticError(
+      'PHASE_${phase.name.toUpperCase()}_FAILED',
+      caught,
+      path: diagnosticRoomId == null
+          ? null
+          : 'onlineV2/rooms/$diagnosticRoomId',
+    );
     if (phase == QuickPopSearchPhase.preparing) {
       _logMatchOpenFailure(caught, stackTrace);
       return;
@@ -3838,6 +4499,11 @@ class _QuickPopOnlineSearchScreenState
     if (!mounted || cancelled || navigationCommitted) return;
     final waitSeconds = matchmakingWaitSeconds;
     if (resolution.kind != QuickPopResolutionKind.human) {
+      _addDiagnostic(
+        'HUMAN_MATCH_REJECTED',
+        state: QuickPopDiagnosticState.error,
+        detail: 'resolution kind=${resolution.kind.name}',
+      );
       prepared.sync.dispose();
       _openLocalCpuFallback();
       return;
@@ -3846,6 +4512,12 @@ class _QuickPopOnlineSearchScreenState
     countdownTimer?.cancel();
     final opponent = prepared.session.participants.firstWhere(
       (participant) => participant.kind == ParticipantKind.remoteHuman,
+    );
+    _addDiagnostic(
+      'ONLINE_MATCH_OPENED',
+      state: QuickPopDiagnosticState.success,
+      detail:
+          'roomId=${resolution.roomId} humans=${prepared.session.participants.where((participant) => participant.kind != ParticipantKind.virtual).length}',
     );
     navigationCommitted = true;
     Navigator.of(context).pushReplacement(
@@ -3887,6 +4559,21 @@ class _QuickPopOnlineSearchScreenState
 
   void _handleSettlementUnavailable(Object? failure) {
     if (!mounted || cancelled || navigationCommitted) return;
+    if (failure != null) {
+      _addDiagnosticError(
+        'SETTLEMENT_UNAVAILABLE',
+        failure,
+        path: diagnosticRoomId == null
+            ? null
+            : 'onlineV2/rooms/$diagnosticRoomId',
+      );
+    } else {
+      _addDiagnostic(
+        'SETTLEMENT_UNAVAILABLE',
+        state: QuickPopDiagnosticState.error,
+        detail: 'No authoritative online decision was received.',
+      );
+    }
     _logSettlementUnavailable(failure);
     countdownTimer?.cancel();
     setState(() {
@@ -3916,6 +4603,13 @@ class _QuickPopOnlineSearchScreenState
   }
 
   void _debugMatchOpenFailure(Object caught, StackTrace stackTrace) {
+    _addDiagnosticError(
+      'MATCH_OPEN_RETRY',
+      caught,
+      path: diagnosticRoomId == null
+          ? null
+          : 'onlineV2/rooms/$diagnosticRoomId',
+    );
     final failure = describeQuickPopOnlineFailure(caught);
     debugPrint(
       'Quick Pop match open pending settlement '
@@ -3927,6 +4621,13 @@ class _QuickPopOnlineSearchScreenState
   void _logMatchOpenFailure(Object caught, StackTrace stackTrace) {
     if (matchOpenFailureLogged) return;
     matchOpenFailureLogged = true;
+    _addDiagnosticError(
+      'MATCH_OPEN_FAILED',
+      caught,
+      path: diagnosticRoomId == null
+          ? null
+          : 'onlineV2/rooms/$diagnosticRoomId',
+    );
     final failure = describeQuickPopOnlineFailure(caught);
     unawaited(
       widget.analytics.logEvent(
@@ -3947,7 +4648,48 @@ class _QuickPopOnlineSearchScreenState
   }
 
   void _openLocalCpuFallback({OnlineFlowFailureReason? failureReason}) {
+    if (!mounted || cancelled || navigationCommitted || cpuFallbackReady) {
+      return;
+    }
+    cpuFallbackFailureReason = failureReason;
+    countdownTimer?.cancel();
+    _addDiagnostic(
+      'CPU_READY_TO_START',
+      state: QuickPopDiagnosticState.info,
+      detail:
+          'search ended without a confirmed human launch; waiting for player confirmation',
+    );
+    setState(() {
+      cpuFallbackReady = true;
+      openingMatch = false;
+      settlementInProgress = false;
+      secondsRemaining = 0;
+      status = 'No encontramos un rival online.';
+    });
+  }
+
+  void _startLocalCpuFallback() {
+    if (!mounted || cancelled || navigationCommitted || !cpuFallbackReady) {
+      return;
+    }
+    if (cpuFallbackStarting) return;
+    cpuFallbackStarting = true;
+    _addDiagnostic(
+      'CPU_START_CONFIRMED',
+      state: QuickPopDiagnosticState.success,
+      detail: 'player confirmed the local CPU match',
+    );
+    _launchLocalCpuFallback(failureReason: cpuFallbackFailureReason);
+  }
+
+  void _launchLocalCpuFallback({OnlineFlowFailureReason? failureReason}) {
     if (!mounted || cancelled || navigationCommitted) return;
+    _addDiagnostic(
+      'CPU_FALLBACK',
+      state: QuickPopDiagnosticState.info,
+      detail:
+          'starting local CPU match reason=${failureReason?.name ?? 'deadline'}',
+    );
     navigationCommitted = true;
     countdownTimer?.cancel();
     final elapsedMilliseconds = math.min(
@@ -4016,6 +4758,11 @@ class _QuickPopOnlineSearchScreenState
     // double taps and a system-back + button race to exactly one cancellation
     // and one Navigator.pop.
     cancelled = true;
+    _addDiagnostic(
+      'SEARCH_CANCELLED',
+      state: QuickPopDiagnosticState.info,
+      detail: 'player cancelled the search',
+    );
     if (mounted) setState(() {});
     countdownTimer?.cancel();
     _logSearchCancellation();
@@ -4052,33 +4799,53 @@ class _QuickPopOnlineSearchScreenState
     child: Scaffold(
       body: PopBackground(
         child: SafeArea(
-          child: Center(
-            child: Padding(
-              padding: const EdgeInsets.all(22),
-              child: ConstrainedBox(
-                constraints: const BoxConstraints(maxWidth: 480),
-                child: Container(
-                  padding: const EdgeInsets.fromLTRB(24, 26, 24, 20),
-                  decoration: BoxDecoration(
-                    color: Colors.white.withValues(alpha: .96),
-                    borderRadius: BorderRadius.circular(30),
-                    border: Border.all(color: Colors.white, width: 2),
-                    boxShadow: const [
-                      BoxShadow(
-                        color: Color(0x3317284D),
-                        blurRadius: 24,
-                        offset: Offset(0, 12),
-                      ),
-                    ],
-                  ),
-                  child: QuickPopOnlineSearchStatusPanel(
-                    status: status,
-                    secondsRemaining: secondsRemaining,
-                    openingMatch: openingMatch,
-                    settlementUnavailable: settlementUnavailable,
-                    onExit: cancelGate.started || settlementInProgress
-                        ? null
-                        : _cancelAndLeave,
+          child: SingleChildScrollView(
+            child: Center(
+              child: Padding(
+                padding: const EdgeInsets.all(22),
+                child: ConstrainedBox(
+                  constraints: const BoxConstraints(maxWidth: 480),
+                  child: Container(
+                    padding: const EdgeInsets.fromLTRB(24, 26, 24, 20),
+                    decoration: BoxDecoration(
+                      color: Colors.white.withValues(alpha: .96),
+                      borderRadius: BorderRadius.circular(30),
+                      border: Border.all(color: Colors.white, width: 2),
+                      boxShadow: const [
+                        BoxShadow(
+                          color: Color(0x3317284D),
+                          blurRadius: 24,
+                          offset: Offset(0, 12),
+                        ),
+                      ],
+                    ),
+                    child: QuickPopOnlineSearchStatusPanel(
+                      status: status,
+                      secondsRemaining: secondsRemaining,
+                      openingMatch: openingMatch,
+                      settlementUnavailable: settlementUnavailable,
+                      cpuFallbackReady: cpuFallbackReady,
+                      searchIdentifier: searchIdentifier,
+                      searchQueueKey: searchQueueKey,
+                      searchPlayers: searchPlayers,
+                      // Collecting the trace is harmless in QA, but the
+                      // panel and copy affordance must stay out of normal
+                      // release APKs. Opt into it with
+                      // PARCHESE_POP_SHOW_DEBUG=true.
+                      diagnosticEntries: onlineDiagnosticsUiEnabled
+                          ? diagnosticLog.entries
+                          : const <QuickPopDiagnosticEntry>[],
+                      diagnosticCopied: onlineDiagnosticsUiEnabled
+                          ? diagnosticCopied
+                          : false,
+                      onCopyDiagnostics: onlineDiagnosticsUiEnabled
+                          ? _copyDiagnostics
+                          : null,
+                      onStartCpu: _startLocalCpuFallback,
+                      onExit: cancelGate.started || settlementInProgress
+                          ? null
+                          : _cancelAndLeave,
+                    ),
                   ),
                 ),
               ),
@@ -4098,6 +4865,14 @@ class QuickPopOnlineSearchStatusPanel extends StatelessWidget {
     required this.openingMatch,
     required this.settlementUnavailable,
     required this.onExit,
+    this.cpuFallbackReady = false,
+    this.searchIdentifier,
+    this.searchQueueKey,
+    this.searchPlayers = 1,
+    this.diagnosticEntries = const <QuickPopDiagnosticEntry>[],
+    this.diagnosticCopied = false,
+    this.onCopyDiagnostics,
+    this.onStartCpu,
     super.key,
   });
 
@@ -4106,6 +4881,14 @@ class QuickPopOnlineSearchStatusPanel extends StatelessWidget {
   final bool openingMatch;
   final bool settlementUnavailable;
   final VoidCallback? onExit;
+  final bool cpuFallbackReady;
+  final String? searchIdentifier;
+  final String? searchQueueKey;
+  final int searchPlayers;
+  final List<QuickPopDiagnosticEntry> diagnosticEntries;
+  final bool diagnosticCopied;
+  final Future<void> Function()? onCopyDiagnostics;
+  final VoidCallback? onStartCpu;
 
   @override
   Widget build(BuildContext context) => Column(
@@ -4114,8 +4897,12 @@ class QuickPopOnlineSearchStatusPanel extends StatelessWidget {
       Container(
         width: 82,
         height: 82,
-        decoration: const BoxDecoration(
-          color: Color(0xFF7257E9),
+        decoration: BoxDecoration(
+          color: settlementUnavailable
+              ? const Color(0xFF7257E9)
+              : cpuFallbackReady
+              ? PopColors.green
+              : const Color(0xFF7257E9),
           shape: BoxShape.circle,
         ),
         child: settlementUnavailable
@@ -4124,6 +4911,13 @@ class QuickPopOnlineSearchStatusPanel extends StatelessWidget {
                 key: ValueKey('quick-pop-reconnect-icon'),
                 color: Colors.white,
                 size: 42,
+              )
+            : cpuFallbackReady
+            ? const Icon(
+                Icons.play_arrow_rounded,
+                key: ValueKey('quick-pop-cpu-ready-icon'),
+                color: Colors.white,
+                size: 46,
               )
             : Padding(
                 padding: const EdgeInsets.all(20),
@@ -4168,6 +4962,44 @@ class QuickPopOnlineSearchStatusPanel extends StatelessWidget {
             fontWeight: FontWeight.w700,
           ),
         ),
+      ] else if (cpuFallbackReady) ...[
+        const SizedBox(height: 16),
+        PopText(
+          appTranslate(
+            context,
+            'La búsqueda terminó. ¿Quieres comenzar la partida contra CPU?',
+          ),
+          key: const ValueKey('quick-pop-cpu-ready-help'),
+          textAlign: TextAlign.center,
+          style: TextStyle(
+            color: Color(0xFF667085),
+            fontSize: 12,
+            fontWeight: FontWeight.w700,
+          ),
+        ),
+        const SizedBox(height: 16),
+        SizedBox(
+          width: double.infinity,
+          child: ElevatedButton.icon(
+            key: const ValueKey('quick-pop-start-cpu'),
+            onPressed: onStartCpu,
+            icon: const Icon(Icons.play_arrow_rounded),
+            label: Text(appTranslate(context, 'COMENZAR PARTIDA')),
+            style: ElevatedButton.styleFrom(
+              backgroundColor: PopColors.green,
+              foregroundColor: Colors.white,
+              padding: const EdgeInsets.symmetric(vertical: 13),
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(16),
+              ),
+              textStyle: const TextStyle(
+                fontSize: 12,
+                fontWeight: FontWeight.w900,
+                letterSpacing: .3,
+              ),
+            ),
+          ),
+        ),
       ] else if (!openingMatch) ...[
         const SizedBox(height: 16),
         PopText(
@@ -4181,13 +5013,211 @@ class QuickPopOnlineSearchStatusPanel extends StatelessWidget {
           ),
         ),
         const SizedBox(height: 5),
-        const PopText(
-          'Luego jugarás contra CPU automáticamente',
+        PopText(
+          appTranslate(context, 'Al terminar podrás comenzar contra CPU'),
           textAlign: TextAlign.center,
           style: TextStyle(
             color: Color(0xFF667085),
             fontSize: 12,
             fontWeight: FontWeight.w700,
+          ),
+        ),
+      ],
+      if (searchIdentifier != null && !openingMatch) ...[
+        const SizedBox(height: 14),
+        Container(
+          key: const ValueKey('quick-pop-search-presence'),
+          width: double.infinity,
+          padding: const EdgeInsets.symmetric(horizontal: 13, vertical: 11),
+          decoration: BoxDecoration(
+            color: const Color(0xFFF4F6FB),
+            borderRadius: BorderRadius.circular(14),
+            border: Border.all(color: const Color(0xFFDCE3F1)),
+          ),
+          child: Row(
+            children: [
+              const Icon(
+                Icons.meeting_room_outlined,
+                color: PopColors.blue,
+                size: 20,
+              ),
+              const SizedBox(width: 9),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    const Text(
+                      'ID DE BÚSQUEDA / SALA',
+                      style: TextStyle(
+                        color: PopColors.navy,
+                        fontSize: 10,
+                        fontWeight: FontWeight.w900,
+                        letterSpacing: .25,
+                      ),
+                    ),
+                    Text(
+                      searchIdentifier!,
+                      key: const ValueKey('quick-pop-search-id'),
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(
+                        color: PopColors.blue,
+                        fontSize: 13,
+                        fontWeight: FontWeight.w900,
+                        letterSpacing: .4,
+                      ),
+                    ),
+                    if (searchQueueKey != null)
+                      Text(
+                        'Cola: $searchQueueKey',
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(
+                          color: Color(0xFF667085),
+                          fontSize: 9,
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
+                  ],
+                ),
+              ),
+              const SizedBox(width: 8),
+              Column(
+                crossAxisAlignment: CrossAxisAlignment.end,
+                children: [
+                  const Text(
+                    'JUGADORES',
+                    style: TextStyle(
+                      color: PopColors.navy,
+                      fontSize: 10,
+                      fontWeight: FontWeight.w900,
+                    ),
+                  ),
+                  Text(
+                    '${math.min(4, math.max(1, searchPlayers))}/4',
+                    key: const ValueKey('quick-pop-search-player-count'),
+                    style: const TextStyle(
+                      color: PopColors.green,
+                      fontSize: 17,
+                      fontWeight: FontWeight.w900,
+                    ),
+                  ),
+                  Text(
+                    searchPlayers > 1 ? 'Jugador encontrado' : 'Esperando…',
+                    style: const TextStyle(
+                      color: Color(0xFF667085),
+                      fontSize: 9,
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
+                ],
+              ),
+            ],
+          ),
+        ),
+      ],
+      if (diagnosticEntries.isNotEmpty) ...[
+        const SizedBox(height: 16),
+        Row(
+          children: [
+            const Expanded(
+              child: PopText(
+                'PASOS DE DIAGNÓSTICO',
+                style: TextStyle(
+                  color: PopColors.navy,
+                  fontSize: 12,
+                  fontWeight: FontWeight.w900,
+                  letterSpacing: .4,
+                ),
+              ),
+            ),
+            TextButton.icon(
+              key: const ValueKey('quick-pop-copy-diagnostics'),
+              onPressed: onCopyDiagnostics == null
+                  ? null
+                  : () => unawaited(onCopyDiagnostics!()),
+              icon: Icon(
+                diagnosticCopied ? Icons.check_rounded : Icons.copy_rounded,
+                size: 15,
+              ),
+              label: Text(diagnosticCopied ? 'COPIADO' : 'COPIAR'),
+              style: TextButton.styleFrom(
+                foregroundColor: PopColors.blue,
+                padding: const EdgeInsets.symmetric(horizontal: 6),
+                textStyle: const TextStyle(
+                  fontSize: 10,
+                  fontWeight: FontWeight.w900,
+                ),
+              ),
+            ),
+          ],
+        ),
+        Container(
+          key: const ValueKey('quick-pop-diagnostic-log'),
+          height: math.min(260, math.max(92, diagnosticEntries.length * 42.0)),
+          padding: const EdgeInsets.symmetric(vertical: 6),
+          decoration: BoxDecoration(
+            color: const Color(0xFFF4F6FB),
+            borderRadius: BorderRadius.circular(16),
+            border: Border.all(color: const Color(0xFFDCE3F1)),
+          ),
+          child: ListView.separated(
+            padding: const EdgeInsets.symmetric(horizontal: 8),
+            itemCount: diagnosticEntries.length,
+            separatorBuilder: (_, _) => const Divider(
+              height: 1,
+              indent: 34,
+              endIndent: 4,
+              color: Color(0xFFE2E7F0),
+            ),
+            itemBuilder: (context, index) {
+              final entry = diagnosticEntries[index];
+              final color = switch (entry.state) {
+                QuickPopDiagnosticState.success => PopColors.green,
+                QuickPopDiagnosticState.error => PopColors.red,
+                QuickPopDiagnosticState.waiting => PopColors.yellow,
+                QuickPopDiagnosticState.pending ||
+                QuickPopDiagnosticState.info => PopColors.blue,
+              };
+              return ListTile(
+                key: ValueKey('quick-pop-diagnostic-step-${entry.number}'),
+                dense: true,
+                minVerticalPadding: 2,
+                contentPadding: EdgeInsets.zero,
+                leading: CircleAvatar(
+                  radius: 12,
+                  backgroundColor: color,
+                  child: Text(
+                    entry.state.symbol,
+                    style: const TextStyle(
+                      color: Colors.white,
+                      fontSize: 12,
+                      fontWeight: FontWeight.w900,
+                    ),
+                  ),
+                ),
+                title: Text(
+                  '${entry.number}. ${entry.step}',
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(
+                    color: PopColors.navy,
+                    fontSize: 10,
+                    fontWeight: FontWeight.w900,
+                  ),
+                ),
+                subtitle: Text(
+                  '${entry.elapsedLabel} · ${entry.detail.isEmpty ? entry.state.label : entry.detail}',
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(
+                    color: Color(0xFF667085),
+                    fontSize: 9,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+              );
+            },
           ),
         ),
       ],
@@ -4214,66 +5244,45 @@ class _QuickPopEntryDialog extends StatelessWidget {
   const _QuickPopEntryDialog();
 
   @override
-  Widget build(BuildContext context) => Dialog(
-    key: const ValueKey('quick-pop-entry-dialog'),
-    insetPadding: const EdgeInsets.all(18),
-    clipBehavior: Clip.antiAlias,
-    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(30)),
-    child: ConstrainedBox(
-      constraints: const BoxConstraints(maxWidth: 520),
-      child: Padding(
+  Widget build(BuildContext context) {
+    final details = appTranslate(
+      context,
+      'Buscaremos otro jugador durante 30 segundos. Si no aparece nadie, podrás comenzar la partida contra el CPU.',
+    );
+    return _PopSetupDialogShell(
+      key: const ValueKey('quick-pop-entry-dialog'),
+      // A bounded, scrollable sheet guarantees that the explanation and both
+      // choices remain reachable on short phones while giving tablets a more
+      // comfortable reading width.
+      maxWidth: 620,
+      maxHeight: MediaQuery.sizeOf(context).height - 32,
+      child: SingleChildScrollView(
         padding: const EdgeInsets.fromLTRB(22, 22, 22, 18),
         child: Column(
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            Row(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Container(
-                  width: 52,
-                  height: 52,
-                  decoration: BoxDecoration(
-                    color: const Color(0xFF7257E9),
-                    borderRadius: BorderRadius.circular(17),
-                  ),
-                  child: const Icon(
-                    Icons.public_rounded,
-                    color: Colors.white,
-                    size: 30,
-                  ),
-                ),
-                const SizedBox(width: 12),
-                const Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      PopText(
-                        'QUICK POP ONLINE',
-                        style: TextStyle(
-                          color: PopColors.navy,
-                          fontSize: 21,
-                          fontWeight: FontWeight.w900,
-                        ),
-                      ),
-                      SizedBox(height: 5),
-                      _ModeStatusBadge(label: 'ONLINE · LISTO'),
-                    ],
-                  ),
-                ),
-                IconButton(
-                  tooltip: appTranslate(context, 'Cerrar'),
-                  onPressed: () => Navigator.pop(context),
-                  icon: const Icon(Icons.close_rounded),
-                ),
-              ],
+            _PopSetupHeader(
+              icon: Icons.public_rounded,
+              title: 'QUICK POP ONLINE',
+              subtitle: appTranslate(
+                context,
+                'Busca un rival y empieza en segundos',
+              ),
+              color: Color(0xFF7257E9),
+              trailing: const Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  _ModeStatusBadge(label: 'ONLINE · LISTO'),
+                  _PopSetupCloseButton(),
+                ],
+              ),
             ),
             const SizedBox(height: 17),
-            const PopText(
-              'Buscaremos otro jugador durante 10 segundos. Si no aparece '
-              'nadie, la partida empieza automáticamente contra el CPU.',
+            PopText(
+              details,
               style: TextStyle(
-                color: Color(0xFF475467),
+                color: Color(0xFFEAF0FF),
                 fontSize: 14,
                 height: 1.4,
                 fontWeight: FontWeight.w700,
@@ -4290,7 +5299,9 @@ class _QuickPopEntryDialog extends StatelessWidget {
                 ),
               ),
               icon: const Icon(Icons.public_rounded),
-              label: const PopText('JUGAR ONLINE · BUSCAR 10 S'),
+              label: _FitButtonLabel(
+                appTranslate(context, 'JUGAR ONLINE · BUSCAR 30 S'),
+              ),
               style: FilledButton.styleFrom(
                 backgroundColor: const Color(0xFF7257E9),
                 foregroundColor: Colors.white,
@@ -4308,94 +5319,60 @@ class _QuickPopEntryDialog extends StatelessWidget {
                 const _QuickPopEntrySelection(_QuickPopEntryChoice.cpu),
               ),
               icon: const Icon(Icons.smart_toy_rounded),
-              label: const PopText('JUGAR AHORA CONTRA CPU'),
+              label: const _FitButtonLabel('JUGAR AHORA CONTRA CPU'),
+              style: OutlinedButton.styleFrom(
+                foregroundColor: Colors.white,
+                side: BorderSide(
+                  color: Colors.white.withValues(alpha: .65),
+                  width: 1.5,
+                ),
+                minimumSize: const Size.fromHeight(48),
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(17),
+                ),
+              ),
             ),
           ],
         ),
       ),
-    ),
-  );
+    );
+  }
 }
 
 class _PassAndPlaySetupDialog extends StatelessWidget {
   const _PassAndPlaySetupDialog();
 
   @override
-  Widget build(BuildContext context) => Dialog(
+  Widget build(BuildContext context) => _PopSetupDialogShell(
     key: const ValueKey('pass-and-play-setup-dialog'),
-    insetPadding: const EdgeInsets.all(16),
-    clipBehavior: Clip.antiAlias,
-    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(30)),
-    child: ConstrainedBox(
-      constraints: const BoxConstraints(maxWidth: 640),
-      child: SingleChildScrollView(
-        padding: const EdgeInsets.all(22),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            Row(
-              children: [
-                Container(
-                  width: 48,
-                  height: 48,
-                  decoration: const BoxDecoration(
-                    color: PopColors.green,
-                    shape: BoxShape.circle,
-                  ),
-                  child: const Icon(
-                    Icons.swap_horiz_rounded,
-                    color: Colors.white,
-                    size: 29,
-                  ),
-                ),
-                const SizedBox(width: 11),
-                const Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      PopText(
-                        'PASS & PLAY',
-                        style: TextStyle(
-                          fontSize: 23,
-                          fontWeight: FontWeight.w900,
-                          color: PopColors.navy,
-                        ),
-                      ),
-                      PopText(
-                        'Pasa el teléfono después de cada turno',
-                        style: TextStyle(
-                          color: Color(0xFF667085),
-                          fontWeight: FontWeight.w700,
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-                IconButton(
-                  tooltip: appTranslate(context, 'Cerrar'),
-                  onPressed: () => Navigator.pop(context),
-                  icon: const Icon(Icons.close_rounded),
-                ),
-              ],
+    child: SingleChildScrollView(
+      padding: const EdgeInsets.all(22),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          const _PopSetupHeader(
+            icon: Icons.swap_horiz_rounded,
+            title: 'PASS & PLAY',
+            subtitle: 'Pasa el teléfono después de cada turno',
+            color: PopColors.green,
+          ),
+          const SizedBox(height: 16),
+          const PopText(
+            'Todos juegan en el mismo dispositivo. Elige las reglas de la mesa:',
+            textAlign: TextAlign.center,
+            style: TextStyle(
+              color: Color(0xFFEAF0FF),
+              fontWeight: FontWeight.w700,
             ),
-            const SizedBox(height: 16),
-            const PopText(
-              'Todos juegan en el mismo dispositivo. Elige las reglas de la mesa:',
-              textAlign: TextAlign.center,
-              style: TextStyle(
-                color: Color(0xFF667085),
-                fontWeight: FontWeight.w700,
-              ),
-            ),
-            const SizedBox(height: 14),
-            _GameModeChoices(
-              key: const ValueKey('pass-and-play-mode-step'),
-              keyPrefix: 'pass-play',
-              onSelected: (mode) => Navigator.pop(context, mode),
-            ),
-          ],
-        ),
+          ),
+          const SizedBox(height: 14),
+          _GameModeChoices(
+            key: const ValueKey('pass-and-play-mode-step'),
+            keyPrefix: 'pass-play',
+            onSelected: (mode) => Navigator.pop(context, mode),
+          ),
+        ],
       ),
     ),
   );
@@ -4407,63 +5384,21 @@ class _OnlineModeDialog extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final maxHeight = MediaQuery.sizeOf(context).height * .84;
-    return Dialog(
+    return _PopSetupDialogShell(
       key: const ValueKey('online-mode-dialog'),
-      insetPadding: const EdgeInsets.all(16),
-      clipBehavior: Clip.antiAlias,
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(30)),
       child: ConstrainedBox(
-        constraints: BoxConstraints(maxWidth: 640, maxHeight: maxHeight),
+        constraints: BoxConstraints(maxHeight: maxHeight),
         child: SingleChildScrollView(
           padding: const EdgeInsets.all(22),
           child: Column(
             mainAxisSize: MainAxisSize.min,
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
-              Row(
-                children: [
-                  Container(
-                    width: 48,
-                    height: 48,
-                    decoration: const BoxDecoration(
-                      color: PopColors.blue,
-                      shape: BoxShape.circle,
-                    ),
-                    child: const Icon(
-                      Icons.public_rounded,
-                      color: Colors.white,
-                      size: 29,
-                    ),
-                  ),
-                  const SizedBox(width: 11),
-                  const Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        PopText(
-                          'Elige cómo jugar',
-                          style: TextStyle(
-                            fontSize: 23,
-                            fontWeight: FontWeight.w900,
-                            color: PopColors.navy,
-                          ),
-                        ),
-                        PopText(
-                          'Elige las reglas de la mesa local',
-                          style: TextStyle(
-                            color: Color(0xFF667085),
-                            fontWeight: FontWeight.w700,
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-                  IconButton(
-                    tooltip: appTranslate(context, 'Cerrar'),
-                    onPressed: () => Navigator.pop(context),
-                    icon: const Icon(Icons.close_rounded),
-                  ),
-                ],
+              const _PopSetupHeader(
+                icon: Icons.public_rounded,
+                title: 'Elige cómo jugar',
+                subtitle: 'Elige las reglas de la mesa local',
+                color: PopColors.blue,
               ),
               const SizedBox(height: 16),
               _GameModeChoices(
@@ -4493,75 +5428,66 @@ class _CpuSetupDialogState extends State<_CpuSetupDialog> {
   Widget build(BuildContext context) {
     final choosingMode = selectedMode == null;
     final maxHeight = MediaQuery.sizeOf(context).height * .84;
-    return Dialog(
-      insetPadding: const EdgeInsets.all(16),
-      clipBehavior: Clip.antiAlias,
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(30)),
+    return _PopSetupDialogShell(
+      key: const ValueKey('cpu-setup-dialog'),
+      maxWidth: 640,
       child: ConstrainedBox(
-        constraints: BoxConstraints(maxWidth: 640, maxHeight: maxHeight),
+        constraints: BoxConstraints(maxHeight: maxHeight),
         child: SingleChildScrollView(
           padding: const EdgeInsets.all(22),
           child: Column(
             mainAxisSize: MainAxisSize.min,
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
-              Row(
-                children: [
-                  if (!choosingMode)
-                    IconButton.filledTonal(
+              if (choosingMode)
+                const _PopSetupHeader(
+                  icon: Icons.smart_toy_rounded,
+                  title: 'Elige cómo jugar',
+                  subtitle: 'Paso 1 de 2 · modo de partida',
+                  color: PopColors.red,
+                )
+              else
+                Row(
+                  children: [
+                    IconButton(
                       key: const ValueKey('cpu-setup-back'),
-                      tooltip: appTranslate(context, 'Volver a modos'),
+                      tooltip: 'Volver a modos',
                       onPressed: () => setState(() => selectedMode = null),
-                      icon: const Icon(Icons.arrow_back_rounded),
-                    )
-                  else
-                    Container(
-                      width: 48,
-                      height: 48,
-                      decoration: const BoxDecoration(
-                        color: PopColors.red,
-                        shape: BoxShape.circle,
-                      ),
-                      child: const Icon(
-                        Icons.smart_toy_rounded,
+                      icon: const Icon(
+                        Icons.arrow_back_rounded,
                         color: Colors.white,
-                        size: 29,
+                      ),
+                      style: IconButton.styleFrom(
+                        backgroundColor: Colors.white.withValues(alpha: .16),
+                        foregroundColor: Colors.white,
                       ),
                     ),
-                  const SizedBox(width: 11),
-                  Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        PopText(
-                          choosingMode
-                              ? 'Elige cómo jugar'
-                              : 'Elige la dificultad',
-                          style: const TextStyle(
-                            fontSize: 23,
-                            fontWeight: FontWeight.w900,
-                            color: PopColors.navy,
+                    const SizedBox(width: 11),
+                    const Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          PopText(
+                            'Elige la dificultad',
+                            style: TextStyle(
+                              fontSize: 23,
+                              fontWeight: FontWeight.w900,
+                              color: Colors.white,
+                            ),
                           ),
-                        ),
-                        PopText(
-                          choosingMode
-                              ? 'Paso 1 de 2 · modo de partida'
-                              : 'Paso 2 de 2 · nivel del CPU',
-                          style: const TextStyle(
-                            color: Color(0xFF667085),
-                            fontWeight: FontWeight.w700,
+                          PopText(
+                            'Paso 2 de 2 · nivel del CPU',
+                            style: TextStyle(
+                              color: Color(0xFFEAF0FF),
+                              fontWeight: FontWeight.w700,
+                            ),
                           ),
-                        ),
-                      ],
+                        ],
+                      ),
                     ),
-                  ),
-                  IconButton(
-                    tooltip: appTranslate(context, 'Cerrar'),
-                    onPressed: () => Navigator.pop(context),
-                    icon: const Icon(Icons.close_rounded),
-                  ),
-                ],
-              ),
+                    const _PopSetupCloseButton(),
+                  ],
+                ),
               const SizedBox(height: 16),
               AnimatedSwitcher(
                 duration: const Duration(milliseconds: 350),
@@ -4784,6 +5710,8 @@ class _CpuChoiceCard extends StatelessWidget {
                   ),
                   PopText(
                     description,
+                    maxLines: 2,
+                    overflow: TextOverflow.ellipsis,
                     style: const TextStyle(
                       color: Colors.white,
                       fontSize: 11,
@@ -4796,21 +5724,29 @@ class _CpuChoiceCard extends StatelessWidget {
             const SizedBox(width: 6),
             Column(
               children: [
-                Container(
-                  padding: const EdgeInsets.symmetric(
-                    horizontal: 7,
-                    vertical: 4,
-                  ),
-                  decoration: BoxDecoration(
-                    color: Colors.white.withValues(alpha: .2),
-                    borderRadius: BorderRadius.circular(10),
-                  ),
-                  child: PopText(
-                    badge,
-                    style: const TextStyle(
-                      color: Colors.white,
-                      fontSize: 8,
-                      fontWeight: FontWeight.w900,
+                ConstrainedBox(
+                  constraints: BoxConstraints(maxWidth: compact ? 72 : 100),
+                  child: FittedBox(
+                    fit: BoxFit.scaleDown,
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 7,
+                        vertical: 4,
+                      ),
+                      decoration: BoxDecoration(
+                        color: Colors.white.withValues(alpha: .2),
+                        borderRadius: BorderRadius.circular(10),
+                      ),
+                      child: PopText(
+                        badge,
+                        maxLines: 1,
+                        softWrap: false,
+                        style: const TextStyle(
+                          color: Colors.white,
+                          fontSize: 8,
+                          fontWeight: FontWeight.w900,
+                        ),
+                      ),
                     ),
                   ),
                 ),
@@ -4834,6 +5770,7 @@ class _HomeTopBar extends StatelessWidget {
     required this.profile,
     required this.wallet,
     required this.compactLandscape,
+    required this.showDesktopInfo,
     required this.onProfileTap,
     required this.onSettings,
   });
@@ -4841,6 +5778,7 @@ class _HomeTopBar extends StatelessWidget {
   final PlayerProfile profile;
   final WalletController wallet;
   final bool compactLandscape;
+  final bool showDesktopInfo;
   final VoidCallback onProfileTap;
   final VoidCallback onSettings;
 
@@ -4849,6 +5787,10 @@ class _HomeTopBar extends StatelessWidget {
     builder: (context, box) {
       final compactLogo = box.maxWidth < 500 || compactLandscape;
       final controlGap = compactLogo ? 6.0 : 8.0;
+      // Keep the utility row compact on desktop as well as on phones.  A
+      // 48px control still meets the touch target while preventing the
+      // profile, coins and settings controls from dominating the header.
+      final controlSize = compactLogo ? 44.0 : 48.0;
       final controls = Row(
         mainAxisSize: MainAxisSize.min,
         children: [
@@ -4856,43 +5798,115 @@ class _HomeTopBar extends StatelessWidget {
             profile: profile,
             wallet: wallet,
             compact: compactLogo,
+            size: controlSize,
             onTap: onProfileTap,
           ),
           SizedBox(width: controlGap),
-          _CoinPill(wallet: wallet),
+          _CoinPill(wallet: wallet, height: controlSize),
           SizedBox(width: controlGap),
-          Container(
-            decoration: BoxDecoration(
-              color: Colors.white.withValues(alpha: .94),
-              shape: BoxShape.circle,
-              border: Border.all(
-                color: Colors.white.withValues(alpha: .82),
-                width: 2,
-              ),
-              boxShadow: const [
-                BoxShadow(
-                  color: Color(0x4007142E),
-                  blurRadius: 9,
-                  offset: Offset(0, 5),
+          SizedBox.square(
+            dimension: controlSize,
+            child: Container(
+              decoration: BoxDecoration(
+                color: Colors.white.withValues(alpha: .94),
+                shape: BoxShape.circle,
+                border: Border.all(
+                  color: Colors.white.withValues(alpha: .82),
+                  width: 2,
                 ),
-              ],
-            ),
-            child: IconButton(
-              tooltip: appTranslate(context, 'Ajustes'),
-              onPressed: onSettings,
-              icon: const Icon(Icons.settings_rounded, color: PopColors.navy),
+                boxShadow: const [
+                  BoxShadow(
+                    color: Color(0x4007142E),
+                    blurRadius: 9,
+                    offset: Offset(0, 5),
+                  ),
+                ],
+              ),
+              child: IconButton(
+                padding: EdgeInsets.zero,
+                constraints: BoxConstraints.tightFor(
+                  width: controlSize,
+                  height: controlSize,
+                ),
+                tooltip: appTranslate(context, 'Ajustes'),
+                onPressed: onSettings,
+                icon: const Icon(Icons.settings_rounded, color: PopColors.navy),
+              ),
             ),
           ),
         ],
       );
       return Row(
         children: [
-          Expanded(child: _GameLogo(compact: compactLogo)),
+          Expanded(
+            child: _GameLogo(compact: compactLogo, height: controlSize),
+          ),
           SizedBox(width: compactLogo ? 8 : 16),
+          if (showDesktopInfo) ...[
+            const _DesktopBuildVersionBadge(),
+            SizedBox(width: compactLogo ? 6 : 8),
+          ],
           controls,
         ],
       );
     },
+  );
+}
+
+/// Desktop builds do not have the mobile banner's version strip. Keep the
+/// installed build visible in the header instead, where it remains available
+/// on macOS and Windows while the window is resized.
+class _DesktopBuildVersionBadge extends StatefulWidget {
+  const _DesktopBuildVersionBadge();
+
+  @override
+  State<_DesktopBuildVersionBadge> createState() =>
+      _DesktopBuildVersionBadgeState();
+}
+
+class _DesktopBuildVersionBadgeState extends State<_DesktopBuildVersionBadge> {
+  String _label = 'v…';
+
+  @override
+  void initState() {
+    super.initState();
+    _loadVersion();
+  }
+
+  Future<void> _loadVersion() async {
+    try {
+      final package = await PackageInfo.fromPlatform();
+      final build = package.buildNumber.trim();
+      final label = build.isEmpty
+          ? 'v${package.version}'
+          : 'v${package.version}+$build';
+      if (mounted) setState(() => _label = label);
+    } catch (_) {
+      if (mounted) setState(() => _label = 'v—');
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) => Semantics(
+    label: 'Versión de la app: $_label',
+    child: Container(
+      key: const ValueKey('desktop-version-badge'),
+      padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 5),
+      decoration: BoxDecoration(
+        color: Colors.white.withValues(alpha: .88),
+        borderRadius: BorderRadius.circular(11),
+        border: Border.all(color: Colors.white, width: 1.5),
+      ),
+      child: PopText(
+        _label,
+        style: const TextStyle(
+          color: PopColors.navy,
+          fontSize: 9,
+          fontWeight: FontWeight.w900,
+          letterSpacing: .15,
+        ),
+      ),
+    ),
   );
 }
 
@@ -4901,12 +5915,14 @@ class _HomeProfileButton extends StatelessWidget {
     required this.profile,
     required this.wallet,
     required this.compact,
+    this.size,
     required this.onTap,
   });
 
   final PlayerProfile profile;
   final WalletController wallet;
   final bool compact;
+  final double? size;
   final VoidCallback onTap;
 
   @override
@@ -4914,6 +5930,7 @@ class _HomeProfileButton extends StatelessWidget {
     animation: wallet,
     builder: (context, _) {
       final avatarId = wallet.equippedProductId(CosmeticCategory.avatar);
+      final itemSize = size ?? (compact ? 44.0 : 48.0);
       return Semantics(
         button: true,
         label: profile.isGuest
@@ -4926,8 +5943,8 @@ class _HomeProfileButton extends StatelessWidget {
             customBorder: const CircleBorder(),
             onTap: onTap,
             child: Ink(
-              width: compact ? 44 : 48,
-              height: compact ? 44 : 48,
+              width: itemSize,
+              height: itemSize,
               decoration: BoxDecoration(
                 gradient: const LinearGradient(
                   begin: Alignment.topLeft,
@@ -4951,7 +5968,7 @@ class _HomeProfileButton extends StatelessWidget {
                     child: _AvatarArt(
                       key: ValueKey('home-avatar-${avatarId ?? 'default'}'),
                       avatarId: avatarId,
-                      size: compact ? 38 : 42,
+                      size: math.max(30, itemSize - 6),
                       withFrame: false,
                     ),
                   ),
@@ -5369,64 +6386,90 @@ class _HomeMenuDock extends StatelessWidget {
 }
 
 class _GameLogo extends StatelessWidget {
-  const _GameLogo({this.compact = false});
+  const _GameLogo({this.compact = false, this.height});
 
   final bool compact;
+  final double? height;
 
   @override
-  Widget build(BuildContext context) => Row(
-    mainAxisSize: MainAxisSize.min,
-    children: [
-      Transform.rotate(
-        angle: -.07,
-        child: Container(
-          width: compact ? 44 : 56,
-          height: compact ? 44 : 56,
-          decoration: BoxDecoration(
-            gradient: const LinearGradient(
-              begin: Alignment.topLeft,
-              end: Alignment.bottomRight,
-              colors: [Color(0xFFFFDD55), Color(0xFFFFA918)],
+  Widget build(BuildContext context) {
+    final narrow = MediaQuery.sizeOf(context).width < 380;
+    final markSize = height ?? (compact ? (narrow ? 38.0 : 44.0) : 56.0);
+    final textSize = compact ? (narrow ? 16.0 : 19.0) : 25.0;
+    return Semantics(
+      label: 'Parchís Pop',
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Transform.rotate(
+            angle: -.07,
+            child: Container(
+              width: markSize,
+              height: markSize,
+              decoration: BoxDecoration(
+                gradient: const LinearGradient(
+                  begin: Alignment.topLeft,
+                  end: Alignment.bottomRight,
+                  colors: [Color(0xFFFFDD55), Color(0xFFFFA918)],
+                ),
+                borderRadius: BorderRadius.circular(compact ? 14 : 18),
+                border: Border.all(color: Colors.white, width: 3),
+                boxShadow: const [
+                  BoxShadow(
+                    color: Color(0x5007132D),
+                    blurRadius: 9,
+                    offset: Offset(0, 6),
+                  ),
+                ],
+              ),
+              // Use the canonical four-player board icon everywhere in the
+              // in-app header so it matches the launcher artwork on iOS,
+              // Android, macOS, and Windows.
+              child: Padding(
+                padding: const EdgeInsets.all(5),
+                child: ClipRRect(
+                  borderRadius: BorderRadius.circular(compact ? 10 : 14),
+                  child: Image.asset(
+                    'assets/images/parchis_pop_icon.png',
+                    fit: BoxFit.cover,
+                    filterQuality: FilterQuality.high,
+                    isAntiAlias: true,
+                  ),
+                ),
+              ),
             ),
-            borderRadius: BorderRadius.circular(compact ? 14 : 18),
-            border: Border.all(color: Colors.white, width: 3),
-            boxShadow: const [
-              BoxShadow(
-                color: Color(0x5007132D),
-                blurRadius: 9,
-                offset: Offset(0, 6),
+          ),
+          SizedBox(width: compact ? (narrow ? 6 : 8) : 11),
+          Flexible(
+            child: FittedBox(
+              fit: BoxFit.scaleDown,
+              alignment: Alignment.centerLeft,
+              child: PopText(
+                'PARCHÍS\nPOP!',
+                textAlign: TextAlign.left,
+                softWrap: false,
+                maxLines: 2,
+                style: TextStyle(
+                  fontSize: textSize,
+                  height: .9,
+                  fontWeight: FontWeight.w900,
+                  color: Colors.white,
+                  letterSpacing: compact ? -1 : -1.3,
+                  shadows: const [
+                    Shadow(
+                      color: Color(0x66000000),
+                      offset: Offset(0, 3),
+                      blurRadius: 5,
+                    ),
+                  ],
+                ),
               ),
-            ],
+            ),
           ),
-          child: Icon(
-            Icons.casino_rounded,
-            color: PopColors.navy,
-            size: compact ? 28 : 35,
-          ),
-        ),
+        ],
       ),
-      SizedBox(width: compact ? 8 : 11),
-      Flexible(
-        child: PopText(
-          'PARCHÍS\nPOP!',
-          style: TextStyle(
-            fontSize: compact ? 19 : 25,
-            height: .84,
-            fontWeight: FontWeight.w900,
-            color: Colors.white,
-            letterSpacing: compact ? -1 : -1.3,
-            shadows: const [
-              Shadow(
-                color: Color(0x66000000),
-                offset: Offset(0, 3),
-                blurRadius: 5,
-              ),
-            ],
-          ),
-        ),
-      ),
-    ],
-  );
+    );
+  }
 }
 
 class _RoundMenuButton extends StatefulWidget {
@@ -5670,7 +6713,8 @@ class _ModeCardState extends State<_ModeCard> {
   Widget build(BuildContext context) {
     final compact = MediaQuery.sizeOf(context).height < 520;
     final narrow = MediaQuery.sizeOf(context).width < 500 && !compact;
-    final minHeight = compact
+    final textScale = MediaQuery.textScalerOf(context).scale(1).clamp(1.0, 2.0);
+    final baseHeight = compact
         ? (widget.tile ? 58.0 : 78.0)
         : widget.tile
         ? (widget.ultraCompact
@@ -5687,6 +6731,17 @@ class _ModeCardState extends State<_ModeCard> {
         : widget.expanded
         ? 158.0
         : 118.0;
+    // Reserve enough room for translated and accessibility-scaled copy.
+    // Paired cards still receive the same inputs, so every row stays aligned.
+    // Native settings can leave a custom scale behind even when a test or a
+    // platform asks animations to stop. Give every compact card a little
+    // vertical reserve so the translated copy never touches its edge.
+    final textAllowance = compact
+        ? 10.0
+        : widget.tile
+        ? 20 + (textScale - 1) * (widget.ultraCompact ? 30 : 42)
+        : (textScale - 1) * 22;
+    final minHeight = baseHeight + textAllowance;
     final dark = Color.lerp(widget.color, PopColors.navy, .32)!;
     return Semantics(
       button: true,
@@ -5718,188 +6773,197 @@ class _ModeCardState extends State<_ModeCard> {
                   color: Colors.transparent,
                   borderRadius: BorderRadius.circular(29),
                   clipBehavior: Clip.antiAlias,
-                  child: Ink(
+                  child: SizedBox(
                     height: minHeight,
-                    decoration: BoxDecoration(
-                      borderRadius: BorderRadius.circular(29),
-                      gradient: LinearGradient(
-                        begin: Alignment.topLeft,
-                        end: Alignment.bottomRight,
-                        colors: [
-                          Color.lerp(widget.color, Colors.white, .20)!,
-                          widget.color,
-                          dark,
-                        ],
-                        stops: const [0, .56, 1],
-                      ),
-                      border: Border.all(color: Colors.white, width: 3),
-                      boxShadow: [
-                        BoxShadow(
-                          color: widget.color.withValues(alpha: .38),
-                          blurRadius: 17,
-                          offset: const Offset(0, 9),
+                    child: Ink(
+                      decoration: BoxDecoration(
+                        borderRadius: BorderRadius.circular(29),
+                        gradient: LinearGradient(
+                          begin: Alignment.topLeft,
+                          end: Alignment.bottomRight,
+                          colors: [
+                            Color.lerp(widget.color, Colors.white, .20)!,
+                            widget.color,
+                            dark,
+                          ],
+                          stops: const [0, .56, 1],
                         ),
-                      ],
-                    ),
-                    child: InkWell(
-                      onTap: widget.onTap,
-                      onHighlightChanged: (value) =>
-                          setState(() => pressed = value),
-                      child: Stack(
-                        children: [
-                          Positioned(
-                            top: 2,
-                            left: 28,
-                            right: 28,
-                            child: Container(
-                              height: 2,
-                              decoration: BoxDecoration(
-                                borderRadius: BorderRadius.circular(10),
-                                color: Colors.white.withValues(alpha: .48),
+                        border: Border.all(color: Colors.white, width: 3),
+                        boxShadow: [
+                          BoxShadow(
+                            color: widget.color.withValues(alpha: .38),
+                            blurRadius: 17,
+                            offset: const Offset(0, 9),
+                          ),
+                        ],
+                      ),
+                      child: InkWell(
+                        onTap: widget.onTap,
+                        onHighlightChanged: (value) =>
+                            setState(() => pressed = value),
+                        child: Stack(
+                          children: [
+                            Positioned(
+                              top: 2,
+                              left: 28,
+                              right: 28,
+                              child: Container(
+                                height: 2,
+                                decoration: BoxDecoration(
+                                  borderRadius: BorderRadius.circular(10),
+                                  color: Colors.white.withValues(alpha: .48),
+                                ),
                               ),
                             ),
-                          ),
-                          Padding(
-                            padding: EdgeInsets.all(
-                              compact
-                                  ? 4
-                                  : widget.ultraCompact
-                                  ? 4
-                                  : widget.dense
-                                  ? 12
-                                  : narrow
-                                  ? 15
-                                  : 18,
-                            ),
-                            child: widget.tile
-                                ? Column(
-                                    crossAxisAlignment:
-                                        CrossAxisAlignment.start,
-                                    children: [
-                                      Row(
-                                        children: [
-                                          _ModeArtwork(
-                                            color: widget.color,
-                                            icon: widget.icon,
-                                            size: compact
-                                                ? 25
-                                                : widget.ultraCompact
-                                                ? 39
-                                                : widget.dense
-                                                ? 43
-                                                : 49,
-                                          ),
-                                          if (!widget.ultraCompact)
-                                            const Spacer(),
-                                          _ModePlayPill(
-                                            color: dark,
-                                            compact: compact,
-                                            iconOnly: true,
-                                          ),
-                                        ],
-                                      ),
-                                      const Spacer(),
-                                      _ModeCardTitle(
-                                        title: widget.title,
-                                        fontSize: compact
-                                            ? 11
+                            Padding(
+                              padding: EdgeInsets.all(
+                                compact
+                                    ? 4
+                                    : widget.ultraCompact
+                                    ? 4
+                                    : widget.dense
+                                    ? 12
+                                    : narrow
+                                    ? 15
+                                    : 18,
+                              ),
+                              child: widget.tile
+                                  ? LayoutBuilder(
+                                      builder: (context, cardBox) {
+                                        final veryNarrow =
+                                            cardBox.maxWidth < 150;
+                                        final artworkSize = compact
+                                            ? 25.0
+                                            : widget.ultraCompact
+                                            ? 38.0
                                             : widget.dense
-                                            ? 16
-                                            : 18,
-                                      ),
-                                      SizedBox(
-                                        height: compact || widget.ultraCompact
-                                            ? 1
-                                            : 5,
-                                      ),
-                                      PopText(
-                                        appTranslate(context, widget.subtitle),
-                                        maxLines: compact ? 1 : 2,
-                                        overflow: TextOverflow.ellipsis,
-                                        style: TextStyle(
-                                          color: const Color(0xFFF4F7FF),
-                                          fontSize: compact
-                                              ? 7
-                                              : widget.ultraCompact
-                                              ? 8.5
-                                              : widget.dense
-                                              ? 9.5
-                                              : 10.5,
-                                          height: 1.15,
-                                          fontWeight: FontWeight.w700,
-                                        ),
-                                      ),
-                                    ],
-                                  )
-                                : Row(
-                                    children: [
-                                      _ModeArtwork(
-                                        color: widget.color,
-                                        icon: widget.icon,
-                                        size: compact
-                                            ? 52
-                                            : widget.dense
-                                            ? 58
-                                            : narrow
-                                            ? 70
-                                            : 78,
-                                      ),
-                                      SizedBox(
-                                        width: compact || narrow || widget.dense
-                                            ? 12
-                                            : 17,
-                                      ),
-                                      Expanded(
-                                        child: Column(
+                                            ? 42.0
+                                            : 48.0;
+                                        return Column(
                                           crossAxisAlignment:
-                                              CrossAxisAlignment.start,
-                                          mainAxisSize: MainAxisSize.min,
+                                              CrossAxisAlignment.center,
                                           children: [
-                                            if (widget.badge case final badge?)
-                                              Padding(
-                                                padding: const EdgeInsets.only(
-                                                  bottom: 3,
-                                                ),
-                                                child: _ModeStatusBadge(
-                                                  label: badge,
-                                                ),
+                                            Center(
+                                              child: _ModeArtwork(
+                                                color: widget.color,
+                                                icon: widget.icon,
+                                                size: artworkSize,
                                               ),
-                                            _ModeCardTitle(
-                                              title: widget.title,
-                                              fontSize:
-                                                  compact ||
-                                                      narrow ||
-                                                      widget.dense
-                                                  ? (compact ? 18 : 20)
-                                                  : 24,
                                             ),
-                                            const SizedBox(height: 5),
-                                            PopText(
-                                              appTranslate(
-                                                context,
-                                                widget.subtitle,
+                                            SizedBox(
+                                              height: compact
+                                                  ? 1
+                                                  : widget.ultraCompact
+                                                  ? 4
+                                                  : 7,
+                                            ),
+                                            const Spacer(),
+                                            Center(
+                                              child: _ModeCardTitle(
+                                                title: widget.title,
+                                                fontSize: compact
+                                                    ? 11
+                                                    : veryNarrow
+                                                    ? 14
+                                                    : widget.dense
+                                                    ? 16
+                                                    : 18,
+                                                alignment: Alignment.center,
+                                                textAlign: TextAlign.center,
                                               ),
-                                              maxLines: 2,
-                                              overflow: TextOverflow.ellipsis,
-                                              style: TextStyle(
-                                                color: const Color(0xFFF4F7FF),
-                                                fontSize: compact ? 10 : 11,
-                                                height: 1.18,
-                                                fontWeight: FontWeight.w700,
+                                            ),
+                                            SizedBox(
+                                              height:
+                                                  compact || widget.ultraCompact
+                                                  ? 1
+                                                  : 5,
+                                            ),
+                                            Padding(
+                                              padding:
+                                                  const EdgeInsets.symmetric(
+                                                    horizontal: 2,
+                                                  ),
+                                              child: _ResponsiveCardCopy(
+                                                text: widget.subtitle,
+                                                compact: compact,
+                                                ultraCompact:
+                                                    widget.ultraCompact,
+                                                dense: widget.dense,
+                                                veryNarrow: veryNarrow,
+                                                maxLines: compact ? 2 : 3,
                                               ),
                                             ),
                                           ],
+                                        );
+                                      },
+                                    )
+                                  : Row(
+                                      children: [
+                                        _ModeArtwork(
+                                          color: widget.color,
+                                          icon: widget.icon,
+                                          size: compact
+                                              ? 52
+                                              : widget.dense
+                                              ? 58
+                                              : narrow
+                                              ? 70
+                                              : 78,
                                         ),
-                                      ),
-                                      const SizedBox(width: 7),
-                                      _ModePlayPill(
-                                        color: dark,
-                                        compact: compact,
-                                      ),
-                                    ],
-                                  ),
-                          ),
-                        ],
+                                        SizedBox(
+                                          width:
+                                              compact || narrow || widget.dense
+                                              ? 12
+                                              : 17,
+                                        ),
+                                        Expanded(
+                                          child: Column(
+                                            crossAxisAlignment:
+                                                CrossAxisAlignment.start,
+                                            mainAxisSize: MainAxisSize.min,
+                                            children: [
+                                              if (widget.badge
+                                                  case final badge?)
+                                                Padding(
+                                                  padding:
+                                                      const EdgeInsets.only(
+                                                        bottom: 3,
+                                                      ),
+                                                  child: _ModeStatusBadge(
+                                                    label: badge,
+                                                  ),
+                                                ),
+                                              Center(
+                                                child: _ModeCardTitle(
+                                                  title: widget.title,
+                                                  fontSize:
+                                                      compact ||
+                                                          narrow ||
+                                                          widget.dense
+                                                      ? (compact ? 18 : 20)
+                                                      : 24,
+                                                  alignment: Alignment.center,
+                                                  textAlign: TextAlign.center,
+                                                ),
+                                              ),
+                                              const SizedBox(height: 5),
+                                              _ResponsiveCardCopy(
+                                                text: widget.subtitle,
+                                                compact: compact,
+                                                ultraCompact: false,
+                                                dense: widget.dense,
+                                                veryNarrow: false,
+                                                maxLines: 3,
+                                              ),
+                                            ],
+                                          ),
+                                        ),
+                                        const SizedBox(width: 7),
+                                      ],
+                                    ),
+                            ),
+                          ],
+                        ),
                       ),
                     ),
                   ),
@@ -5914,14 +6978,23 @@ class _ModeCardState extends State<_ModeCard> {
 }
 
 class _ModeCardTitle extends StatelessWidget {
-  const _ModeCardTitle({required this.title, required this.fontSize});
+  const _ModeCardTitle({
+    required this.title,
+    required this.fontSize,
+    this.alignment = Alignment.centerLeft,
+    this.textAlign = TextAlign.start,
+  });
 
   final String title;
   final double fontSize;
+  final AlignmentGeometry alignment;
+  final TextAlign textAlign;
 
   @override
   Widget build(BuildContext context) => _AutoFitSingleLineText(
     title,
+    alignment: alignment,
+    textAlign: textAlign,
     style: TextStyle(
       fontSize: fontSize,
       height: .98,
@@ -5933,6 +7006,54 @@ class _ModeCardTitle extends StatelessWidget {
       ],
     ),
   );
+}
+
+class _ResponsiveCardCopy extends StatelessWidget {
+  const _ResponsiveCardCopy({
+    required this.text,
+    required this.compact,
+    required this.ultraCompact,
+    required this.dense,
+    required this.veryNarrow,
+    required this.maxLines,
+  });
+
+  final String text;
+  final bool compact;
+  final bool ultraCompact;
+  final bool dense;
+  final bool veryNarrow;
+  final int maxLines;
+
+  @override
+  Widget build(BuildContext context) {
+    final scale = MediaQuery.textScalerOf(context).scale(1).clamp(1.0, 2.0);
+    final baseSize = compact
+        ? 8.5
+        : veryNarrow
+        ? 10.0
+        : ultraCompact
+        ? 10.5
+        : dense
+        ? 11.5
+        : 13.0;
+    // Keep accessibility scaling active while avoiding unreadably large copy
+    // that would push the label outside its button on cover displays.
+    final effectiveSize = baseSize / math.max(1, scale * .84);
+    return PopText(
+      text,
+      maxLines: maxLines,
+      softWrap: true,
+      overflow: TextOverflow.visible,
+      textAlign: TextAlign.center,
+      style: TextStyle(
+        color: const Color(0xFFF4F7FF),
+        fontSize: effectiveSize,
+        height: 1.15,
+        fontWeight: FontWeight.w800,
+      ),
+    );
+  }
 }
 
 class _ModeStatusBadge extends StatelessWidget {
@@ -5959,58 +7080,6 @@ class _ModeStatusBadge extends StatelessWidget {
         letterSpacing: .25,
         fontWeight: FontWeight.w900,
       ),
-    ),
-  );
-}
-
-class _ModePlayPill extends StatelessWidget {
-  const _ModePlayPill({
-    required this.color,
-    this.compact = false,
-    this.iconOnly = false,
-  });
-
-  final Color color;
-  final bool compact;
-  final bool iconOnly;
-
-  @override
-  Widget build(BuildContext context) => Container(
-    padding: EdgeInsets.symmetric(
-      horizontal: iconOnly ? 8 : (compact ? 7 : 11),
-      vertical: compact ? 6 : 9,
-    ),
-    decoration: BoxDecoration(
-      color: Colors.white.withValues(alpha: .95),
-      borderRadius: BorderRadius.circular(18),
-      boxShadow: const [
-        BoxShadow(
-          color: Color(0x33000000),
-          blurRadius: 7,
-          offset: Offset(0, 4),
-        ),
-      ],
-    ),
-    child: Row(
-      mainAxisSize: MainAxisSize.min,
-      children: [
-        if (!iconOnly) ...[
-          PopText(
-            'JUGAR',
-            style: TextStyle(
-              color: color,
-              fontSize: compact ? 9 : 10,
-              fontWeight: FontWeight.w900,
-            ),
-          ),
-          const SizedBox(width: 2),
-        ],
-        Icon(
-          Icons.arrow_forward_rounded,
-          color: color,
-          size: compact ? 15 : 17,
-        ),
-      ],
     ),
   );
 }
@@ -6164,183 +7233,176 @@ Future<void> _showAddCoinsDialog(
 
   await showDialog<void>(
     context: context,
-    builder: (dialogContext) => Dialog(
+    builder: (dialogContext) => _PopSetupDialogShell(
       key: const ValueKey('test-balance-dialog'),
+      maxWidth: 520,
+      maxHeight: MediaQuery.sizeOf(dialogContext).height - 36,
       insetPadding: const EdgeInsets.all(18),
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(30)),
-      child: ConstrainedBox(
-        constraints: BoxConstraints(
-          maxWidth: 520,
-          maxHeight: MediaQuery.sizeOf(dialogContext).height - 36,
-        ),
-        child: SingleChildScrollView(
-          padding: const EdgeInsets.all(22),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              Row(
+      child: SingleChildScrollView(
+        padding: const EdgeInsets.all(22),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Row(
+              children: [
+                Container(
+                  width: 52,
+                  height: 52,
+                  decoration: const BoxDecoration(
+                    color: PopColors.yellow,
+                    shape: BoxShape.circle,
+                  ),
+                  child: const Icon(
+                    Icons.monetization_on_rounded,
+                    color: PopColors.navy,
+                    size: 32,
+                  ),
+                ),
+                const SizedBox(width: 12),
+                const Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      PopText(
+                        'Añadir monedas',
+                        style: TextStyle(
+                          fontSize: 23,
+                          fontWeight: FontWeight.w900,
+                          color: Colors.white,
+                        ),
+                      ),
+                      PopText(
+                        'Saldo local para probar la tienda',
+                        style: TextStyle(
+                          color: Color(0xFFC8D6F2),
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                IconButton(
+                  tooltip: appTranslate(context, 'Cerrar'),
+                  onPressed: () => Navigator.pop(dialogContext),
+                  icon: const Icon(Icons.close_rounded),
+                ),
+              ],
+            ),
+            const SizedBox(height: 14),
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+              decoration: BoxDecoration(
+                gradient: LinearGradient(
+                  colors: [
+                    PopColors.yellow.withValues(alpha: .30),
+                    const Color(0xFFFFE7A0).withValues(alpha: .48),
+                  ],
+                ),
+                borderRadius: BorderRadius.circular(14),
+                border: Border.all(
+                  color: PopColors.yellow.withValues(alpha: .70),
+                ),
+              ),
+              child: Column(
                 children: [
-                  Container(
-                    width: 52,
-                    height: 52,
-                    decoration: const BoxDecoration(
-                      color: PopColors.yellow,
-                      shape: BoxShape.circle,
-                    ),
-                    child: const Icon(
-                      Icons.monetization_on_rounded,
+                  PopText(
+                    'SALDO ACTUAL · ${_formatCoins(wallet.balance)}',
+                    style: const TextStyle(
                       color: PopColors.navy,
-                      size: 32,
+                      fontSize: 13,
+                      fontWeight: FontWeight.w900,
                     ),
                   ),
-                  const SizedBox(width: 12),
-                  const Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        PopText(
-                          'Añadir monedas',
-                          style: TextStyle(
-                            fontSize: 23,
-                            fontWeight: FontWeight.w900,
-                            color: PopColors.navy,
-                          ),
-                        ),
-                        PopText(
-                          'Saldo local para probar la tienda',
-                          style: TextStyle(
-                            color: Color(0xFF667085),
-                            fontWeight: FontWeight.w600,
-                          ),
-                        ),
-                      ],
+                  const SizedBox(height: 3),
+                  const PopText(
+                    'MODO DE PRUEBA · No se realiza ningún cobro. Las '
+                    'compras reales se conectarán con App Store y Google Play.',
+                    textAlign: TextAlign.center,
+                    style: TextStyle(
+                      color: PopColors.ink,
+                      fontSize: 10,
+                      height: 1.2,
+                      fontWeight: FontWeight.w800,
                     ),
-                  ),
-                  IconButton(
-                    tooltip: appTranslate(context, 'Cerrar'),
-                    onPressed: () => Navigator.pop(dialogContext),
-                    icon: const Icon(Icons.close_rounded),
                   ),
                 ],
               ),
-              const SizedBox(height: 14),
-              Container(
-                padding: const EdgeInsets.symmetric(
-                  horizontal: 12,
-                  vertical: 10,
-                ),
-                decoration: BoxDecoration(
-                  gradient: LinearGradient(
-                    colors: [
-                      PopColors.yellow.withValues(alpha: .30),
-                      const Color(0xFFFFE7A0).withValues(alpha: .48),
-                    ],
-                  ),
-                  borderRadius: BorderRadius.circular(14),
-                  border: Border.all(
-                    color: PopColors.yellow.withValues(alpha: .70),
-                  ),
-                ),
-                child: Column(
-                  children: [
-                    PopText(
-                      'SALDO ACTUAL · ${_formatCoins(wallet.balance)}',
-                      style: const TextStyle(
-                        color: PopColors.navy,
-                        fontSize: 13,
-                        fontWeight: FontWeight.w900,
+            ),
+            const SizedBox(height: 12),
+            for (final pack in packs)
+              Padding(
+                padding: const EdgeInsets.only(bottom: 9),
+                child: Material(
+                  color: pack.color.withValues(alpha: .12),
+                  borderRadius: BorderRadius.circular(18),
+                  child: InkWell(
+                    key: ValueKey('add-test-coins-${pack.amount}'),
+                    borderRadius: BorderRadius.circular(18),
+                    onTap: () => addPack(dialogContext, pack.amount),
+                    child: Padding(
+                      padding: const EdgeInsets.all(14),
+                      child: Row(
+                        children: [
+                          Icon(
+                            Icons.add_circle_rounded,
+                            color: pack.color,
+                            size: 31,
+                          ),
+                          const SizedBox(width: 11),
+                          Expanded(
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                PopText(
+                                  pack.label,
+                                  style: const TextStyle(
+                                    color: Colors.white,
+                                    fontWeight: FontWeight.w900,
+                                  ),
+                                ),
+                                PopText(
+                                  '+${_formatCoins(pack.amount)} monedas',
+                                  style: TextStyle(
+                                    color: pack.color,
+                                    fontWeight: FontWeight.w900,
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                          Container(
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 12,
+                              vertical: 8,
+                            ),
+                            decoration: BoxDecoration(
+                              color: pack.color,
+                              borderRadius: BorderRadius.circular(14),
+                              boxShadow: [
+                                BoxShadow(
+                                  color: pack.color.withValues(alpha: .30),
+                                  blurRadius: 7,
+                                  offset: const Offset(0, 4),
+                                ),
+                              ],
+                            ),
+                            child: const PopText(
+                              'AÑADIR',
+                              style: TextStyle(
+                                color: Colors.white,
+                                fontSize: 11,
+                                fontWeight: FontWeight.w900,
+                              ),
+                            ),
+                          ),
+                        ],
                       ),
                     ),
-                    const SizedBox(height: 3),
-                    const PopText(
-                      'MODO DE PRUEBA · No se realiza ningún cobro. Las '
-                      'compras reales se conectarán con App Store y Google Play.',
-                      textAlign: TextAlign.center,
-                      style: TextStyle(
-                        color: PopColors.ink,
-                        fontSize: 10,
-                        height: 1.2,
-                        fontWeight: FontWeight.w800,
-                      ),
-                    ),
-                  ],
+                  ),
                 ),
               ),
-              const SizedBox(height: 12),
-              for (final pack in packs)
-                Padding(
-                  padding: const EdgeInsets.only(bottom: 9),
-                  child: Material(
-                    color: pack.color.withValues(alpha: .12),
-                    borderRadius: BorderRadius.circular(18),
-                    child: InkWell(
-                      key: ValueKey('add-test-coins-${pack.amount}'),
-                      borderRadius: BorderRadius.circular(18),
-                      onTap: () => addPack(dialogContext, pack.amount),
-                      child: Padding(
-                        padding: const EdgeInsets.all(14),
-                        child: Row(
-                          children: [
-                            Icon(
-                              Icons.add_circle_rounded,
-                              color: pack.color,
-                              size: 31,
-                            ),
-                            const SizedBox(width: 11),
-                            Expanded(
-                              child: Column(
-                                crossAxisAlignment: CrossAxisAlignment.start,
-                                children: [
-                                  PopText(
-                                    pack.label,
-                                    style: const TextStyle(
-                                      fontWeight: FontWeight.w900,
-                                    ),
-                                  ),
-                                  PopText(
-                                    '+${_formatCoins(pack.amount)} monedas',
-                                    style: TextStyle(
-                                      color: pack.color,
-                                      fontWeight: FontWeight.w900,
-                                    ),
-                                  ),
-                                ],
-                              ),
-                            ),
-                            Container(
-                              padding: const EdgeInsets.symmetric(
-                                horizontal: 12,
-                                vertical: 8,
-                              ),
-                              decoration: BoxDecoration(
-                                color: pack.color,
-                                borderRadius: BorderRadius.circular(14),
-                                boxShadow: [
-                                  BoxShadow(
-                                    color: pack.color.withValues(alpha: .30),
-                                    blurRadius: 7,
-                                    offset: const Offset(0, 4),
-                                  ),
-                                ],
-                              ),
-                              child: const PopText(
-                                'AÑADIR',
-                                style: TextStyle(
-                                  color: Colors.white,
-                                  fontSize: 11,
-                                  fontWeight: FontWeight.w900,
-                                ),
-                              ),
-                            ),
-                          ],
-                        ),
-                      ),
-                    ),
-                  ),
-                ),
-            ],
-          ),
+          ],
         ),
       ),
     ),
@@ -6348,14 +7410,17 @@ Future<void> _showAddCoinsDialog(
 }
 
 class _CoinPill extends StatelessWidget {
-  const _CoinPill({required this.wallet});
+  const _CoinPill({required this.wallet, this.height});
 
   final WalletController wallet;
+  final double? height;
 
   @override
   Widget build(BuildContext context) => AnimatedBuilder(
     animation: wallet,
     builder: (context, _) => Container(
+      height: height,
+      alignment: Alignment.center,
       padding: const EdgeInsets.symmetric(horizontal: 11, vertical: 5),
       decoration: BoxDecoration(
         color: Colors.white,
@@ -7012,108 +8077,84 @@ class _MatchExitDialogFrame extends StatelessWidget {
   final bool stackActions;
 
   @override
-  Widget build(BuildContext context) => Dialog(
-    backgroundColor: Colors.transparent,
+  Widget build(BuildContext context) => _PopSetupDialogShell(
+    maxWidth: 420,
     insetPadding: const EdgeInsets.symmetric(horizontal: 24, vertical: 20),
-    child: ConstrainedBox(
-      constraints: const BoxConstraints(maxWidth: 420),
-      child: Container(
-        padding: const EdgeInsets.fromLTRB(20, 18, 20, 16),
-        decoration: BoxDecoration(
-          gradient: const LinearGradient(
-            begin: Alignment.topLeft,
-            end: Alignment.bottomRight,
-            colors: [Color(0xFF254F9E), Color(0xFF162C5D)],
+    padding: const EdgeInsets.fromLTRB(20, 18, 20, 16),
+    child: Column(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Container(
+          width: 62,
+          height: 62,
+          decoration: BoxDecoration(
+            color: iconColor,
+            shape: BoxShape.circle,
+            border: Border.all(color: Colors.white, width: 3),
+            boxShadow: [
+              BoxShadow(
+                color: iconColor.withValues(alpha: .6),
+                blurRadius: 12,
+                offset: const Offset(0, 4),
+              ),
+            ],
           ),
-          borderRadius: BorderRadius.circular(26),
-          border: Border.all(color: PopColors.yellow, width: 2.5),
-          boxShadow: const [
-            BoxShadow(
-              color: Color(0x9007132D),
-              blurRadius: 28,
-              offset: Offset(0, 14),
-            ),
-          ],
+          child: Icon(icon, color: Colors.white, size: 31),
         ),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Container(
-              width: 62,
-              height: 62,
-              decoration: BoxDecoration(
-                color: iconColor,
-                shape: BoxShape.circle,
-                border: Border.all(color: Colors.white, width: 3),
-                boxShadow: [
-                  BoxShadow(
-                    color: iconColor.withValues(alpha: .6),
-                    blurRadius: 12,
-                    offset: const Offset(0, 4),
+        const SizedBox(height: 13),
+        PopText(
+          title,
+          textAlign: TextAlign.center,
+          style: const TextStyle(
+            color: Colors.white,
+            fontSize: 21,
+            fontWeight: FontWeight.w900,
+            letterSpacing: .35,
+          ),
+        ),
+        const SizedBox(height: 8),
+        Container(
+          width: double.infinity,
+          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 11),
+          decoration: BoxDecoration(
+            color: Colors.white.withValues(alpha: .11),
+            borderRadius: BorderRadius.circular(15),
+            border: Border.all(color: Colors.white.withValues(alpha: .2)),
+          ),
+          child: PopText(
+            message,
+            textAlign: TextAlign.center,
+            style: const TextStyle(
+              color: Color(0xFFF3F7FF),
+              fontSize: 14,
+              fontWeight: FontWeight.w700,
+              height: 1.25,
+            ),
+          ),
+        ),
+        const SizedBox(height: 14),
+        if (stackActions)
+          Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              for (final entry in actions.asMap().entries)
+                Padding(
+                  padding: EdgeInsets.only(
+                    top: entry.key == actions.length - 1 ? 3 : 0,
+                    bottom: entry.key == actions.length - 1 ? 0 : 8,
                   ),
-                ],
-              ),
-              child: Icon(icon, color: Colors.white, size: 31),
-            ),
-            const SizedBox(height: 13),
-            PopText(
-              title,
-              textAlign: TextAlign.center,
-              style: const TextStyle(
-                color: Colors.white,
-                fontSize: 21,
-                fontWeight: FontWeight.w900,
-                letterSpacing: .35,
-              ),
-            ),
-            const SizedBox(height: 8),
-            Container(
-              width: double.infinity,
-              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 11),
-              decoration: BoxDecoration(
-                color: Colors.white.withValues(alpha: .11),
-                borderRadius: BorderRadius.circular(15),
-                border: Border.all(color: Colors.white.withValues(alpha: .2)),
-              ),
-              child: PopText(
-                message,
-                textAlign: TextAlign.center,
-                style: const TextStyle(
-                  color: Color(0xFFF3F7FF),
-                  fontSize: 14,
-                  fontWeight: FontWeight.w700,
-                  height: 1.25,
+                  child: SizedBox(width: double.infinity, child: entry.value),
                 ),
-              ),
-            ),
-            const SizedBox(height: 14),
-            if (stackActions)
-              Column(
-                crossAxisAlignment: CrossAxisAlignment.stretch,
-                children: [
-                  for (final entry in actions.asMap().entries)
-                    Padding(
-                      padding: EdgeInsets.only(
-                        top: entry.key == actions.length - 1 ? 3 : 0,
-                        bottom: entry.key == actions.length - 1 ? 0 : 8,
-                      ),
-                      child: SizedBox(
-                        width: double.infinity,
-                        child: entry.value,
-                      ),
-                    ),
-                ],
-              )
-            else
-              Wrap(
-                alignment: WrapAlignment.center,
-                spacing: 8,
-                runSpacing: 8,
-                children: actions,
-              ),
-          ],
-        ),
-      ),
+            ],
+          )
+        else
+          Wrap(
+            alignment: WrapAlignment.center,
+            spacing: 8,
+            runSpacing: 8,
+            children: actions,
+          ),
+      ],
     ),
   );
 }
@@ -7226,6 +8267,12 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
   // continues from the durable checkpoint and lets the CPU drive remote seats.
   bool onlineHostCpuFallbackActive = false;
   bool rollGuideEnabled = true;
+  bool minimapEnabled = true;
+  bool minimapPreferenceExplicit = false;
+  bool diceHandEffectEnabled = true;
+  bool diceHandEffectPreferenceExplicit = false;
+  bool moveCalloutsEnabled = true;
+  bool moveChoicePanelEnabled = true;
   DiceHandPreference diceHandPreference = DiceHandPreference.right;
   bool rollGuideVisible = false;
   bool rollGuideAppActive = true;
@@ -7240,13 +8287,36 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
   // single request in flight so a fast double tap cannot submit the same
   // bonus move against two different revisions.
   bool onlineMoveSubmitting = false;
+  Future<void> onlineMoveQueue = Future<void>.value();
   Timer? diceThrowTimer;
+  // iOS can emit inactive/hidden/paused callbacks in a burst while the app
+  // is being covered by Home and then resumed.  Debounce the transport pause
+  // so an older callback cannot pause a connection after the player is back.
+  Timer? onlineLifecyclePauseTimer;
+  int onlineLifecycleRevision = 0;
+  DateTime? lastOnlineResumeAt;
+  bool appLifecycleResumed = true;
   Timer? hostRecoveryUiTimer;
   Timer? screenAwakeRefreshTimer;
   StreamSubscription<OnlineSafeChatMessage>? onlineSafeChatSubscription;
   bool hostRecoveryRetrying = false;
   bool screenAwakeRequested = false;
   Future<void> screenAwakeOperation = Future<void>.value();
+
+  // The in-match trace is intentionally kept separate from matchmaking. It
+  // records the state a player sees after the room has opened (lifecycle,
+  // realtime connection, rolls, moves and engine events), while sharing the
+  // same copyable format as the Quick Pop search trace.
+  final QuickPopDiagnosticLog gameDiagnosticLog = QuickPopDiagnosticLog();
+  final Set<String> gameDiagnosticKeys = <String>{};
+  final ValueNotifier<int> gameDiagnosticRevision = ValueNotifier<int>(0);
+  bool gameDiagnosticCopied = false;
+  String gameDiagnosticAppVersion = 'unknown';
+  int gameDiagnosticLastEventSequence = 0;
+  String? gameDiagnosticLastSyncSignature;
+
+  bool get _gameDiagnosticsVisible =>
+      widget.onlineSession != null && onlineDiagnosticsUiEnabled;
 
   /// The local seat is red for legacy CPU/tutorial matches, but an online
   /// room can assign this device any of the four clockwise colors.
@@ -7286,9 +8356,9 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
     final sync = widget.onlineGameSync;
     return sync != null &&
         !sync.isHost &&
-        !onlineHostCpuFallbackActive &&
         !engine.gameOver &&
-        sync.hostAvailability != OnlineHostAvailability.available;
+        (onlineHostCpuFallbackActive ||
+            sync.hostAvailability != OnlineHostAvailability.available);
   }
 
   int get _hostReconnectSecondsRemaining {
@@ -7378,9 +8448,7 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
     }
     if (!rollGuideEnabled) return null;
     final legalNestTokens = engine.currentPlayer.tokens
-        .where(
-          (token) => token.inNest && engine.legalDiceFor(token).contains(5),
-        )
+        .where((token) => token.inNest && engine.legalDiceFor(token).isNotEmpty)
         .toList(growable: false);
     if (legalNestTokens.isEmpty) return null;
 
@@ -7441,6 +8509,197 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
     isDebugBuild: kDebugMode,
     requested: widget.showAllTestTraps,
   );
+
+  String _gameDiagnosticDeviceLabel() {
+    if (kIsWeb) return 'web';
+    return defaultTargetPlatform.name;
+  }
+
+  void _recordGameDiagnostic(
+    String step, {
+    QuickPopDiagnosticState state = QuickPopDiagnosticState.info,
+    String detail = '',
+    String? code,
+    String? path,
+    bool deduplicate = true,
+  }) {
+    if (widget.onlineSession == null) return;
+    final key = '$step|${state.name}|$detail|$code|$path';
+    if (deduplicate && !gameDiagnosticKeys.add(key)) return;
+    gameDiagnosticLog.add(
+      elapsedMilliseconds: matchElapsed.inMilliseconds,
+      step: step,
+      state: state,
+      detail: detail,
+      code: code,
+      path: path,
+    );
+    // The notifier lets the modal update while the game continues without
+    // coupling its route to the GameScreen's setState cycle.
+    gameDiagnosticRevision.value++;
+  }
+
+  void _recordGameDiagnosticError(String step, Object error, {String? path}) {
+    final description = describeQuickPopOnlineFailure(error);
+    _recordGameDiagnostic(
+      step,
+      state: QuickPopDiagnosticState.error,
+      detail: description.userMessage,
+      code: description.diagnosticCode,
+      path: path,
+      deduplicate: false,
+    );
+  }
+
+  Future<void> _loadGameDiagnosticAppVersion() async {
+    try {
+      final package = await PackageInfo.fromPlatform();
+      if (!mounted) return;
+      gameDiagnosticAppVersion = '${package.version}+${package.buildNumber}';
+      gameDiagnosticRevision.value++;
+    } catch (_) {
+      // The trace remains useful on desktop/test hosts without package info.
+    }
+  }
+
+  void _recordGameDiagnosticStart() {
+    final session = widget.onlineSession;
+    if (session == null) return;
+    final sync = widget.onlineGameSync;
+    final humanCount = session.participants
+        .where((participant) => participant.beganAsHuman)
+        .length;
+    final virtualCount = session.participants
+        .where((participant) => participant.isVirtuallyControlled)
+        .length;
+    _recordGameDiagnostic(
+      'GAME_STARTED',
+      state: QuickPopDiagnosticState.success,
+      detail:
+          'mode=${engine.matchFormat.name} room=${sync?.roomId ?? session.matchId} '
+          'localColor=${session.localColor.name} players=${session.participants.length} '
+          'humans=$humanCount cpu=$virtualCount',
+      path: sync?.matchPath,
+    );
+    _recordGameDiagnostic(
+      'PLAYERS_SNAPSHOT',
+      state: QuickPopDiagnosticState.info,
+      detail: session.participants
+          .map(
+            (participant) =>
+                '${participant.color.name}:${participant.displayName}:'
+                '${participant.kind.name}',
+          )
+          .join(', '),
+    );
+    _recordGameDiagnostic(
+      'SYNC_INITIAL_STATE',
+      state: sync == null
+          ? QuickPopDiagnosticState.info
+          : QuickPopDiagnosticState.waiting,
+      detail: sync == null
+          ? 'local engine only'
+          : 'connection=${sync.connectionState.name} host=${sync.isHost} '
+                'revision=${sync.revision} stateRevision=${sync.stateRevision}',
+      path: sync?.matchPath,
+    );
+  }
+
+  void _recordGameDiagnosticSync() {
+    final sync = widget.onlineGameSync;
+    if (sync == null || widget.onlineSession == null) return;
+    final signature =
+        '${sync.connectionState.name}|${sync.hostAvailability.name}|'
+        '${sync.revision}|${sync.stateRevision}|${sync.isHost}|'
+        '${sync.localParticipantAwaitingNextTurn}|${engine.currentPlayer.color.name}|'
+        '${engine.hasRolled}|${engine.effectResolving}|${engine.gameOver}';
+    if (signature == gameDiagnosticLastSyncSignature) return;
+    gameDiagnosticLastSyncSignature = signature;
+    final state = switch (sync.connectionState) {
+      OnlineGameConnectionState.connected => QuickPopDiagnosticState.success,
+      OnlineGameConnectionState.failed => QuickPopDiagnosticState.error,
+      OnlineGameConnectionState.reconnecting ||
+      OnlineGameConnectionState.connecting => QuickPopDiagnosticState.waiting,
+      _ => QuickPopDiagnosticState.info,
+    };
+    _recordGameDiagnostic(
+      'SYNC_UPDATE',
+      state: state,
+      detail:
+          'connection=${sync.connectionState.name} host=${sync.isHost} '
+          'availability=${sync.hostAvailability.name} revision=${sync.revision} '
+          'stateRevision=${sync.stateRevision} waitingForTurn='
+          '${sync.localParticipantAwaitingNextTurn} current=${engine.currentPlayer.color.name} '
+          'rolled=${engine.hasRolled} effect=${engine.effectResolving}',
+      path: sync.matchPath,
+      deduplicate: false,
+    );
+    if (sync.lastError != null) {
+      _recordGameDiagnosticError(
+        'SYNC_ERROR',
+        sync.lastError!,
+        path: sync.matchPath,
+      );
+    }
+  }
+
+  void _recordGameDiagnosticEvents() {
+    if (widget.onlineSession == null) return;
+    final pending = engine.eventHistory
+        .where((event) => event.sequence > gameDiagnosticLastEventSequence)
+        .toList(growable: false);
+    if (pending.isEmpty) return;
+    gameDiagnosticLastEventSequence = pending.last.sequence;
+    for (final event in pending) {
+      _recordGameDiagnostic(
+        'ENGINE_EVENT_${event.type.name.toUpperCase()}',
+        state: QuickPopDiagnosticState.success,
+        detail:
+            'turn=${event.turn} player=${event.playerColor.name} '
+            'name=${event.playerName} description=${event.description}'
+            '${event.dice == null ? '' : ' dice=${event.dice}'}'
+            '${event.tokenId == null ? '' : ' token=${event.tokenId}'}'
+            '${event.fromProgress == null ? '' : ' from=${event.fromProgress}'}'
+            '${event.toProgress == null ? '' : ' to=${event.toProgress}'}',
+        deduplicate: false,
+      );
+    }
+  }
+
+  Future<void> _copyGameDiagnostics() async {
+    if (widget.onlineSession == null) return;
+    final sync = widget.onlineGameSync;
+    final text = gameDiagnosticLog.toConsole(
+      title: 'PARCHIS POP GAME DEBUG',
+      device: _gameDiagnosticDeviceLabel(),
+      appVersion: gameDiagnosticAppVersion,
+      protocol: engine.matchFormat == MatchFormat.quickPop
+          ? 'Quick Pop match'
+          : 'Online match',
+      searchWindow: 'n/a',
+      firebaseProject: 'parchese-pop',
+    );
+    await Clipboard.setData(ClipboardData(text: text));
+    if (!mounted) return;
+    setState(() => gameDiagnosticCopied = true);
+    if (sync != null) _recordGameDiagnosticSync();
+  }
+
+  Future<void> _showGameDiagnostics() async {
+    if (!_gameDiagnosticsVisible) return;
+    _recordGameDiagnosticSync();
+    await showDialog<void>(
+      context: context,
+      barrierColor: const Color(0xB8142342),
+      builder: (dialogContext) => _OnlineGameDiagnosticsDialog(
+        revision: gameDiagnosticRevision,
+        entries: () => gameDiagnosticLog.entries,
+        copied: () => gameDiagnosticCopied,
+        onCopy: _copyGameDiagnostics,
+        onClose: () => Navigator.pop(dialogContext),
+      ),
+    );
+  }
 
   @override
   void initState() {
@@ -7594,6 +8853,11 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
         ? 0
         : engine.eventHistory.last.sequence;
     lastAnalyticsEventSequence = lastAudioEventSequence;
+    gameDiagnosticLastEventSequence = lastAudioEventSequence;
+    if (widget.onlineSession != null) {
+      _recordGameDiagnosticStart();
+      unawaited(_loadGameDiagnosticAppVersion());
+    }
     matchClockTimer = Timer.periodic(const Duration(seconds: 1), (_) {
       if (!mounted || engine.gameOver) return;
       setState(() => matchElapsed += const Duration(seconds: 1));
@@ -7619,7 +8883,9 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
         _onGameChanged();
       }
     });
-    unawaited(_loadRollGuidePreferences(rearm: true));
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) unawaited(_loadRollGuidePreferences(rearm: true));
+    });
   }
 
   @override
@@ -7714,6 +8980,22 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
   void _onOnlineSyncChanged() {
     if (!mounted) return;
     final sync = widget.onlineGameSync;
+    _recordGameDiagnosticSync();
+    // A guest may keep playing locally while the original host is away. As
+    // soon as the realtime connection is healthy again, return control to the
+    // authoritative stream instead of leaving the table in fallback mode.
+    if (sync != null &&
+        onlineHostCpuFallbackActive &&
+        sync.hostAvailability == OnlineHostAvailability.available) {
+      onlineHostCpuFallbackActive = false;
+      _recordGameDiagnostic(
+        'HOST_CPU_FALLBACK_CLEARED',
+        state: QuickPopDiagnosticState.success,
+        detail: 'host_presence_restored room=${sync.roomId}',
+        path: sync.matchPath,
+        deduplicate: false,
+      );
+    }
     if (sync != null &&
         !sync.isHost &&
         sync.requiresHostRecovery &&
@@ -7770,12 +9052,23 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
 
   void _activateOnlineHostCpuFallback(OnlineGameSyncClient sync) {
     if (onlineHostCpuFallbackActive || sync.isHost || engine.gameOver) return;
+    _recordGameDiagnostic(
+      'HOST_CPU_FALLBACK_ACTIVATED',
+      state: QuickPopDiagnosticState.info,
+      detail:
+          'hostAvailability=${sync.hostAvailability.name} '
+          'room=${sync.roomId} current=${engine.currentPlayer.color.name}',
+      path: sync.matchPath,
+      deduplicate: false,
+    );
     onlineHostCpuFallbackActive = true;
     hostRecoveryUiTimer?.cancel();
     hostRecoveryUiTimer = null;
-    // The guest already has the last authoritative checkpoint. Stop its
-    // presence/listeners and continue locally so the table never freezes.
-    unawaited(sync.pause());
+    // Keep the guest's realtime listeners alive. The local CPU fallback is a
+    // safety net for the period in which the host app is suspended; keeping
+    // the stream attached lets the guest observe the host's return and clear
+    // fallback mode without requiring a second room join. Moves made during
+    // this window remain local until the authoritative host reconnects.
     if (!mounted) return;
     ScaffoldMessenger.of(context).showSnackBar(
       const SnackBar(
@@ -7791,6 +9084,36 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
     });
   }
 
+  /// Reconnects the online stream after Home/background without allowing a
+  /// stale lifecycle callback to leave a returning guest in CPU mode forever.
+  Future<void> _reconnectOnlineSyncAfterResume(
+    OnlineGameSyncClient sync,
+  ) async {
+    try {
+      await sync.reconnect();
+    } catch (error, stackTrace) {
+      _recordGameDiagnosticError(
+        'SYNC_RECONNECT_FAILED',
+        error,
+        path: sync.matchPath,
+      );
+      debugPrint('Online sync reconnect failed: $error\n$stackTrace');
+    }
+    if (!mounted) return;
+    if (onlineHostCpuFallbackActive &&
+        sync.hostAvailability == OnlineHostAvailability.available) {
+      onlineHostCpuFallbackActive = false;
+      _recordGameDiagnostic(
+        'HOST_CPU_FALLBACK_CLEARED',
+        state: QuickPopDiagnosticState.success,
+        detail: 'reconnected_after_app_resume room=${sync.roomId}',
+        path: sync.matchPath,
+        deduplicate: false,
+      );
+    }
+    setState(() {});
+  }
+
   @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
@@ -7802,25 +9125,65 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
     eventChatTimer?.cancel();
     matchClockTimer?.cancel();
     diceThrowTimer?.cancel();
+    onlineLifecyclePauseTimer?.cancel();
+    onlineLifecycleRevision++;
     hostRecoveryUiTimer?.cancel();
     _cancelRollGuide(notify: false);
     widget.wallet?.removeListener(_onWalletChanged);
     engine.removeListener(_onGameChanged);
     widget.onlineGameSync?.removeListener(_onOnlineSyncChanged);
     unawaited(onlineSafeChatSubscription?.cancel());
+    if (widget.onlineSession != null) {
+      _recordGameDiagnostic(
+        'GAME_DISPOSED',
+        state: QuickPopDiagnosticState.info,
+        detail:
+            'gameOver=${engine.gameOver} elapsed=${matchElapsed.inSeconds}s',
+        deduplicate: false,
+      );
+    }
     widget.onlineGameSync?.dispose();
     if (ownsEngine) engine.dispose();
+    gameDiagnosticRevision.dispose();
     super.dispose();
   }
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (widget.onlineSession != null) {
+      _recordGameDiagnostic(
+        state == AppLifecycleState.resumed
+            ? 'APP_RESUMED'
+            : 'APP_LIFECYCLE_${state.name.toUpperCase()}',
+        state: state == AppLifecycleState.resumed
+            ? QuickPopDiagnosticState.success
+            : QuickPopDiagnosticState.info,
+        detail:
+            'appState=${state.name} current=${engine.currentPlayer.color.name} '
+            'localTurn=$_isLocallyControlledTurn hasRolled=${engine.hasRolled}',
+        deduplicate: false,
+      );
+    }
+    final now = DateTime.now();
     final isLeaving =
         state == AppLifecycleState.inactive ||
         state == AppLifecycleState.paused ||
         state == AppLifecycleState.hidden ||
         state == AppLifecycleState.detached;
     if (isLeaving) {
+      // A stale hidden/paused callback can arrive immediately after resumed
+      // on iOS.  Treat it as part of the previous transition; otherwise it
+      // can undo reconnect() and leave the returning seat unable to roll.
+      final resumedMomentsAgo =
+          lastOnlineResumeAt != null &&
+          now.difference(lastOnlineResumeAt!) <
+              const Duration(milliseconds: 800);
+      if (resumedMomentsAgo && state != AppLifecycleState.detached) return;
+
+      final lifecycleRevision = ++onlineLifecycleRevision;
+      appLifecycleResumed = false;
+      onlineLifecyclePauseTimer?.cancel();
+      onlineLifecyclePauseTimer = null;
       _allowScreenSleep();
       if (state == AppLifecycleState.detached) {
         if (engine.gameOver) {
@@ -7839,7 +9202,35 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
       mobileBoardCameraMode = _MobileBoardCameraMode.fullBoard;
       unawaited(_saveMatchCheckpoint());
       if (widget.onlineGameSync case final sync?) {
-        unawaited(sync.pause());
+        if (state == AppLifecycleState.detached) {
+          _recordGameDiagnostic(
+            'SYNC_PAUSE_REQUESTED',
+            state: QuickPopDiagnosticState.info,
+            detail: 'reason=app_detached',
+            path: sync.matchPath,
+            deduplicate: false,
+          );
+          unawaited(sync.pause());
+        } else {
+          onlineLifecyclePauseTimer = Timer(
+            const Duration(milliseconds: 350),
+            () {
+              if (!mounted ||
+                  lifecycleRevision != onlineLifecycleRevision ||
+                  appLifecycleResumed) {
+                return;
+              }
+              _recordGameDiagnostic(
+                'SYNC_PAUSE_REQUESTED',
+                state: QuickPopDiagnosticState.info,
+                detail: 'reason=app_background_debounced',
+                path: sync.matchPath,
+                deduplicate: false,
+              );
+              unawaited(sync.pause());
+            },
+          );
+        }
       }
       if (widget.onlineGameSync == null &&
           _sessionHasRemoteHuman(widget.onlineSession) &&
@@ -7850,13 +9241,23 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
       return;
     }
     if (state == AppLifecycleState.resumed) {
+      final lifecycleRevision = ++onlineLifecycleRevision;
+      appLifecycleResumed = true;
+      lastOnlineResumeAt = now;
+      onlineLifecyclePauseTimer?.cancel();
+      onlineLifecyclePauseTimer = null;
       _keepScreenAwake();
       rollGuideAppActive = true;
       localCpuTakeoverActive = false;
       if (widget.onlineGameSync case final sync?) {
-        if (!onlineHostCpuFallbackActive) {
-          unawaited(sync.reconnect());
-        }
+        _recordGameDiagnostic(
+          'SYNC_RECONNECT_REQUESTED',
+          state: QuickPopDiagnosticState.waiting,
+          detail: 'reason=app_resumed fallback=$onlineHostCpuFallbackActive',
+          path: sync.matchPath,
+          deduplicate: false,
+        );
+        unawaited(_reconnectOnlineSyncAfterResume(sync));
       }
       unawaited(_saveMatchCheckpoint());
       unawaited(_loadRollGuidePreferences(rearm: true));
@@ -7871,6 +9272,8 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
           diceThrowTimer?.cancel();
           diceThrowTimer = Timer(const Duration(milliseconds: 80), () {
             if (!mounted ||
+                lifecycleRevision != onlineLifecycleRevision ||
+                !appLifecycleResumed ||
                 !_isLocallyControlledTurn ||
                 engine.gameOver ||
                 engine.effectResolving) {
@@ -7898,8 +9301,22 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
       !diceThrowInProgress;
 
   Future<void> _loadRollGuidePreferences({bool rearm = false}) async {
+    final tabletViewport = _isTabletGameViewport(context);
     final store = await SharedPreferences.getInstance();
     final enabled = store.getBool(settingsRollGuideKey) ?? true;
+    final showMinimap = store.containsKey(settingsMinimapKey)
+        ? store.getBool(settingsMinimapKey) ?? !tabletViewport
+        : !tabletViewport;
+    final showHandEffect = store.containsKey(settingsDiceHandEffectKey)
+        ? store.getBool(settingsDiceHandEffectKey) ?? !tabletViewport
+        : !tabletViewport;
+    final hasMinimapPreference = store.containsKey(settingsMinimapKey);
+    final hasHandEffectPreference = store.containsKey(
+      settingsDiceHandEffectKey,
+    );
+    final showMoveCallouts = store.getBool(settingsMoveCalloutsKey) ?? true;
+    final showMoveChoicePanel =
+        store.getBool(settingsMoveChoicePanelKey) ?? true;
     final hand = diceHandPreferenceFromStorage(
       store.getString(settingsDiceHandKey),
     );
@@ -7913,6 +9330,12 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
     if (rearm) rollGuideArmedTurn = null;
     setState(() {
       rollGuideEnabled = enabled;
+      minimapEnabled = showMinimap;
+      minimapPreferenceExplicit = hasMinimapPreference;
+      diceHandEffectEnabled = showHandEffect;
+      diceHandEffectPreferenceExplicit = hasHandEffectPreference;
+      moveCalloutsEnabled = showMoveCallouts;
+      moveChoicePanelEnabled = showMoveChoicePanel;
       diceHandPreference = hand;
       if (!enabled || rearm) rollGuideVisible = false;
     });
@@ -7963,6 +9386,15 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
         engine.effectResolving) {
       return;
     }
+    _recordGameDiagnostic(
+      'ROLL_REQUESTED',
+      state: QuickPopDiagnosticState.waiting,
+      detail:
+          'player=${engine.currentPlayer.color.name} local=${_localPlayerColor.name} '
+          'online=${widget.onlineGameSync != null} revision=${widget.onlineGameSync?.revision}',
+      path: widget.onlineGameSync?.matchPath,
+      deduplicate: false,
+    );
     // Do this at touch time instead of waiting for the engine listener. The
     // dice guide and the actual dice share this callback, so both "Roll" and
     // "Shake it" provide an immediate, noticeable response.
@@ -7995,6 +9427,15 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
     required bool reduceMotion,
   }) async {
     try {
+      _recordGameDiagnostic(
+        'ROLL_SUBMIT_STARTED',
+        state: QuickPopDiagnosticState.waiting,
+        detail:
+            'revision=${sync.revision} stateRevision=${sync.stateRevision} '
+            'connection=${sync.connectionState.name}',
+        path: sync.matchPath,
+        deduplicate: false,
+      );
       final result = await sync.submitRoll();
       await _waitForOnlineState(sync, result.stateRevision);
       if (!result.accepted) {
@@ -8002,9 +9443,23 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
           'El servidor rechazó la tirada: ${result.rejection?.name ?? 'acción inválida'}.',
         );
       }
+      _recordGameDiagnostic(
+        'ROLL_SUBMIT_ACCEPTED',
+        state: QuickPopDiagnosticState.success,
+        detail:
+            'stateRevision=${result.stateRevision} authorityRevision=${result.authorityRevision} '
+            'dice=${engine.dice}',
+        path: sync.matchPath,
+        deduplicate: false,
+      );
       if (!mounted) return;
       _presentRolledDice(reduceMotion: reduceMotion);
     } catch (error) {
+      _recordGameDiagnosticError(
+        'ROLL_SUBMIT_FAILED',
+        error,
+        path: sync.matchPath,
+      );
       if (!mounted) return;
       setState(() {
         diceThrowInProgress = false;
@@ -8028,7 +9483,10 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
 
     sync.addListener(listener);
     try {
-      await completer.future.timeout(const Duration(seconds: 3));
+      // A result can arrive just before the full board checkpoint on a real
+      // device. Keep the action pending through a realistic realtime round
+      // trip instead of wrongly reporting a failed online move after 3 s.
+      await completer.future.timeout(const Duration(seconds: 8));
     } finally {
       sync.removeListener(listener);
     }
@@ -8070,6 +9528,10 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
   }
 
   void _executeLegalMoveCommand(LegalMoveCommand command) {
+    // The automatic Quick Pop path and a finger tap can land in the same
+    // frame. One command at a time prevents a duplicate from surfacing as an
+    // online error after the first move already succeeded.
+    if (onlineMoveSubmitting) return;
     final sync = onlineHostCpuFallbackActive ? null : widget.onlineGameSync;
     if (sync == null) {
       engine.executeMoveCommand(command);
@@ -8090,24 +9552,84 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
     required int tokenId,
     required int die,
     required bool usesAllDice,
+  }) {
+    final operation = onlineMoveQueue.then(
+      (_) => _performOnlineMove(
+        sync,
+        tokenId: tokenId,
+        die: die,
+        usesAllDice: usesAllDice,
+      ),
+    );
+    // _performOnlineMove handles and presents transport errors itself, so the
+    // queue remains usable after any failed request.
+    onlineMoveQueue = operation;
+    return operation;
+  }
+
+  Future<void> _performOnlineMove(
+    OnlineGameSyncClient sync, {
+    required int tokenId,
+    required int die,
+    required bool usesAllDice,
   }) async {
-    if (onlineMoveSubmitting) return;
+    if (!mounted) return;
     if (mounted) setState(() => onlineMoveSubmitting = true);
     OnlineGameCommandResultRecord? result;
     try {
+      _recordGameDiagnostic(
+        'MOVE_SUBMIT_STARTED',
+        state: QuickPopDiagnosticState.waiting,
+        detail:
+            'token=$tokenId die=$die allDice=$usesAllDice revision=${sync.revision} '
+            'stateRevision=${sync.stateRevision}',
+        path: sync.matchPath,
+        deduplicate: false,
+      );
+      // Goal/capture checkpoints expose their +10/+20 choice immediately, but
+      // the host still owns a short presentation lock. Queue the player's tap
+      // until that lock clears so a valid bonus never becomes a visible
+      // online error merely because it was chosen during the animation.
+      if (engine.effectResolving) {
+        await _waitForOnlineMoveReady(sync);
+      }
+      if (!_onlineMoveStillLegal(sync, tokenId, die, usesAllDice)) {
+        return;
+      }
       for (var attempt = 0; attempt < 3; attempt++) {
         final submittedAuthorityRevision = sync.revision;
         result = usesAllDice
             ? await sync.submitMoveAll(tokenId: tokenId)
             : await sync.submitMove(tokenId: tokenId, die: die);
         await _waitForOnlineState(sync, result.stateRevision);
-        if (result.accepted) return;
+        if (result.accepted) {
+          _recordGameDiagnostic(
+            'MOVE_SUBMIT_ACCEPTED',
+            state: QuickPopDiagnosticState.success,
+            detail:
+                'token=$tokenId die=$die allDice=$usesAllDice '
+                'stateRevision=${result.stateRevision} authorityRevision=${result.authorityRevision}',
+            path: sync.matchPath,
+            deduplicate: false,
+          );
+          return;
+        }
+        _recordGameDiagnostic(
+          'MOVE_SUBMIT_REJECTED',
+          state: QuickPopDiagnosticState.error,
+          detail:
+              'token=$tokenId die=$die allDice=$usesAllDice '
+              'rejection=${result.rejection?.name ?? 'unknown'} '
+              'stateRevision=${result.stateRevision} authorityRevision=${result.authorityRevision}',
+          path: sync.matchPath,
+          deduplicate: false,
+        );
 
-        // A capture publishes a new checkpoint and may still be completing a
-        // short board/effect transition. If the tap crossed that boundary,
-        // refresh the authoritative revision and retry the same verified
-        // command once or twice. Rejections that mean the move itself is no
-        // longer legal are never retried.
+        // A capture or departure may still be completing a short board/effect
+        // transition. If the tap crossed that boundary, refresh the
+        // authoritative revision and retry the same verified command. Other
+        // rejections are final game-rule decisions and must not be delayed or
+        // replayed as if they were a network race.
         final retryable =
             result.rejection == OnlineCommandRejection.staleRevision ||
             result.rejection == OnlineCommandRejection.actionInProgress;
@@ -8128,6 +9650,11 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
         );
       }
     } catch (error) {
+      _recordGameDiagnosticError(
+        'MOVE_SUBMIT_FAILED',
+        error,
+        path: sync.matchPath,
+      );
       if (mounted) {
         _restoreOnlineMoveSelection(sync, tokenId, die, usesAllDice);
         _showOnlineActionError(error);
@@ -8151,20 +9678,45 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
 
     sync.addListener(listener);
     try {
-      await completer.future.timeout(const Duration(seconds: 3));
+      await completer.future.timeout(const Duration(seconds: 8));
     } finally {
       sync.removeListener(listener);
     }
   }
 
   Future<void> _waitForOnlineMoveReady(OnlineGameSyncClient sync) async {
+    final deadline = DateTime.now().add(const Duration(seconds: 8));
     while (sync.engine.effectResolving) {
-      final nextRevision = sync.stateRevision + 1;
+      final remaining = deadline.difference(DateTime.now());
+      if (remaining <= Duration.zero) return;
+      final completer = Completer<void>();
+      void listener() {
+        if ((!sync.engine.effectResolving ||
+                sync.connectionState != OnlineGameConnectionState.connected) &&
+            !completer.isCompleted) {
+          completer.complete();
+        }
+      }
+
+      sync.addListener(listener);
+      // The host publishes effect completion, but a delayed realtime event
+      // must not strand the UI forever. Wake periodically and re-check the
+      // authoritative replica until the normal command-settlement window.
+      final fallbackDelay = remaining < const Duration(milliseconds: 1000)
+          ? remaining
+          : const Duration(milliseconds: 1000);
+      final fallback = Timer(fallbackDelay, () {
+        if (!completer.isCompleted) completer.complete();
+      });
       try {
-        await _waitForOnlineState(sync, nextRevision);
+        await completer.future.timeout(remaining);
       } on TimeoutException {
         return;
+      } finally {
+        fallback.cancel();
+        sync.removeListener(listener);
       }
+      if (sync.connectionState != OnlineGameConnectionState.connected) return;
     }
   }
 
@@ -8216,6 +9768,13 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
 
   Future<void> _submitOnlinePower(OnlineGameSyncClient sync) async {
     try {
+      _recordGameDiagnostic(
+        'POWER_SUBMIT_STARTED',
+        state: QuickPopDiagnosticState.waiting,
+        detail: 'revision=${sync.revision} stateRevision=${sync.stateRevision}',
+        path: sync.matchPath,
+        deduplicate: false,
+      );
       final result = await sync.submitPowerUp();
       await _waitForOnlineState(sync, result.stateRevision);
       if (!result.accepted) {
@@ -8224,12 +9783,26 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
           '${result.rejection?.name ?? 'acción inválida'}.',
         );
       }
+      _recordGameDiagnostic(
+        'POWER_SUBMIT_ACCEPTED',
+        state: QuickPopDiagnosticState.success,
+        detail: 'stateRevision=${result.stateRevision}',
+        path: sync.matchPath,
+        deduplicate: false,
+      );
     } catch (error) {
+      _recordGameDiagnosticError(
+        'POWER_SUBMIT_FAILED',
+        error,
+        path: sync.matchPath,
+      );
       if (mounted) _showOnlineActionError(error);
     }
   }
 
   void _showOnlineActionError(Object error) {
+    _recordGameDiagnosticError('ONLINE_ACTION_ERROR', error);
+    if (kDebugMode) debugPrint('Online action failed: $error');
     final message = switch (error) {
       TimeoutException() => 'La conexión tardó demasiado. Inténtalo otra vez.',
       _ => 'No se pudo completar la acción online.',
@@ -8667,6 +10240,8 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
 
   void _onGameChanged() {
     if (!mounted) return;
+    _recordGameDiagnosticSync();
+    _recordGameDiagnosticEvents();
     _trackAnalyticsEvents();
     final feedbackEvents = engine.eventHistory
         .where((event) => event.sequence > lastAudioEventSequence)
@@ -8941,25 +10516,63 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
     ];
   }
 
-  Future<void> _showSafeChatPicker() async {
-    _cancelRollGuide();
-    final session = widget.onlineSession;
-    if (session == null || safeChat == null) return;
-    final languageCode = appLanguageCodeOf(context);
-    final phraseId = await showModalBottomSheet<SafeChatPhraseId>(
+  Widget _buildSafeChatPicker(
+    BuildContext pickerContext, {
+    required String languageCode,
+    required bool desktop,
+  }) => _SafeChatPickerSheet(
+    languageCode: languageCode,
+    desktop: desktop,
+    onSelected: (selectedPhrase) =>
+        Navigator.pop(pickerContext, selectedPhrase),
+    onClose: () => Navigator.pop(pickerContext),
+  );
+
+  Future<SafeChatPhraseId?> _openSafeChatPicker(String languageCode) {
+    if (_isDesktopPlatform) {
+      return showDialog<SafeChatPhraseId>(
+        context: context,
+        barrierColor: const Color(0xB8071B40),
+        builder: (dialogContext) => Dialog(
+          backgroundColor: Colors.transparent,
+          elevation: 0,
+          insetPadding: const EdgeInsets.symmetric(
+            horizontal: 28,
+            vertical: 24,
+          ),
+          clipBehavior: Clip.antiAlias,
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(30),
+          ),
+          child: _buildSafeChatPicker(
+            dialogContext,
+            languageCode: languageCode,
+            desktop: true,
+          ),
+        ),
+      );
+    }
+    return showModalBottomSheet<SafeChatPhraseId>(
       context: context,
       isScrollControlled: true,
       useSafeArea: true,
       backgroundColor: Colors.transparent,
       barrierColor: const Color(0xB8071B40),
-      builder: (sheetContext) => _SafeChatPickerSheet(
+      builder: (sheetContext) => _buildSafeChatPicker(
+        sheetContext,
         languageCode: languageCode,
-        onSelected: (selectedPhrase) =>
-            Navigator.pop(sheetContext, selectedPhrase),
-        onClose: () => Navigator.pop(sheetContext),
+        desktop: false,
       ),
     );
-    if (phraseId != null) await _sendSafeChat(phraseId);
+  }
+
+  Future<void> _showSafeChatPicker() async {
+    _cancelRollGuide();
+    final session = widget.onlineSession;
+    if (session == null || safeChat == null) return;
+    final phraseId = await _openSafeChatPicker(appLanguageCodeOf(context));
+    if (!mounted || phraseId == null) return;
+    await _sendSafeChat(phraseId);
   }
 
   Future<void> _showOwnedCosmetics() async {
@@ -8981,7 +10594,12 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
         builder: (dialogContext) => Dialog(
           key: const ValueKey('owned-cosmetics-dialog'),
           backgroundColor: Colors.transparent,
+          elevation: 0,
           insetPadding: const EdgeInsets.all(24),
+          clipBehavior: Clip.antiAlias,
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(30),
+          ),
           child: ConstrainedBox(
             constraints: const BoxConstraints(maxWidth: 720, maxHeight: 650),
             child: _OwnedCosmeticsPicker(
@@ -9748,40 +11366,51 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
     showModalBottomSheet<void>(
       context: context,
       showDragHandle: true,
+      backgroundColor: Colors.transparent,
+      barrierColor: const Color(0xB8071B40),
       builder: (context) => SafeArea(
-        child: SingleChildScrollView(
-          child: Padding(
-            padding: const EdgeInsets.fromLTRB(18, 4, 18, 22),
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [
-                const PopText(
-                  'Poderes y trampas',
-                  style: TextStyle(fontSize: 22, fontWeight: FontWeight.w900),
-                ),
-                const SizedBox(height: 4),
-                const PopText(
-                  'El Escudo se guarda y se activa solo. Cada trampa '
-                  'se arma en el cristal que la entregó, y puedes mantener varias en el tablero. '
-                  'Las trampas rivales permanecen ocultas hasta activarse.',
-                  style: TextStyle(color: Color(0xFF667085)),
-                ),
-                if (trapDiagnosticsEnabled && engine.traps.isNotEmpty) ...[
-                  const SizedBox(height: 10),
-                  const _TrapDiagnosticsNotice(),
-                ],
-                const SizedBox(height: 14),
-                for (final player in engine.players)
-                  _PowerStatusTile(
-                    engine: engine,
-                    player: player,
-                    revealTrapDetails: trapDiagnosticsEnabled,
-                    participant: widget.onlineSession?.participantForColor(
-                      player.color,
+        child: ClipRRect(
+          borderRadius: const BorderRadius.vertical(top: Radius.circular(28)),
+          child: _PopSetupSurface(
+            child: SingleChildScrollView(
+              child: Padding(
+                padding: const EdgeInsets.fromLTRB(18, 4, 18, 22),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    const PopText(
+                      'Poderes y trampas',
+                      style: TextStyle(
+                        color: Colors.white,
+                        fontSize: 22,
+                        fontWeight: FontWeight.w900,
+                      ),
                     ),
-                  ),
-              ],
+                    const SizedBox(height: 4),
+                    const PopText(
+                      'El Escudo se guarda y se activa solo. Cada trampa '
+                      'se arma en el cristal que la entregó, y puedes mantener varias en el tablero. '
+                      'Las trampas rivales permanecen ocultas hasta activarse.',
+                      style: TextStyle(color: Color(0xFFC8D6F2)),
+                    ),
+                    if (trapDiagnosticsEnabled && engine.traps.isNotEmpty) ...[
+                      const SizedBox(height: 10),
+                      const _TrapDiagnosticsNotice(),
+                    ],
+                    const SizedBox(height: 14),
+                    for (final player in engine.players)
+                      _PowerStatusTile(
+                        engine: engine,
+                        player: player,
+                        revealTrapDetails: trapDiagnosticsEnabled,
+                        participant: widget.onlineSession?.participantForColor(
+                          player.color,
+                        ),
+                      ),
+                  ],
+                ),
+              ),
             ),
           ),
         ),
@@ -9804,87 +11433,98 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
             child: Center(
               child: ConstrainedBox(
                 constraints: const BoxConstraints(maxWidth: 680),
-                child: DecoratedBox(
+                child: Container(
                   key: const ValueKey('game-event-history-sheet'),
-                  decoration: const BoxDecoration(
-                    color: Color(0xFFF7F9FE),
+                  decoration: BoxDecoration(
+                    color: Colors.transparent,
                     borderRadius: BorderRadius.vertical(
                       top: Radius.circular(28),
                     ),
+                    border: Border.all(
+                      color: const Color(0xFF7B61FF),
+                      width: 1.5,
+                    ),
                   ),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.stretch,
-                    children: [
-                      Padding(
-                        padding: const EdgeInsets.fromLTRB(18, 12, 10, 10),
-                        child: Row(
-                          children: [
-                            Container(
-                              width: 42,
-                              height: 42,
-                              decoration: BoxDecoration(
-                                color: PopColors.blue.withValues(alpha: .14),
-                                borderRadius: BorderRadius.circular(14),
+                  clipBehavior: Clip.antiAlias,
+                  child: _PopSetupSurface(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.stretch,
+                      children: [
+                        Padding(
+                          padding: const EdgeInsets.fromLTRB(18, 12, 10, 10),
+                          child: Row(
+                            children: [
+                              Container(
+                                width: 42,
+                                height: 42,
+                                decoration: BoxDecoration(
+                                  color: PopColors.blue.withValues(alpha: .14),
+                                  borderRadius: BorderRadius.circular(14),
+                                ),
+                                child: const Icon(
+                                  Icons.history_rounded,
+                                  color: PopColors.blue,
+                                ),
                               ),
-                              child: const Icon(
-                                Icons.history_rounded,
-                                color: PopColors.blue,
-                              ),
-                            ),
-                            const SizedBox(width: 11),
-                            const Expanded(
-                              child: Column(
-                                crossAxisAlignment: CrossAxisAlignment.start,
-                                children: [
-                                  PopText(
-                                    'Historial de la partida',
-                                    style: TextStyle(
-                                      color: PopColors.navy,
-                                      fontSize: 20,
-                                      fontWeight: FontWeight.w900,
+                              const SizedBox(width: 11),
+                              const Expanded(
+                                child: Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    PopText(
+                                      'Historial de la partida',
+                                      style: TextStyle(
+                                        color: Colors.white,
+                                        fontSize: 20,
+                                        fontWeight: FontWeight.w900,
+                                      ),
                                     ),
-                                  ),
-                                  PopText(
-                                    'Más reciente primero',
-                                    style: TextStyle(
-                                      color: Color(0xFF667085),
-                                      fontSize: 12,
-                                      fontWeight: FontWeight.w700,
+                                    PopText(
+                                      'Más reciente primero',
+                                      style: TextStyle(
+                                        color: Color(0xFFC8D6F2),
+                                        fontSize: 12,
+                                        fontWeight: FontWeight.w700,
+                                      ),
                                     ),
-                                  ),
-                                ],
+                                  ],
+                                ),
                               ),
-                            ),
-                            IconButton(
-                              tooltip: appTranslate(context, 'Cerrar'),
-                              onPressed: () => Navigator.pop(context),
-                              icon: const Icon(Icons.close_rounded),
-                            ),
-                          ],
-                        ),
-                      ),
-                      const Padding(
-                        padding: EdgeInsets.fromLTRB(18, 0, 18, 10),
-                        child: PopText(
-                          'Cada acción importante queda guardada durante esta partida.',
-                          style: TextStyle(
-                            color: Color(0xFF667085),
-                            fontSize: 12,
+                              IconButton(
+                                tooltip: appTranslate(context, 'Cerrar'),
+                                onPressed: () => Navigator.pop(context),
+                                icon: const Icon(
+                                  Icons.close_rounded,
+                                  color: Colors.white,
+                                ),
+                              ),
+                            ],
                           ),
                         ),
-                      ),
-                      const Divider(height: 1),
-                      Expanded(
-                        child: ListView.separated(
-                          key: const ValueKey('game-event-history-list'),
-                          padding: const EdgeInsets.fromLTRB(12, 12, 12, 22),
-                          itemCount: events.length,
-                          separatorBuilder: (_, _) => const SizedBox(height: 8),
-                          itemBuilder: (context, index) =>
-                              _GameEventHistoryTile(event: events[index]),
+                        const Padding(
+                          padding: EdgeInsets.fromLTRB(18, 0, 18, 10),
+                          child: PopText(
+                            'Cada acción importante queda guardada durante esta partida.',
+                            style: TextStyle(
+                              color: Color(0xFFC8D6F2),
+                              fontSize: 12,
+                            ),
+                          ),
                         ),
-                      ),
-                    ],
+                        const Divider(height: 1),
+                        Expanded(
+                          child: ListView.separated(
+                            key: const ValueKey('game-event-history-list'),
+                            padding: const EdgeInsets.fromLTRB(12, 12, 12, 22),
+                            itemCount: events.length,
+                            separatorBuilder: (_, _) =>
+                                const SizedBox(height: 8),
+                            itemBuilder: (context, index) =>
+                                _GameEventHistoryTile(event: events[index]),
+                          ),
+                        ),
+                      ],
+                    ),
                   ),
                 ),
               ),
@@ -9988,7 +11628,12 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
                     final sideBySide =
                         box.maxWidth >= 560 &&
                         box.maxWidth >= box.maxHeight * 1.15;
-                    final mobileBoardTools = compactPhoneBoard && !sideBySide;
+                    // A portrait tablet has enough room for the full board,
+                    // but not enough vertical space for a desktop-sized HUD
+                    // below it once the persistent banner is reserved. Use
+                    // the same board-first controls as a phone in portrait.
+                    final tabletPortrait = !compactPhoneBoard && !sideBySide;
+                    final mobileBoardTools = !sideBySide;
                     final interactionState = GameInteractionState.derive(
                       engine: engine,
                       isLocallyControlledTurn:
@@ -10009,6 +11654,9 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
                                 ),
                               )
                               .toDouble()
+                        // In portrait the board is the primary game surface.
+                        // Keep it edge-to-edge on phones and tablets; the
+                        // adaptive banner may only reduce the secondary HUD.
                         : box.maxWidth;
                     final availableRailWidth = sideBySide
                         ? math.max(0.0, box.maxWidth - boardSize - railGap)
@@ -10023,14 +11671,23 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
                             selectedToken,
                           ).where((preview) => !preview.overview).toList();
                     final mobileMoveChoicesVisible =
-                        mobileBoardTools && selectedMovePreviews.isNotEmpty;
+                        mobileBoardTools &&
+                        moveCalloutsEnabled &&
+                        selectedMovePreviews.isNotEmpty;
                     final mobileTurnDecisionVisible =
                         mobileBoardTools &&
                         !diceThrowInProgress &&
                         _isLocallyControlledTurn &&
                         !engine.gameOver &&
                         (engine.hasRolled || engine.effectResolving);
-                    final rawMovePopup = mobileMoveChoicesVisible
+                    // On phones the board itself is always the move selector.
+                    // The setting only controls the explanatory bubbles; it
+                    // must not resurrect the old bottom popup when a player
+                    // chooses the cleaner, bubble-free board.
+                    final rawMovePopup =
+                        !moveChoicePanelEnabled ||
+                            (mobileBoardTools &&
+                                selectedMovePreviews.isNotEmpty)
                         ? null
                         : _buildMovePopup();
                     final movePopup = rawMovePopup == null
@@ -10168,7 +11825,8 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
                                 height: 108,
                                 child: movePopup!,
                               ),
-                            if (tokenChoicePromptTarget != null &&
+                            if (moveCalloutsEnabled &&
+                                tokenChoicePromptTarget != null &&
                                 tokenChoicePromptCell != null)
                               _BoardTokenChoiceCallout(
                                 geometry: boardGeometry,
@@ -10242,7 +11900,17 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
                             : boardInteractionLayer,
                       ),
                     );
-                    final mobileBoardNavigator = mobileBoardTools
+                    final tabletGameViewport = _isTabletGameViewport(context);
+                    final showMinimapForLayout =
+                        minimapEnabled &&
+                        (compactPhoneBoard ||
+                            (tabletGameViewport && minimapPreferenceExplicit));
+                    final showHandEffectForLayout =
+                        diceHandEffectEnabled &&
+                        (!tabletGameViewport ||
+                            diceHandEffectPreferenceExplicit);
+                    final mobileBoardNavigator =
+                        mobileBoardTools && showMinimapForLayout
                         ? _MobileBoardNavigator(
                             boardPainter: _ParcheseBoardPainter(
                               engine,
@@ -10288,6 +11956,7 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
                       rollGuideVisible: rollGuideVisible,
                       rollGuidePulseSerial: rollGuidePulseSerial,
                       diceHandPreference: diceHandPreference,
+                      diceHandEffectEnabled: showHandEffectForLayout,
                       diceThrowInProgress: diceThrowInProgress,
                       diceThrowSerial: diceThrowSerial,
                       diceThrowResult: diceThrowResult,
@@ -10300,6 +11969,9 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
                           : _showOwnedCosmetics,
                       diceStyleId: diceStyleId,
                       avatarIds: avatarIds,
+                      onlineSession: widget.onlineSession,
+                      localCpuTakeoverActive: localCpuTakeoverActive,
+                      mobileBoardTools: mobileBoardTools,
                       mobileBoardNavigator: mobileBoardNavigator,
                       mobileBoardFullView: mobileFullBoard,
                       visibleRemainingDice: _guidedVisibleRemainingDice,
@@ -10336,6 +12008,8 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
                           ),
                         );
                       },
+                      showDiagnostics: _gameDiagnosticsVisible,
+                      onShowDiagnostics: _showGameDiagnostics,
                       onShowSettings: _openGameSettings,
                       canReport: widget.onlineSession != null,
                       onReportIssue: _openReportIssue,
@@ -10390,6 +12064,8 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
                                                           rollGuidePulseSerial,
                                                       diceHandPreference:
                                                           diceHandPreference,
+                                                      diceHandEffectEnabled:
+                                                          showHandEffectForLayout,
                                                       diceThrowInProgress:
                                                           diceThrowInProgress,
                                                       diceThrowSerial:
@@ -10488,6 +12164,8 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
                                                       rollGuidePulseSerial,
                                                   diceHandPreference:
                                                       diceHandPreference,
+                                                  diceHandEffectEnabled:
+                                                      showHandEffectForLayout,
                                                   diceThrowInProgress:
                                                       diceThrowInProgress,
                                                   diceThrowSerial:
@@ -10539,22 +12217,56 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
                                 Expanded(
                                   key: const ValueKey('mobile-hud-slot'),
                                   child: Padding(
-                                    padding: const EdgeInsets.all(4),
-                                    child: Stack(
-                                      fit: StackFit.expand,
-                                      clipBehavior: Clip.none,
-                                      children: [
-                                        panel,
-                                        if (spectatorBar ?? chatBanner
-                                            case final overlay?)
-                                          Positioned(
-                                            left: 0,
-                                            top: 0,
-                                            right: 0,
-                                            child: overlay,
+                                    // On portrait tablets, make the HUD a
+                                    // short full-width action strip instead
+                                    // of a second oversized panel below the
+                                    // board. Phones keep their small inset.
+                                    padding: tabletPortrait
+                                        ? EdgeInsets.zero
+                                        : const EdgeInsets.all(4),
+                                    child: tabletPortrait
+                                        // Keep the board's size stable and
+                                        // restore the compact blue action
+                                        // panel on portrait tablets. The rest
+                                        // of the reserved space stays as the
+                                        // neutral game backdrop above ads.
+                                        ? Stack(
+                                            // On tablets the HUD owns all the
+                                            // space between the board and the
+                                            // adaptive banner.  Keeping the
+                                            // stack expanded removes the old
+                                            // empty strip below the short HUD
+                                            // and lets the dice stage grow
+                                            // naturally with the device.
+                                            fit: StackFit.expand,
+                                            clipBehavior: Clip.none,
+                                            children: [
+                                              panel,
+                                              if (spectatorBar ?? chatBanner
+                                                  case final overlay?)
+                                                Positioned(
+                                                  left: 0,
+                                                  top: 0,
+                                                  right: 0,
+                                                  child: overlay,
+                                                ),
+                                            ],
+                                          )
+                                        : Stack(
+                                            fit: StackFit.expand,
+                                            clipBehavior: Clip.none,
+                                            children: [
+                                              panel,
+                                              if (spectatorBar ?? chatBanner
+                                                  case final overlay?)
+                                                Positioned(
+                                                  left: 0,
+                                                  top: 0,
+                                                  right: 0,
+                                                  child: overlay,
+                                                ),
+                                            ],
                                           ),
-                                      ],
-                                    ),
                                   ),
                                 ),
                               ],
@@ -10663,17 +12375,19 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
                     ),
                   ),
                 if (_showOnlineHostRecovery)
-                  Positioned.fill(
-                    child: BlockSemantics(
-                      child: _OnlineHostRecoveryOverlay(
-                        unavailable:
-                            widget.onlineGameSync!.requiresHostRecovery,
-                        secondsRemaining: _hostReconnectSecondsRemaining,
-                        retrying: hostRecoveryRetrying,
-                        onRetry: _retryOnlineHostRecovery,
-                        onExit: () =>
-                            unawaited(_leaveToHome(discardSavedMatch: true)),
-                      ),
+                  Positioned(
+                    top: 8,
+                    left: 12,
+                    right: 12,
+                    child: _OnlineHostRecoveryOverlay(
+                      unavailable:
+                          onlineHostCpuFallbackActive ||
+                          widget.onlineGameSync!.requiresHostRecovery,
+                      secondsRemaining: _hostReconnectSecondsRemaining,
+                      retrying: hostRecoveryRetrying,
+                      onRetry: _retryOnlineHostRecovery,
+                      onExit: () =>
+                          unawaited(_leaveToHome(discardSavedMatch: true)),
                     ),
                   ),
               ],
@@ -10701,108 +12415,119 @@ class _OnlineHostRecoveryOverlay extends StatelessWidget {
   final VoidCallback onExit;
 
   @override
-  Widget build(BuildContext context) => Material(
-    key: const ValueKey('online-host-recovery-overlay'),
-    color: const Color(0xD9142342),
-    child: SafeArea(
-      child: Center(
-        child: Padding(
-          padding: const EdgeInsets.all(22),
-          child: ConstrainedBox(
-            constraints: const BoxConstraints(maxWidth: 430),
-            child: Container(
-              padding: const EdgeInsets.fromLTRB(22, 24, 22, 20),
-              decoration: BoxDecoration(
-                color: Colors.white,
-                borderRadius: BorderRadius.circular(28),
-                border: Border.all(color: Colors.white, width: 2),
-                boxShadow: const [
-                  BoxShadow(
-                    color: Color(0x55000000),
-                    blurRadius: 28,
-                    offset: Offset(0, 14),
-                  ),
-                ],
-              ),
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  Container(
-                    width: 72,
-                    height: 72,
-                    decoration: BoxDecoration(
-                      color: unavailable ? PopColors.red : PopColors.yellow,
-                      shape: BoxShape.circle,
-                    ),
-                    child: Icon(
-                      unavailable
-                          ? Icons.cloud_off_rounded
-                          : Icons.sync_rounded,
-                      color: unavailable ? Colors.white : PopColors.navy,
-                      size: 40,
-                    ),
-                  ),
-                  const SizedBox(height: 15),
-                  PopText(
-                    unavailable
-                        ? 'ANFITRIÓN SIN CONEXIÓN'
-                        : 'RECONECTANDO ANFITRIÓN',
-                    textAlign: TextAlign.center,
-                    style: const TextStyle(
-                      color: PopColors.navy,
-                      fontSize: 21,
-                      fontWeight: FontWeight.w900,
-                    ),
-                  ),
-                  const SizedBox(height: 8),
-                  PopText(
-                    unavailable
-                        ? 'La partida quedó guardada en el último movimiento seguro. Reintenta cuando vuelva el anfitrión o sal de la mesa.'
-                        : 'La partida está en pausa. Esperaremos $secondsRemaining s; si no vuelve, el CPU continuará automáticamente.',
-                    textAlign: TextAlign.center,
-                    style: const TextStyle(
-                      color: Color(0xFF667085),
-                      fontSize: 14,
-                      height: 1.35,
-                      fontWeight: FontWeight.w700,
-                    ),
-                  ),
-                  const SizedBox(height: 18),
-                  if (unavailable) ...[
-                    SizedBox(
-                      width: double.infinity,
-                      child: FilledButton.icon(
-                        key: const ValueKey('online-host-retry'),
-                        onPressed: retrying ? null : onRetry,
-                        icon: retrying
-                            ? const SizedBox.square(
-                                dimension: 18,
-                                child: CircularProgressIndicator(
-                                  strokeWidth: 2,
-                                  color: Colors.white,
-                                ),
-                              )
-                            : const Icon(Icons.refresh_rounded),
-                        label: PopText(
-                          retrying ? 'REINTENTANDO…' : 'REINTENTAR',
+  Widget build(BuildContext context) => SafeArea(
+    child: Align(
+      alignment: Alignment.topCenter,
+      child: ConstrainedBox(
+        constraints: const BoxConstraints(maxWidth: 620),
+        child: Material(
+          key: const ValueKey('online-host-recovery-banner'),
+          color: Colors.transparent,
+          child: Container(
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 9),
+            decoration: BoxDecoration(
+              color: const Color(0xF0193260),
+              borderRadius: BorderRadius.circular(16),
+              border: Border.all(color: PopColors.yellow, width: 1.5),
+              boxShadow: const [
+                BoxShadow(
+                  color: Color(0x33000000),
+                  blurRadius: 12,
+                  offset: Offset(0, 5),
+                ),
+              ],
+            ),
+            child: Row(
+              children: [
+                Icon(
+                  unavailable ? Icons.smart_toy_rounded : Icons.sync_rounded,
+                  color: unavailable ? PopColors.yellow : Colors.white,
+                  size: 24,
+                ),
+                const SizedBox(width: 9),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      PopText(
+                        unavailable
+                            ? 'CPU JUGANDO POR EL ANFITRIÓN'
+                            : 'ESPERANDO AL JUGADOR',
+                        style: const TextStyle(
+                          color: Colors.white,
+                          fontSize: 12,
+                          fontWeight: FontWeight.w900,
                         ),
                       ),
-                    ),
-                    const SizedBox(height: 8),
-                  ] else
-                    const LinearProgressIndicator(minHeight: 7),
-                  if (!unavailable) const SizedBox(height: 12),
-                  SizedBox(
-                    width: double.infinity,
-                    child: OutlinedButton.icon(
-                      key: const ValueKey('online-host-exit'),
-                      onPressed: retrying ? null : onExit,
-                      icon: const Icon(Icons.home_rounded),
-                      label: const PopText('SALIR DE LA PARTIDA'),
+                      const SizedBox(height: 2),
+                      PopText(
+                        unavailable
+                            ? 'La partida sigue activa. El anfitrión puede volver a sincronizar.'
+                            : 'El CPU mantiene la partida mientras vuelve el anfitrión.',
+                        maxLines: 2,
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(
+                          color: Color(0xD9FFFFFF),
+                          fontSize: 10,
+                          height: 1.2,
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                if (!unavailable && secondsRemaining > 0)
+                  Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 6),
+                    child: PopText(
+                      '${secondsRemaining}s',
+                      style: const TextStyle(
+                        color: PopColors.yellow,
+                        fontSize: 11,
+                        fontWeight: FontWeight.w900,
+                      ),
                     ),
                   ),
-                ],
-              ),
+                IconButton(
+                  key: const ValueKey('online-host-retry'),
+                  tooltip: 'Reintentar conexión',
+                  onPressed: retrying ? null : onRetry,
+                  padding: EdgeInsets.zero,
+                  constraints: const BoxConstraints.tightFor(
+                    width: 32,
+                    height: 32,
+                  ),
+                  icon: retrying
+                      ? const SizedBox.square(
+                          dimension: 16,
+                          child: CircularProgressIndicator(
+                            strokeWidth: 2,
+                            color: Colors.white,
+                          ),
+                        )
+                      : const Icon(
+                          Icons.refresh_rounded,
+                          color: Colors.white,
+                          size: 20,
+                        ),
+                ),
+                IconButton(
+                  key: const ValueKey('online-host-exit'),
+                  tooltip: 'Salir de la partida',
+                  onPressed: retrying ? null : onExit,
+                  padding: EdgeInsets.zero,
+                  constraints: const BoxConstraints.tightFor(
+                    width: 32,
+                    height: 32,
+                  ),
+                  icon: const Icon(
+                    Icons.close_rounded,
+                    color: Colors.white,
+                    size: 20,
+                  ),
+                ),
+              ],
             ),
           ),
         ),
@@ -10965,55 +12690,64 @@ class _TutorialCompletionCard extends StatelessWidget {
         constraints: const BoxConstraints(maxWidth: 340),
         child: Material(
           key: const ValueKey('tutorial-complete-card'),
-          color: Colors.white,
+          color: Colors.transparent,
           elevation: 14,
           borderRadius: BorderRadius.circular(26),
-          child: Padding(
-            padding: const EdgeInsets.fromLTRB(24, 24, 24, 20),
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Container(
-                  width: 70,
-                  height: 70,
-                  decoration: const BoxDecoration(
-                    color: PopColors.green,
-                    shape: BoxShape.circle,
-                  ),
-                  child: const Icon(
-                    Icons.emoji_events_rounded,
-                    color: Colors.white,
-                    size: 40,
-                  ),
+          clipBehavior: Clip.antiAlias,
+          child: DecoratedBox(
+            decoration: BoxDecoration(
+              border: Border.all(color: const Color(0xFF7B61FF), width: 2),
+              borderRadius: BorderRadius.circular(26),
+            ),
+            child: PopDialogSurface(
+              child: Padding(
+                padding: const EdgeInsets.fromLTRB(24, 24, 24, 20),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Container(
+                      width: 70,
+                      height: 70,
+                      decoration: const BoxDecoration(
+                        color: PopColors.green,
+                        shape: BoxShape.circle,
+                      ),
+                      child: const Icon(
+                        Icons.emoji_events_rounded,
+                        color: Colors.white,
+                        size: 40,
+                      ),
+                    ),
+                    const SizedBox(height: 15),
+                    const PopText(
+                      '¡TUTORIAL LISTO!',
+                      textAlign: TextAlign.center,
+                      style: TextStyle(
+                        color: Colors.white,
+                        fontSize: 24,
+                        fontWeight: FontWeight.w900,
+                      ),
+                    ),
+                    const SizedBox(height: 7),
+                    const PopText(
+                      'Ya sabes tirar, sacar una ficha, elegir un movimiento, '
+                      'usar seguros, capturar y entrar a meta.',
+                      textAlign: TextAlign.center,
+                      style: TextStyle(color: Color(0xFFDCE8FF), height: 1.3),
+                    ),
+                    const SizedBox(height: 18),
+                    SizedBox(
+                      width: double.infinity,
+                      child: FilledButton.icon(
+                        key: const ValueKey('tutorial-complete-done'),
+                        onPressed: onDone,
+                        icon: const Icon(Icons.check_circle_rounded),
+                        label: const PopText('LISTO PARA JUGAR'),
+                      ),
+                    ),
+                  ],
                 ),
-                const SizedBox(height: 15),
-                const PopText(
-                  '¡TUTORIAL LISTO!',
-                  textAlign: TextAlign.center,
-                  style: TextStyle(
-                    color: PopColors.navy,
-                    fontSize: 24,
-                    fontWeight: FontWeight.w900,
-                  ),
-                ),
-                const SizedBox(height: 7),
-                const PopText(
-                  'Ya sabes tirar, sacar una ficha, elegir un movimiento, '
-                  'usar seguros, capturar y entrar a meta.',
-                  textAlign: TextAlign.center,
-                  style: TextStyle(color: Color(0xFF667085), height: 1.3),
-                ),
-                const SizedBox(height: 18),
-                SizedBox(
-                  width: double.infinity,
-                  child: FilledButton.icon(
-                    key: const ValueKey('tutorial-complete-done'),
-                    onPressed: onDone,
-                    icon: const Icon(Icons.check_circle_rounded),
-                    label: const PopText('LISTO PARA JUGAR'),
-                  ),
-                ),
-              ],
+              ),
             ),
           ),
         ),
@@ -11079,24 +12813,8 @@ class _OwnedCosmeticsPicker extends StatelessWidget {
     child: Material(
       key: const ValueKey('owned-cosmetics-picker'),
       color: Colors.transparent,
-      child: Container(
-        decoration: BoxDecoration(
-          gradient: const LinearGradient(
-            begin: Alignment.topLeft,
-            end: Alignment.bottomRight,
-            colors: [Color(0xFF2457A2), PopColors.navy],
-          ),
-          borderRadius: BorderRadius.circular(27),
-          border: Border.all(color: PopColors.yellow, width: 3),
-          boxShadow: const [
-            BoxShadow(
-              color: Color(0x8007132D),
-              blurRadius: 28,
-              offset: Offset(0, 14),
-            ),
-          ],
-        ),
-        clipBehavior: Clip.antiAlias,
+      child: PopDialogSurface(
+        borderRadius: 30,
         child: Column(
           children: [
             Padding(
@@ -11248,7 +12966,9 @@ class _OwnedCosmeticsList extends StatelessWidget {
       final equipped = wallet.isEquipped(product.id);
       return Material(
         key: ValueKey('owned-cosmetic-${product.id}'),
-        color: equipped ? const Color(0xFFE8FFF2) : Colors.white,
+        color: equipped
+            ? PopColors.green.withValues(alpha: .18)
+            : const Color(0xFF1A3265),
         borderRadius: BorderRadius.circular(18),
         child: InkWell(
           borderRadius: BorderRadius.circular(18),
@@ -11258,7 +12978,9 @@ class _OwnedCosmeticsList extends StatelessWidget {
             decoration: BoxDecoration(
               borderRadius: BorderRadius.circular(18),
               border: Border.all(
-                color: equipped ? PopColors.green : const Color(0xFFDCE4F2),
+                color: equipped
+                    ? PopColors.green
+                    : Colors.white.withValues(alpha: .22),
                 width: equipped ? 2.5 : 1.5,
               ),
             ),
@@ -11279,7 +13001,7 @@ class _OwnedCosmeticsList extends StatelessWidget {
                         maxLines: 1,
                         overflow: TextOverflow.ellipsis,
                         style: const TextStyle(
-                          color: PopColors.navy,
+                          color: Colors.white,
                           fontSize: 13,
                           fontWeight: FontWeight.w900,
                         ),
@@ -11290,7 +13012,7 @@ class _OwnedCosmeticsList extends StatelessWidget {
                         maxLines: 2,
                         overflow: TextOverflow.ellipsis,
                         style: const TextStyle(
-                          color: Color(0xFF667085),
+                          color: Color(0xFFC8D6F2),
                           fontSize: 10,
                           fontWeight: FontWeight.w700,
                         ),
@@ -11545,11 +13267,13 @@ class _TrapAlertBanner extends StatelessWidget {
 class _SafeChatPickerSheet extends StatelessWidget {
   const _SafeChatPickerSheet({
     required this.languageCode,
+    required this.desktop,
     required this.onSelected,
     required this.onClose,
   });
 
   final String languageCode;
+  final bool desktop;
   final ValueChanged<SafeChatPhraseId> onSelected;
   final VoidCallback onClose;
 
@@ -11581,72 +13305,65 @@ class _SafeChatPickerSheet extends StatelessWidget {
   Widget build(BuildContext context) {
     final media = MediaQuery.of(context);
     final availableHeight =
-        media.size.height - media.padding.top - media.padding.bottom - 12;
-    final maxHeight = math.min(620.0, availableHeight);
+        media.size.height -
+        media.padding.top -
+        media.padding.bottom -
+        (desktop ? 48 : 12);
+    final maxHeight = math.min(desktop ? 760.0 : 620.0, availableHeight);
+    final maxWidth = desktop ? math.min(760.0, media.size.width - 56) : 680.0;
+
+    final surface = ConstrainedBox(
+      constraints: BoxConstraints(
+        minWidth: desktop ? math.min(640.0, maxWidth) : 0,
+        maxWidth: maxWidth,
+        maxHeight: maxHeight,
+      ),
+      child: PopDialogSurface(
+        key: const ValueKey('safe-chat-sheet'),
+        borderRadius: 30,
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            _buildHeader(context),
+            Flexible(child: _buildPhraseGrid(context)),
+          ],
+        ),
+      ),
+    );
+
+    if (desktop) return surface;
 
     return SafeArea(
       top: false,
       minimum: const EdgeInsets.fromLTRB(8, 8, 8, 8),
-      child: Align(
-        alignment: Alignment.bottomCenter,
-        child: ConstrainedBox(
-          constraints: BoxConstraints(maxWidth: 680, maxHeight: maxHeight),
-          child: DecoratedBox(
-            key: const ValueKey('safe-chat-sheet'),
-            decoration: BoxDecoration(
-              gradient: const LinearGradient(
-                begin: Alignment.topLeft,
-                end: Alignment.bottomRight,
-                colors: [Color(0xFF203B73), Color(0xFF101A31)],
-              ),
-              borderRadius: BorderRadius.circular(30),
-              border: Border.all(color: PopColors.yellow, width: 2),
-              boxShadow: const [
-                BoxShadow(
-                  color: Color(0x73020B27),
-                  blurRadius: 24,
-                  offset: Offset(0, 12),
-                ),
-              ],
-            ),
-            child: ClipRRect(
-              borderRadius: BorderRadius.circular(28),
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                crossAxisAlignment: CrossAxisAlignment.stretch,
-                children: [
-                  _buildHeader(context),
-                  Flexible(child: _buildPhraseGrid(context)),
-                ],
-              ),
-            ),
-          ),
-        ),
-      ),
+      child: Align(alignment: Alignment.bottomCenter, child: surface),
     );
   }
 
   Widget _buildHeader(BuildContext context) => Padding(
     key: const ValueKey('safe-chat-header'),
-    padding: const EdgeInsets.fromLTRB(14, 8, 10, 13),
+    padding: EdgeInsets.fromLTRB(desktop ? 22 : 14, desktop ? 18 : 8, 10, 13),
     child: Column(
       children: [
-        Container(
-          width: 46,
-          height: 5,
-          decoration: BoxDecoration(
-            color: PopColors.yellow,
-            borderRadius: BorderRadius.circular(6),
+        if (!desktop) ...[
+          Container(
+            width: 46,
+            height: 5,
+            decoration: BoxDecoration(
+              color: PopColors.yellow,
+              borderRadius: BorderRadius.circular(6),
+            ),
           ),
-        ),
-        const SizedBox(height: 11),
+          const SizedBox(height: 11),
+        ],
         Row(
           children: [
             Transform.rotate(
               angle: -.07,
               child: Container(
-                width: 48,
-                height: 48,
+                width: desktop ? 54 : 48,
+                height: desktop ? 54 : 48,
                 decoration: BoxDecoration(
                   gradient: const LinearGradient(
                     begin: Alignment.topLeft,
@@ -11663,15 +13380,15 @@ class _SafeChatPickerSheet extends StatelessWidget {
                     ),
                   ],
                 ),
-                child: const Icon(
+                child: Icon(
                   Icons.casino_rounded,
                   color: PopColors.navy,
-                  size: 29,
+                  size: desktop ? 32 : 29,
                 ),
               ),
             ),
             const SizedBox(width: 12),
-            const Expanded(
+            Expanded(
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
@@ -11690,7 +13407,7 @@ class _SafeChatPickerSheet extends StatelessWidget {
                     'MENSAJES RÁPIDOS',
                     style: TextStyle(
                       color: Colors.white,
-                      fontSize: 20,
+                      fontSize: desktop ? 24 : 20,
                       height: 1.05,
                       fontWeight: FontWeight.w900,
                     ),
@@ -11700,7 +13417,7 @@ class _SafeChatPickerSheet extends StatelessWidget {
                     'Solo frases preseleccionadas y seguras.',
                     style: TextStyle(
                       color: Color(0xFFC8D6F2),
-                      fontSize: 11.5,
+                      fontSize: desktop ? 13 : 11.5,
                       height: 1.1,
                       fontWeight: FontWeight.w600,
                     ),
@@ -11740,16 +13457,21 @@ class _SafeChatPickerSheet extends StatelessWidget {
     ),
     child: SingleChildScrollView(
       key: const ValueKey('safe-chat-scroll'),
-      padding: const EdgeInsets.fromLTRB(14, 14, 14, 18),
+      padding: EdgeInsets.fromLTRB(
+        desktop ? 22 : 14,
+        desktop ? 18 : 14,
+        desktop ? 22 : 14,
+        desktop ? 22 : 18,
+      ),
       child: LayoutBuilder(
         builder: (context, constraints) {
           final textScale = MediaQuery.textScalerOf(context).scale(1);
           final columns = textScale > 1.35
               ? 1
-              : constraints.maxWidth >= 600
+              : constraints.maxWidth >= 620
               ? 3
               : 2;
-          const spacing = 10.0;
+          final spacing = desktop ? 12.0 : 10.0;
           final buttonWidth =
               (constraints.maxWidth - (spacing * (columns - 1))) / columns;
           return Wrap(
@@ -11765,6 +13487,7 @@ class _SafeChatPickerSheet extends StatelessWidget {
                 SizedBox(
                   width: buttonWidth,
                   child: _SafeChatPhraseButton(
+                    desktop: desktop,
                     key: ValueKey(
                       'safe-chat-${SafeChatCatalog.phrases[index].id.name}',
                     ),
@@ -11788,6 +13511,7 @@ class _SafeChatPickerSheet extends StatelessWidget {
 class _SafeChatPhraseButton extends StatelessWidget {
   const _SafeChatPhraseButton({
     super.key,
+    required this.desktop,
     required this.label,
     required this.icon,
     required this.accent,
@@ -11795,6 +13519,7 @@ class _SafeChatPhraseButton extends StatelessWidget {
   });
 
   final String label;
+  final bool desktop;
   final IconData icon;
   final Color accent;
   final VoidCallback onPressed;
@@ -11848,9 +13573,9 @@ class _SafeChatPhraseButton extends StatelessWidget {
                       label,
                       maxLines: 3,
                       overflow: TextOverflow.ellipsis,
-                      style: const TextStyle(
+                      style: TextStyle(
                         color: PopColors.navy,
-                        fontSize: 13,
+                        fontSize: desktop ? 14 : 13,
                         height: 1.08,
                         fontWeight: FontWeight.w900,
                       ),
@@ -11936,6 +13661,8 @@ class _GameQuickBar extends StatelessWidget {
     required this.onShowPowers,
     required this.onShowHistory,
     required this.onShowGuide,
+    this.showDiagnostics = false,
+    this.onShowDiagnostics,
     required this.onShowSettings,
     this.canReport = false,
     this.onReportIssue,
@@ -11951,6 +13678,8 @@ class _GameQuickBar extends StatelessWidget {
   final VoidCallback onShowPowers;
   final VoidCallback onShowHistory;
   final VoidCallback onShowGuide;
+  final bool showDiagnostics;
+  final VoidCallback? onShowDiagnostics;
   final VoidCallback onShowSettings;
   final bool canReport;
   final VoidCallback? onReportIssue;
@@ -12041,6 +13770,18 @@ class _GameQuickBar extends StatelessWidget {
                     expandedTarget: phoneLandscape,
                     onPressed: onShowGuide,
                   ),
+                // Keep the QA trace reachable even in split-screen/very narrow
+                // previews; it is an icon-only action and does not need a
+                // label or timer space.
+                if (showDiagnostics && onShowDiagnostics != null)
+                  _GameQuickAction(
+                    key: const ValueKey('game-diagnostics-button'),
+                    tooltip: 'Diagnóstico de partida',
+                    icon: Icons.bug_report_rounded,
+                    iconSize: iconSize,
+                    expandedTarget: phoneLandscape,
+                    onPressed: onShowDiagnostics!,
+                  ),
                 if (canReport && !veryNarrow && onReportIssue != null)
                   _GameQuickAction(
                     key: const ValueKey('game-report-button'),
@@ -12062,6 +13803,191 @@ class _GameQuickBar extends StatelessWidget {
             );
           },
         ),
+      ),
+    );
+  }
+}
+
+/// QA-only, copyable trace for the part of an online match that happens after
+/// matchmaking.  It deliberately lives in the game route so lifecycle and
+/// realtime failures can be captured even after the player has entered the
+/// board.  The parent gates the route with [onlineDiagnosticsUiEnabled].
+class _OnlineGameDiagnosticsDialog extends StatelessWidget {
+  const _OnlineGameDiagnosticsDialog({
+    required this.revision,
+    required this.entries,
+    required this.copied,
+    required this.onCopy,
+    required this.onClose,
+  });
+
+  final ValueListenable<int> revision;
+  final List<QuickPopDiagnosticEntry> Function() entries;
+  final bool Function() copied;
+  final Future<void> Function() onCopy;
+  final VoidCallback onClose;
+
+  Color _stateColor(QuickPopDiagnosticState state) => switch (state) {
+    QuickPopDiagnosticState.success => PopColors.green,
+    QuickPopDiagnosticState.error => PopColors.red,
+    QuickPopDiagnosticState.waiting ||
+    QuickPopDiagnosticState.pending => PopColors.yellow,
+    QuickPopDiagnosticState.info => const Color(0xFF9B8BFF),
+  };
+
+  @override
+  Widget build(BuildContext context) {
+    final maxHeight = math.max(320.0, MediaQuery.sizeOf(context).height - 32);
+    return PopDialog(
+      maxWidth: 640,
+      maxHeight: maxHeight,
+      insetPadding: const EdgeInsets.all(16),
+      padding: const EdgeInsets.fromLTRB(18, 16, 18, 14),
+      child: ValueListenableBuilder<int>(
+        valueListenable: revision,
+        builder: (context, _, _) {
+          final currentEntries = entries();
+          return Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Row(
+                children: [
+                  const Icon(
+                    Icons.bug_report_rounded,
+                    color: PopColors.yellow,
+                    size: 26,
+                  ),
+                  const SizedBox(width: 9),
+                  const Expanded(
+                    child: PopText(
+                      'DIAGNÓSTICO DE PARTIDA',
+                      style: TextStyle(
+                        color: Colors.white,
+                        fontSize: 18,
+                        fontWeight: FontWeight.w900,
+                      ),
+                    ),
+                  ),
+                  IconButton(
+                    tooltip: 'Cerrar',
+                    onPressed: onClose,
+                    icon: const Icon(Icons.close_rounded, color: Colors.white),
+                  ),
+                ],
+              ),
+              const PopText(
+                'Registra conexión, turnos, dados, movimientos y regreso desde Home.',
+                style: TextStyle(color: Colors.white70, fontSize: 12),
+              ),
+              const SizedBox(height: 12),
+              Expanded(
+                child: currentEntries.isEmpty
+                    ? const Center(
+                        child: PopText(
+                          'Todavía no hay pasos registrados.',
+                          style: TextStyle(color: Colors.white70),
+                        ),
+                      )
+                    : ListView.separated(
+                        key: const ValueKey('game-diagnostic-entries'),
+                        padding: EdgeInsets.zero,
+                        itemCount: currentEntries.length,
+                        separatorBuilder: (_, _) => const SizedBox(height: 6),
+                        itemBuilder: (context, index) {
+                          final entry = currentEntries[index];
+                          final color = _stateColor(entry.state);
+                          return Container(
+                            padding: const EdgeInsets.fromLTRB(10, 8, 10, 8),
+                            decoration: BoxDecoration(
+                              color: Colors.white.withValues(alpha: .08),
+                              borderRadius: BorderRadius.circular(12),
+                              border: Border.all(
+                                color: color.withValues(alpha: .55),
+                              ),
+                            ),
+                            child: Row(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Container(
+                                  width: 24,
+                                  height: 24,
+                                  decoration: BoxDecoration(
+                                    color: color,
+                                    shape: BoxShape.circle,
+                                  ),
+                                  child: Center(
+                                    child: Text(
+                                      entry.state.symbol,
+                                      style: const TextStyle(
+                                        color: Colors.white,
+                                        fontWeight: FontWeight.w900,
+                                      ),
+                                    ),
+                                  ),
+                                ),
+                                const SizedBox(width: 8),
+                                Expanded(
+                                  child: Column(
+                                    crossAxisAlignment:
+                                        CrossAxisAlignment.start,
+                                    children: [
+                                      Text(
+                                        '${entry.number}. ${entry.step}',
+                                        style: const TextStyle(
+                                          color: Colors.white,
+                                          fontSize: 11,
+                                          fontWeight: FontWeight.w900,
+                                        ),
+                                      ),
+                                      const SizedBox(height: 2),
+                                      Text(
+                                        '${entry.elapsedLabel} · ${entry.detail}',
+                                        style: const TextStyle(
+                                          color: Colors.white70,
+                                          fontSize: 10,
+                                          height: 1.25,
+                                        ),
+                                      ),
+                                      if (entry.code != null ||
+                                          entry.path != null)
+                                        Text(
+                                          [
+                                            if (entry.code != null)
+                                              'code=${entry.code}',
+                                            if (entry.path != null)
+                                              'path=${entry.path}',
+                                          ].join(' · '),
+                                          style: const TextStyle(
+                                            color: Colors.white54,
+                                            fontSize: 9,
+                                            height: 1.2,
+                                          ),
+                                        ),
+                                    ],
+                                  ),
+                                ),
+                              ],
+                            ),
+                          );
+                        },
+                      ),
+              ),
+              const SizedBox(height: 12),
+              FilledButton.icon(
+                key: const ValueKey('copy-game-diagnostics'),
+                onPressed: onCopy,
+                icon: Icon(copied() ? Icons.check_rounded : Icons.copy_rounded),
+                label: PopText(copied() ? 'COPIADO' : 'COPIAR DIAGNÓSTICO'),
+                style: FilledButton.styleFrom(
+                  backgroundColor: PopColors.blue,
+                  foregroundColor: Colors.white,
+                  minimumSize: const Size.fromHeight(46),
+                ),
+              ),
+            ],
+          );
+        },
       ),
     );
   }
@@ -12434,6 +14360,7 @@ class _GameSideRail extends StatefulWidget {
     required this.rollGuideVisible,
     required this.rollGuidePulseSerial,
     required this.diceHandPreference,
+    required this.diceHandEffectEnabled,
     required this.diceThrowInProgress,
     required this.diceThrowSerial,
     required this.diceThrowResult,
@@ -12461,6 +14388,7 @@ class _GameSideRail extends StatefulWidget {
   final bool rollGuideVisible;
   final int rollGuidePulseSerial;
   final DiceHandPreference diceHandPreference;
+  final bool diceHandEffectEnabled;
   final bool diceThrowInProgress;
   final int diceThrowSerial;
   final (int, int)? diceThrowResult;
@@ -12527,6 +14455,7 @@ class _GameSideRailState extends State<_GameSideRail> {
                     rollGuideVisible: widget.rollGuideVisible,
                     rollGuidePulseSerial: widget.rollGuidePulseSerial,
                     diceHandPreference: widget.diceHandPreference,
+                    diceHandEffectEnabled: widget.diceHandEffectEnabled,
                     diceThrowInProgress: widget.diceThrowInProgress,
                     diceThrowSerial: widget.diceThrowSerial,
                     diceThrowResult: widget.diceThrowResult,
@@ -12538,6 +14467,7 @@ class _GameSideRailState extends State<_GameSideRail> {
                     diceStyleId: widget.diceStyleId,
                     avatarIds: widget.avatarIds,
                     visibleRemainingDice: widget.visibleRemainingDice,
+                    onlineSession: widget.onlineSession,
                   ),
                   const SizedBox(height: 5),
                   _LandscapePlayerStrip(
@@ -12563,6 +14493,7 @@ class _GameSideRailState extends State<_GameSideRail> {
                     rollGuideVisible: widget.rollGuideVisible,
                     rollGuidePulseSerial: widget.rollGuidePulseSerial,
                     diceHandPreference: widget.diceHandPreference,
+                    diceHandEffectEnabled: widget.diceHandEffectEnabled,
                     diceThrowInProgress: widget.diceThrowInProgress,
                     diceThrowSerial: widget.diceThrowSerial,
                     diceThrowResult: widget.diceThrowResult,
@@ -12573,6 +14504,7 @@ class _GameSideRailState extends State<_GameSideRail> {
                     diceStyleId: widget.diceStyleId,
                     avatarIds: widget.avatarIds,
                     visibleRemainingDice: widget.visibleRemainingDice,
+                    onlineSession: widget.onlineSession,
                   ),
                   if (showRosterBelowControls) ...[
                     const SizedBox(height: 7),
@@ -14688,7 +16620,7 @@ class _TokenMovePopup extends StatelessWidget {
     final color = value == 20
         ? twentyStepColor
         : _moveChoiceColor(rolledDice, value);
-    final isExit = tokenInNest && value == 5;
+    final isExit = tokenInNest;
     final isHomeEntryCapture = homeEntryCaptureChoices.contains(value);
     final target = captureTargetsByDie[value];
     final isSafeLanding = safeLandingChoices.contains(value);
@@ -14696,7 +16628,7 @@ class _TokenMovePopup extends StatelessWidget {
     final baseLabel = isExit
         ? english
               ? 'Move piece $tokenNumber out of jail with $value'
-              : 'Sacar ficha $tokenNumber de la cárcel con $value'
+              : 'Sacar ficha $tokenNumber de la base con $value'
         : isHomeEntryCapture
         ? english
               ? 'Capture the piece blocking the home entry with $value'
@@ -15701,7 +17633,7 @@ class _BoardMoveChoiceCalloutState extends State<_BoardMoveChoiceCallout> {
     if (preview.isExit) {
       baseLabel = english
           ? 'Move piece $tokenNumber out of jail with ${preview.value}'
-          : 'Sacar ficha $tokenNumber de la cárcel con ${preview.value}';
+          : 'Sacar ficha $tokenNumber de la base con ${preview.value}';
     } else if (preview.isHomeEntryCapture) {
       baseLabel = english
           ? 'Capture the piece blocking the home entry with ${preview.value}'
@@ -17841,15 +19773,17 @@ class _ParcheseBoardPainter extends CustomPainter {
       ),
       textDirection: TextDirection.ltr,
     )..layout();
-    final maxWidth = baseRect.width * .90;
-    final preferredFontSize = baseCell * (compactPhone ? .76 : .70);
+    // Long online names should remain readable without covering the nest or
+    // the theme artwork on a tablet board.
+    final maxWidth = baseRect.width * .82;
+    final preferredFontSize = baseCell * (compactPhone ? .68 : .50);
     var text = buildPainter(preferredFontSize);
     if (text.width > maxWidth) {
       text = buildPainter(preferredFontSize * maxWidth / text.width);
     }
     final center = Offset(
       baseRect.center.dx,
-      top ? baseRect.top + baseCell * .70 : baseRect.bottom - baseCell * .70,
+      top ? baseRect.top + baseCell * .52 : baseRect.bottom - baseCell * .52,
     );
     canvas.save();
     canvas.translate(center.dx, center.dy);
@@ -19620,6 +21554,7 @@ class GameControlPanel extends StatelessWidget {
     this.rollGuideVisible = false,
     this.rollGuidePulseSerial = 0,
     this.diceHandPreference = DiceHandPreference.right,
+    this.diceHandEffectEnabled = true,
     this.diceThrowInProgress = false,
     this.diceThrowSerial = 0,
     this.diceThrowResult,
@@ -19630,9 +21565,12 @@ class GameControlPanel extends StatelessWidget {
     this.landscapeHud = false,
     this.diceStyleId,
     this.avatarIds = const <PlayerColor, String?>{},
+    this.mobileBoardTools = false,
     this.mobileBoardNavigator,
     this.mobileBoardFullView = false,
     this.visibleRemainingDice,
+    this.onlineSession,
+    this.localCpuTakeoverActive = false,
   });
   final GameEngine engine;
   final GameToken? selectedToken;
@@ -19645,6 +21583,7 @@ class GameControlPanel extends StatelessWidget {
   final bool rollGuideVisible;
   final int rollGuidePulseSerial;
   final DiceHandPreference diceHandPreference;
+  final bool diceHandEffectEnabled;
   final bool diceThrowInProgress;
   final int diceThrowSerial;
   final (int, int)? diceThrowResult;
@@ -19655,9 +21594,12 @@ class GameControlPanel extends StatelessWidget {
   final bool landscapeHud;
   final String? diceStyleId;
   final Map<PlayerColor, String?> avatarIds;
+  final bool mobileBoardTools;
   final Widget? mobileBoardNavigator;
   final bool mobileBoardFullView;
   final List<int>? visibleRemainingDice;
+  final OnlineMatchSession? onlineSession;
+  final bool localCpuTakeoverActive;
 
   String? get diceId => diceStyleId;
   bool get galaxyDice => diceStyleId == 'dice_galaxy';
@@ -19665,6 +21607,8 @@ class GameControlPanel extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final diceStyle = diceVisualSpecFor(diceStyleId);
+    final tabletPortraitHud =
+        mobileBoardTools && _isTabletGameViewport(context);
     final activeTraps = engine
         .activeTrapsFor(engine.currentPlayer.color)
         .toList(growable: false);
@@ -19683,7 +21627,7 @@ class GameControlPanel extends StatelessWidget {
         ? null
         : engine.allDiceTotalFor(selectedToken!);
     final boardCalloutsOwnMoveChoice =
-        mobileBoardNavigator != null &&
+        (mobileBoardNavigator != null || mobileBoardTools) &&
         selectedToken != null &&
         moveChoices.isNotEmpty;
     final bonusTwentyActive =
@@ -19717,13 +21661,26 @@ class GameControlPanel extends StatelessWidget {
     final panelMessage = trapFeedbackIsOutsidePanel
         ? 'Resolviendo la trampa…'
         : engine.message;
+    // Keep the local seat identity separate from the connection state.  After
+    // returning from Home the sync client may briefly be reconnecting, but the
+    // seat is still ours; showing the remote display name here makes the HUD
+    // look like the device changed players and makes the dice feel disabled.
+    final isLocalOnlineSeatTurn =
+        onlineSession != null &&
+        engine.currentPlayer.isHuman &&
+        engine.currentPlayer.color == onlineSession?.localColor &&
+        !waitingForNextTurn &&
+        !localCpuTakeoverActive;
+    final statusTitle = isLocalOnlineSeatTurn
+        ? appTranslate(context, 'Tu movimiento')
+        : engine.currentPlayer.name;
     final status = Column(
       mainAxisSize: MainAxisSize.min,
       children: [
         ConstrainedBox(
           constraints: BoxConstraints(maxWidth: compact ? 175 : 230),
           child: _AutoFitSingleLineText(
-            engine.currentPlayer.name,
+            statusTitle,
             alignment: Alignment.center,
             textAlign: TextAlign.center,
             style: const TextStyle(fontWeight: FontWeight.w900),
@@ -19831,7 +21788,7 @@ class GameControlPanel extends StatelessWidget {
                           moveChoices.contains(engine.dice[0]),
                       onTap: onDieSelected,
                     ),
-                    const SizedBox(width: 9),
+                    SizedBox(width: tabletPortraitHud ? 4 : 9),
                     _DieSlot(
                       key: const ValueKey('die-slot-1'),
                       slotIndex: 1,
@@ -19901,11 +21858,34 @@ class GameControlPanel extends StatelessWidget {
       visible: showRollGuide,
       pulseSerial: rollGuidePulseSerial,
       hand: diceHandPreference,
+      handEffectEnabled: diceHandEffectEnabled,
+      visualScale: tabletPortraitHud ? 1.22 : 1,
       diceStyle: diceStyle,
       throwing: diceThrowInProgress,
       throwSerial: diceThrowSerial,
       throwResult: diceThrowResult,
       child: dice,
+    );
+    // Desktop HUDs have a wide action surface. Give the hand its own stage so
+    // the transparent padding in the artwork does not make the visible hand
+    // look tiny while leaving unused space beside it.
+    final desktopDiceHandStage = SizedBox(
+      key: const ValueKey('desktop-dice-hand-stage'),
+      width: compact ? 170 : 240,
+      height: compact ? 92 : 120,
+      child: _DiceRollGuideTarget(
+        visible: showRollGuide,
+        pulseSerial: rollGuidePulseSerial,
+        hand: diceHandPreference,
+        handEffectEnabled: diceHandEffectEnabled,
+        visualScale: 1,
+        diceStyle: diceStyle,
+        throwing: diceThrowInProgress,
+        throwSerial: diceThrowSerial,
+        throwResult: diceThrowResult,
+        expandedStage: true,
+        child: Center(child: dice),
+      ),
     );
     final heldPower = engine.currentPlayer.inventory;
     final trapCount = activeTraps.length;
@@ -20086,7 +22066,7 @@ class GameControlPanel extends StatelessWidget {
                           crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
                             _AutoFitSingleLineText(
-                              engine.currentPlayer.name,
+                              statusTitle,
                               style: const TextStyle(
                                 color: Colors.white,
                                 fontSize: 12,
@@ -20204,8 +22184,16 @@ class GameControlPanel extends StatelessWidget {
               ),
             );
           }
-          final portraitHud = !compact && box.maxWidth < 600;
-          if (portraitHud && mobileBoardNavigator != null) {
+          // A minimap means this is a portrait game surface, even on a wide
+          // iPad. Preserve the compact HUD as well when this reusable panel
+          // is hosted on an actual phone-sized viewport outside GameScreen.
+          final portraitHud =
+              !landscapeHud &&
+              (mobileBoardTools ||
+                  mobileBoardNavigator != null ||
+                  MediaQuery.sizeOf(context).shortestSide < 600);
+          final hasMinimap = mobileBoardNavigator != null;
+          if (portraitHud && mobileBoardTools) {
             final currentColor = switch (engine.currentPlayer.color) {
               PlayerColor.red => PopColors.red,
               PlayerColor.green => PopColors.green,
@@ -20221,8 +22209,9 @@ class GameControlPanel extends StatelessWidget {
                 : engine.hasRolled
                 ? 'Elige una ficha'
                 : 'Lanza los dados';
-            final isLocalTurn =
-                engine.currentPlayer.isHuman && !waitingForNextTurn;
+            final isLocalTurn = onlineSession != null
+                ? isLocalOnlineSeatTurn
+                : engine.currentPlayer.isHuman && !waitingForNextTurn;
             final desiredNavigatorWidth = ((box.maxWidth - 32) * .43)
                 .clamp(128.0, 156.0)
                 .toDouble();
@@ -20230,7 +22219,9 @@ class GameControlPanel extends StatelessWidget {
                 box.hasBoundedHeight && box.maxHeight < 222;
             final ultraCompactPortraitHud =
                 box.hasBoundedHeight && box.maxHeight < 150;
-            final showPortraitStatus = !ultraCompactPortraitHud;
+            // The compact tablet strip still needs to say whose turn it is.
+            // Previously this whole row disappeared below 150px, leaving a
+            // tiny hand floating in a large, unexplained blue area.
             final showPortraitLabels =
                 !box.hasBoundedHeight || box.maxHeight >= 58;
             final verticalPadding = ultraCompactPortraitHud
@@ -20241,12 +22232,28 @@ class GameControlPanel extends StatelessWidget {
             final sectionGap = compactPortraitHud ? 2.0 : 5.0;
             final labelHeight = compactPortraitHud ? 14.0 : 18.0;
             final labelGap = compactPortraitHud ? 2.0 : 5.0;
+            final statusAvatarSize = ultraCompactPortraitHud ? 28.0 : 34.0;
+            final statusTitleSize = ultraCompactPortraitHud
+                ? 12.0
+                : tabletPortraitHud
+                ? 16.0
+                : 14.0;
+            final statusSubtitleSize = ultraCompactPortraitHud
+                ? 8.0
+                : tabletPortraitHud
+                ? 10.5
+                : 9.5;
+            // The compact chat/cosmetics buttons retain a 44px touch target.
+            // Account for that real height so the hand stage never overflows.
+            const statusRowHeight = 44.0;
             // The board above this panel always keeps its full width. When an
             // adaptive banner becomes taller, only this secondary HUD stage
             // contracts to the height still available below the board.
             final hudChromeHeight =
                 verticalPadding * 2 +
-                (showPortraitStatus ? 44 + sectionGap * 2 + 1 : 0) +
+                statusRowHeight +
+                sectionGap * 2 +
+                1 +
                 (showPortraitLabels ? labelHeight + labelGap : 0);
             final availableStageHeight = box.hasBoundedHeight
                 ? math.max(0.0, box.maxHeight - hudChromeHeight - 2)
@@ -20255,8 +22262,289 @@ class GameControlPanel extends StatelessWidget {
                 .min(desiredNavigatorWidth, availableStageHeight)
                 .clamp(0.0, 156.0)
                 .toDouble();
-            final showPortraitItem = engine.isChaos && navigatorWidth >= 112;
-            final showNavigatorHint = navigatorWidth >= 96;
+            final tabletDiceFrame = tabletPortraitHud && !hasMinimap;
+            final isTablet = _isTabletGameViewport(context);
+
+            // For tablets, we force a multi-column layout: Profile | Dice Hand | Minimap (optional)
+            if (isTablet && mobileBoardTools) {
+              final currentColor = switch (engine.currentPlayer.color) {
+                PlayerColor.red => PopColors.red,
+                PlayerColor.green => PopColors.green,
+                PlayerColor.yellow => PopColors.yellow,
+                PlayerColor.blue => PopColors.blue,
+              };
+
+              return Container(
+                key: const ValueKey('tablet-multi-column-hud'),
+                padding: EdgeInsets.fromLTRB(
+                  16,
+                  verticalPadding,
+                  16,
+                  verticalPadding,
+                ),
+                decoration: BoxDecoration(
+                  gradient: const LinearGradient(
+                    begin: Alignment.topLeft,
+                    end: Alignment.bottomRight,
+                    colors: [Color(0xFF2457A2), PopColors.navy],
+                  ),
+                  borderRadius: BorderRadius.circular(24),
+                  border: Border.all(color: Colors.white, width: 1.5),
+                  boxShadow: const [
+                    BoxShadow(
+                      color: Color(0x4D07152F),
+                      blurRadius: 12,
+                      offset: Offset(0, 6),
+                    ),
+                    BoxShadow(
+                      color: PopColors.yellow,
+                      blurRadius: 0,
+                      offset: Offset(0, 3),
+                    ),
+                  ],
+                ),
+                child: Row(
+                  children: [
+                    // Column 1: Profile & Actions
+                    Expanded(
+                      flex: hasMinimap ? 3 : 4,
+                      child: Column(
+                        mainAxisSize: MainAxisSize.min,
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Flexible(
+                            child: Row(
+                              children: [
+                                Container(
+                                  width: statusAvatarSize,
+                                  height: statusAvatarSize,
+                                  padding: const EdgeInsets.all(4),
+                                  decoration: BoxDecoration(
+                                    color: currentColor,
+                                    shape: BoxShape.circle,
+                                    border: Border.all(
+                                      color: Colors.white,
+                                      width: 2.0,
+                                    ),
+                                    boxShadow: [
+                                      BoxShadow(
+                                        color: currentColor.withValues(
+                                          alpha: .42,
+                                        ),
+                                        blurRadius: 6,
+                                      ),
+                                    ],
+                                  ),
+                                  child: DecoratedBox(
+                                    decoration: BoxDecoration(
+                                      color: Color.lerp(
+                                        currentColor,
+                                        Colors.white,
+                                        .32,
+                                      ),
+                                      shape: BoxShape.circle,
+                                    ),
+                                  ),
+                                ),
+                                const SizedBox(width: 10),
+                                Expanded(
+                                  child: Column(
+                                    mainAxisSize: MainAxisSize.min,
+                                    crossAxisAlignment:
+                                        CrossAxisAlignment.start,
+                                    children: [
+                                      _AutoFitSingleLineText(
+                                        statusTitle,
+                                        style: TextStyle(
+                                          color: Colors.white,
+                                          fontSize: statusTitleSize,
+                                          fontWeight: FontWeight.w900,
+                                        ),
+                                      ),
+                                      const SizedBox(height: 3),
+                                      if (onlineSession != null)
+                                        PopText(
+                                          'Room: ${onlineSession!.matchId.substring(math.max(0, onlineSession!.matchId.length - 8))}',
+                                          style: const TextStyle(
+                                            color: Colors.white70,
+                                            fontSize: 10,
+                                            fontWeight: FontWeight.w600,
+                                          ),
+                                        ),
+                                      _AutoFitSingleLineText(
+                                        phaseLabel,
+                                        style: TextStyle(
+                                          color: bonusTwentyActive
+                                              ? PopColors.yellow
+                                              : const Color(0xFFB8C1D2),
+                                          fontSize: statusSubtitleSize,
+                                          fontWeight: FontWeight.w700,
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                          const SizedBox(height: 6),
+                          FittedBox(
+                            fit: BoxFit.scaleDown,
+                            alignment: Alignment.centerLeft,
+                            child: Row(
+                              children: [
+                                if (onShowChat != null) ...[
+                                  _HudMessageButton(
+                                    onPressed: onShowChat!,
+                                    compact: false,
+                                  ),
+                                  const SizedBox(width: 10),
+                                ],
+                                if (onCustomize != null)
+                                  _HudCosmeticsButton(
+                                    onPressed: onCustomize!,
+                                    compact: false,
+                                  ),
+                              ],
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                    const SizedBox(width: 12),
+                    // Column 2: Dice Hand (Centered)
+                    Expanded(
+                      flex: hasMinimap ? 4 : 6,
+                      child: LayoutBuilder(
+                        builder: (context, constraints) {
+                          final stageWidth = math.min(
+                            constraints.maxWidth,
+                            constraints.maxHeight * 2.8,
+                          );
+                          return Center(
+                            child: Container(
+                              width: stageWidth,
+                              height: constraints.maxHeight,
+                              padding: const EdgeInsets.all(8),
+                              decoration: BoxDecoration(
+                                color: Colors.white.withValues(alpha: .12),
+                                borderRadius: BorderRadius.circular(18),
+                                border: Border.all(
+                                  color: Colors.white.withValues(alpha: .24),
+                                  width: 1.5,
+                                ),
+                              ),
+                              child: _DiceRollGuideTarget(
+                                visible: showRollGuide,
+                                pulseSerial: rollGuidePulseSerial,
+                                hand: diceHandPreference,
+                                handEffectEnabled: diceHandEffectEnabled,
+                                diceStyle: diceStyle,
+                                throwing: diceThrowInProgress,
+                                throwSerial: diceThrowSerial,
+                                throwResult: diceThrowResult,
+                                expandedStage: true,
+                                child: Center(child: dice),
+                              ),
+                            ),
+                          );
+                        },
+                      ),
+                    ),
+                    if (hasMinimap) ...[
+                      const SizedBox(width: 12),
+                      // Column 3: Minimap
+                      Expanded(
+                        flex: 3,
+                        child: ClipRRect(
+                          borderRadius: BorderRadius.circular(18),
+                          child: mobileBoardNavigator!,
+                        ),
+                      ),
+                    ],
+                  ],
+                ),
+              );
+            }
+
+            final diceStageHeight = hasMinimap
+                ? navigatorWidth
+                : math.max(48.0, availableStageHeight);
+            final diceStageWidth = hasMinimap
+                ? double.infinity
+                : tabletDiceFrame
+                ? math.min(box.maxWidth - 32, 520.0)
+                : math.min(box.maxWidth - 24, 260.0);
+            final showPortraitItem =
+                hasMinimap && engine.isChaos && navigatorWidth >= 112;
+            final showNavigatorHint = hasMinimap && navigatorWidth >= 96;
+            final tabletFrameDecoration = BoxDecoration(
+              gradient: LinearGradient(
+                begin: Alignment.topLeft,
+                end: Alignment.bottomRight,
+                colors: [
+                  Colors.white.withValues(alpha: .12),
+                  const Color(0x33142645),
+                ],
+              ),
+              borderRadius: BorderRadius.circular(24),
+              border: Border.all(
+                color: Colors.white.withValues(alpha: .28),
+                width: 1.5,
+              ),
+            );
+
+            Widget diceHandStage({
+              Key? key,
+              required double height,
+              required double width,
+              required bool tabletFrame,
+            }) => Container(
+              key: key,
+              height: height,
+              width: width,
+              padding: tabletFrame
+                  ? const EdgeInsets.symmetric(horizontal: 18, vertical: 10)
+                  : EdgeInsets.zero,
+              // The tablet frame is painted once behind the whole HUD so it
+              // never covers the status row or the DICE prompt.
+              decoration: tabletFrame && !tabletDiceFrame
+                  ? tabletFrameDecoration
+                  : null,
+              child: Stack(
+                fit: StackFit.expand,
+                children: [
+                  _DiceRollGuideTarget(
+                    visible: showRollGuide,
+                    pulseSerial: rollGuidePulseSerial,
+                    hand: diceHandPreference,
+                    handEffectEnabled: diceHandEffectEnabled,
+                    visualScale: tabletFrame ? 1.22 : 1,
+                    diceStyle: diceStyle,
+                    throwing: diceThrowInProgress,
+                    throwSerial: diceThrowSerial,
+                    throwResult: diceThrowResult,
+                    expandedStage: true,
+                    child: Center(
+                      child: Padding(
+                        padding: EdgeInsets.only(
+                          bottom: showPortraitItem && !showRollGuide ? 49 : 0,
+                        ),
+                        child: FittedBox(fit: BoxFit.scaleDown, child: dice),
+                      ),
+                    ),
+                  ),
+                  if (showPortraitItem && (!showRollGuide || canUseHeldPower))
+                    Positioned(
+                      left: 0,
+                      right: 0,
+                      bottom: 0,
+                      height: 44,
+                      child: portraitItem,
+                    ),
+                ],
+              ),
+            );
             return Container(
               key: const ValueKey('portrait-game-hud'),
               padding: EdgeInsets.fromLTRB(
@@ -20269,251 +22557,259 @@ class GameControlPanel extends StatelessWidget {
                 gradient: const LinearGradient(
                   begin: Alignment.topLeft,
                   end: Alignment.bottomRight,
-                  colors: [Color(0xFF19243E), Color(0xFF101A31)],
+                  // Keep the phone HUD in the same blue game-panel language
+                  // used by the desktop builds. The board remains untouched;
+                  // this is only the action surface below it.
+                  colors: [Color(0xFF2457A2), PopColors.navy],
                 ),
                 borderRadius: BorderRadius.circular(22),
-                border: Border.all(color: const Color(0xFF4E5E7A)),
+                // Keep the blue frame visible without stealing the last pixel
+                // from the compact phone HUD's fixed-height action area.
+                border: Border.all(color: Colors.white, width: 1),
                 boxShadow: const [
                   BoxShadow(
-                    color: Color(0x52071122),
-                    blurRadius: 12,
-                    offset: Offset(0, 6),
+                    color: Color(0x4D07152F),
+                    blurRadius: 10,
+                    offset: Offset(0, 5),
+                  ),
+                  BoxShadow(
+                    color: PopColors.yellow,
+                    blurRadius: 0,
+                    offset: Offset(0, 3),
                   ),
                 ],
               ),
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
+              child: Stack(
+                clipBehavior: Clip.none,
                 children: [
-                  if (showPortraitStatus) ...[
-                    Row(
-                      key: const ValueKey('portrait-player-status'),
-                      children: [
-                        Container(
-                          width: 34,
-                          height: 34,
-                          padding: const EdgeInsets.all(4),
-                          decoration: BoxDecoration(
-                            color: currentColor,
-                            shape: BoxShape.circle,
-                            border: Border.all(color: Colors.white, width: 2),
-                            boxShadow: [
-                              BoxShadow(
-                                color: currentColor.withValues(alpha: .42),
-                                blurRadius: 7,
-                              ),
-                            ],
-                          ),
-                          child: DecoratedBox(
-                            decoration: BoxDecoration(
-                              color: Color.lerp(
-                                currentColor,
-                                Colors.white,
-                                .32,
-                              ),
-                              shape: BoxShape.circle,
-                            ),
-                          ),
-                        ),
-                        const SizedBox(width: 9),
-                        Expanded(
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              _AutoFitSingleLineText(
-                                isLocalTurn
-                                    ? 'Tu movimiento'
-                                    : engine.currentPlayer.name,
-                                style: const TextStyle(
-                                  color: Colors.white,
-                                  fontSize: 14,
-                                  fontWeight: FontWeight.w900,
-                                ),
-                              ),
-                              const SizedBox(height: 2),
-                              _AutoFitSingleLineText(
-                                isLocalTurn
-                                    ? diceThrowInProgress
-                                          ? 'Los dados están girando'
-                                          : engine.hasRolled
-                                          ? 'Selecciona un dado o revisa el tablero'
-                                          : 'Lanza los dados o revisa el tablero'
-                                    : 'Observa el turno en el tablero',
-                                style: const TextStyle(
-                                  color: Color(0xFFB8C1D2),
-                                  fontSize: 9.5,
-                                  fontWeight: FontWeight.w600,
-                                ),
-                              ),
-                            ],
-                          ),
-                        ),
-                        if (onShowChat != null) ...[
-                          const SizedBox(width: 4),
-                          _HudMessageButton(
-                            onPressed: onShowChat!,
-                            compact: true,
-                          ),
-                        ],
-                        if (onCustomize != null) ...[
-                          const SizedBox(width: 4),
-                          _HudCosmeticsButton(
-                            onPressed: onCustomize!,
-                            compact: true,
-                          ),
-                        ],
-                      ],
+                  if (tabletDiceFrame)
+                    Positioned.fill(
+                      child: IgnorePointer(
+                        child: DecoratedBox(decoration: tabletFrameDecoration),
+                      ),
                     ),
-                    SizedBox(height: sectionGap),
-                    const Divider(height: 1, color: Color(0xFF40506C)),
-                    SizedBox(height: sectionGap),
-                  ],
-                  Row(
-                    crossAxisAlignment: CrossAxisAlignment.start,
+                  Column(
+                    mainAxisSize: MainAxisSize.min,
                     children: [
-                      Expanded(
-                        key: const ValueKey('portrait-dice-column'),
-                        child: Column(
-                          mainAxisSize: MainAxisSize.min,
-                          crossAxisAlignment: CrossAxisAlignment.start,
+                      ...[
+                        Row(
+                          key: const ValueKey('portrait-player-status'),
                           children: [
-                            if (showPortraitLabels) ...[
-                              SizedBox(
-                                height: labelHeight,
-                                child: Row(
-                                  children: [
-                                    const PopText(
-                                      'DADOS',
-                                      style: TextStyle(
-                                        color: Color(0xFFB8C1D2),
-                                        fontSize: 9,
-                                        fontWeight: FontWeight.w800,
-                                        letterSpacing: .5,
-                                      ),
-                                    ),
-                                    const SizedBox(width: 5),
-                                    Expanded(
-                                      child: _AutoFitSingleLineText(
-                                        canRollDice
-                                            ? 'TOCA PARA LANZAR'
-                                            : dicePrompt,
-                                        alignment: Alignment.centerRight,
-                                        textAlign: TextAlign.right,
-                                        style: const TextStyle(
-                                          color: Colors.white,
-                                          fontSize: 8.5,
-                                          fontWeight: FontWeight.w800,
-                                        ),
-                                      ),
-                                    ),
-                                  ],
+                            Container(
+                              width: statusAvatarSize,
+                              height: statusAvatarSize,
+                              padding: const EdgeInsets.all(4),
+                              decoration: BoxDecoration(
+                                color: currentColor,
+                                shape: BoxShape.circle,
+                                border: Border.all(
+                                  color: Colors.white,
+                                  width: 2,
+                                ),
+                                boxShadow: [
+                                  BoxShadow(
+                                    color: currentColor.withValues(alpha: .42),
+                                    blurRadius: 7,
+                                  ),
+                                ],
+                              ),
+                              child: DecoratedBox(
+                                decoration: BoxDecoration(
+                                  color: Color.lerp(
+                                    currentColor,
+                                    Colors.white,
+                                    .32,
+                                  ),
+                                  shape: BoxShape.circle,
                                 ),
                               ),
-                              SizedBox(height: labelGap),
-                            ],
-                            SizedBox(
-                              key: const ValueKey('portrait-dice-hand-stage'),
-                              height: navigatorWidth,
-                              width: double.infinity,
-                              child: Stack(
-                                fit: StackFit.expand,
+                            ),
+                            const SizedBox(width: 9),
+                            Expanded(
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
                                 children: [
-                                  _DiceRollGuideTarget(
-                                    visible: showRollGuide,
-                                    pulseSerial: rollGuidePulseSerial,
-                                    hand: diceHandPreference,
-                                    diceStyle: diceStyle,
-                                    throwing: diceThrowInProgress,
-                                    throwSerial: diceThrowSerial,
-                                    throwResult: diceThrowResult,
-                                    expandedStage: true,
-                                    child: Center(
-                                      child: Padding(
-                                        padding: EdgeInsets.only(
-                                          bottom:
-                                              showPortraitItem && !showRollGuide
-                                              ? 49
-                                              : 0,
-                                        ),
-                                        child: FittedBox(
-                                          fit: BoxFit.scaleDown,
-                                          child: dice,
-                                        ),
-                                      ),
+                                  _AutoFitSingleLineText(
+                                    isLocalTurn
+                                        ? statusTitle
+                                        : engine.currentPlayer.name,
+                                    style: TextStyle(
+                                      color: Colors.white,
+                                      fontSize: statusTitleSize,
+                                      fontWeight: FontWeight.w900,
                                     ),
                                   ),
-                                  if (showPortraitItem &&
-                                      (!showRollGuide || canUseHeldPower))
-                                    Positioned(
-                                      left: 0,
-                                      right: 0,
-                                      bottom: 0,
-                                      height: 44,
-                                      child: portraitItem,
+                                  const SizedBox(height: 2),
+                                  _AutoFitSingleLineText(
+                                    isLocalTurn
+                                        ? diceThrowInProgress
+                                              ? 'Los dados están girando'
+                                              : engine.hasRolled
+                                              ? 'Selecciona un dado o revisa el tablero'
+                                              : 'Lanza los dados o revisa el tablero'
+                                        : 'Observa el turno en el tablero',
+                                    style: TextStyle(
+                                      color: Color(0xFFB8C1D2),
+                                      fontSize: statusSubtitleSize,
+                                      fontWeight: FontWeight.w600,
                                     ),
+                                  ),
+                                ],
+                              ),
+                            ),
+                            if (onShowChat != null) ...[
+                              const SizedBox(width: 4),
+                              _HudMessageButton(
+                                onPressed: onShowChat!,
+                                compact: true,
+                              ),
+                            ],
+                            if (onCustomize != null) ...[
+                              const SizedBox(width: 4),
+                              _HudCosmeticsButton(
+                                onPressed: onCustomize!,
+                                compact: true,
+                              ),
+                            ],
+                          ],
+                        ),
+                        SizedBox(height: sectionGap),
+                        const Divider(height: 1, color: Color(0xFF40506C)),
+                        SizedBox(height: sectionGap),
+                      ],
+                      Row(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Expanded(
+                            key: const ValueKey('portrait-dice-column'),
+                            child: Column(
+                              mainAxisSize: MainAxisSize.min,
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                if (showPortraitLabels) ...[
+                                  SizedBox(
+                                    height: labelHeight,
+                                    child: Row(
+                                      children: [
+                                        const PopText(
+                                          'DADOS',
+                                          style: TextStyle(
+                                            color: Color(0xFFB8C1D2),
+                                            fontSize: 9,
+                                            fontWeight: FontWeight.w800,
+                                            letterSpacing: .5,
+                                          ),
+                                        ),
+                                        const SizedBox(width: 5),
+                                        Expanded(
+                                          child: _AutoFitSingleLineText(
+                                            canRollDice
+                                                ? 'TOCA PARA LANZAR'
+                                                : dicePrompt,
+                                            alignment: Alignment.centerRight,
+                                            textAlign: TextAlign.right,
+                                            style: const TextStyle(
+                                              color: Colors.white,
+                                              fontSize: 8.5,
+                                              fontWeight: FontWeight.w800,
+                                            ),
+                                          ),
+                                        ),
+                                      ],
+                                    ),
+                                  ),
+                                  SizedBox(height: labelGap),
+                                ],
+                                Align(
+                                  alignment: Alignment.center,
+                                  child: tabletDiceFrame
+                                      ? SizedBox(
+                                          width: diceStageWidth,
+                                          height: diceStageHeight,
+                                          child: diceHandStage(
+                                            key: const ValueKey(
+                                              'tablet-dice-hand-frame',
+                                            ),
+                                            height: diceStageHeight,
+                                            width: diceStageWidth,
+                                            tabletFrame: true,
+                                          ),
+                                        )
+                                      : diceHandStage(
+                                          key: const ValueKey(
+                                            'portrait-dice-hand-stage',
+                                          ),
+                                          height: diceStageHeight,
+                                          width: diceStageWidth,
+                                          tabletFrame: false,
+                                        ),
+                                ),
+                              ],
+                            ),
+                          ),
+                          if (hasMinimap) ...[
+                            const SizedBox(width: 8),
+                            SizedBox(
+                              key: const ValueKey('portrait-minimap-column'),
+                              width: navigatorWidth,
+                              child: Column(
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
+                                  if (showPortraitLabels) ...[
+                                    SizedBox(
+                                      height: labelHeight,
+                                      child: Row(
+                                        children: [
+                                          const Expanded(
+                                            child: _AutoFitSingleLineText(
+                                              'MINIMAPA',
+                                              style: TextStyle(
+                                                color: Color(0xFFB8C1D2),
+                                                fontSize: 9,
+                                                fontWeight: FontWeight.w800,
+                                                letterSpacing: .5,
+                                              ),
+                                            ),
+                                          ),
+                                          if (showNavigatorHint) ...[
+                                            Icon(
+                                              mobileBoardFullView
+                                                  ? Icons.touch_app_rounded
+                                                  : Icons.zoom_in_rounded,
+                                              color: Colors.white,
+                                              size: 13,
+                                            ),
+                                            const SizedBox(width: 3),
+                                            Flexible(
+                                              child: _AutoFitSingleLineText(
+                                                mobileBoardFullView
+                                                    ? 'MANTÉN Y ARRASTRA'
+                                                    : 'SUELTA PARA VOLVER',
+                                                alignment:
+                                                    Alignment.centerRight,
+                                                textAlign: TextAlign.right,
+                                                style: const TextStyle(
+                                                  color: Colors.white,
+                                                  fontSize: 8,
+                                                  fontWeight: FontWeight.w800,
+                                                ),
+                                              ),
+                                            ),
+                                          ],
+                                        ],
+                                      ),
+                                    ),
+                                    SizedBox(height: labelGap),
+                                  ],
+                                  AspectRatio(
+                                    aspectRatio: 1,
+                                    child: mobileBoardNavigator!,
+                                  ),
                                 ],
                               ),
                             ),
                           ],
-                        ),
-                      ),
-                      const SizedBox(width: 8),
-                      SizedBox(
-                        key: const ValueKey('portrait-minimap-column'),
-                        width: navigatorWidth,
-                        child: Column(
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            if (showPortraitLabels) ...[
-                              SizedBox(
-                                height: labelHeight,
-                                child: Row(
-                                  children: [
-                                    const Expanded(
-                                      child: _AutoFitSingleLineText(
-                                        'MINIMAPA',
-                                        style: TextStyle(
-                                          color: Color(0xFFB8C1D2),
-                                          fontSize: 9,
-                                          fontWeight: FontWeight.w800,
-                                          letterSpacing: .5,
-                                        ),
-                                      ),
-                                    ),
-                                    if (showNavigatorHint) ...[
-                                      Icon(
-                                        mobileBoardFullView
-                                            ? Icons.touch_app_rounded
-                                            : Icons.zoom_in_rounded,
-                                        color: Colors.white,
-                                        size: 13,
-                                      ),
-                                      const SizedBox(width: 3),
-                                      Flexible(
-                                        child: _AutoFitSingleLineText(
-                                          mobileBoardFullView
-                                              ? 'MANTÉN Y ARRASTRA'
-                                              : 'SUELTA PARA VOLVER',
-                                          alignment: Alignment.centerRight,
-                                          textAlign: TextAlign.right,
-                                          style: const TextStyle(
-                                            color: Colors.white,
-                                            fontSize: 8,
-                                            fontWeight: FontWeight.w800,
-                                          ),
-                                        ),
-                                      ),
-                                    ],
-                                  ],
-                                ),
-                              ),
-                              SizedBox(height: labelGap),
-                            ],
-                            AspectRatio(
-                              aspectRatio: 1,
-                              child: mobileBoardNavigator!,
-                            ),
-                          ],
-                        ),
+                        ],
                       ),
                     ],
                   ),
@@ -20573,7 +22869,7 @@ class GameControlPanel extends StatelessWidget {
                           crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
                             _AutoFitSingleLineText(
-                              engine.currentPlayer.name,
+                              statusTitle,
                               style: const TextStyle(
                                 color: Colors.white,
                                 fontSize: 13,
@@ -20699,48 +22995,75 @@ class GameControlPanel extends StatelessWidget {
               ),
             );
           }
-          return Card(
-            elevation: 5,
-            shadowColor: PopColors.navy.withValues(alpha: .18),
-            child: Padding(
-              padding: EdgeInsets.all(compact ? 7 : 12),
-              child: box.maxWidth < 600
-                  ? Column(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        status,
-                        SizedBox(height: compact ? 6 : 12),
-                        dice,
-                        if (engine.isChaos) ...[
+          return Container(
+            key: const ValueKey('desktop-game-hud'),
+            decoration: BoxDecoration(
+              gradient: const LinearGradient(
+                begin: Alignment.topLeft,
+                end: Alignment.bottomRight,
+                colors: [Color(0xFF2457A2), PopColors.navy],
+              ),
+              borderRadius: BorderRadius.circular(20),
+              border: Border.all(color: Colors.white, width: 2),
+              boxShadow: const [
+                BoxShadow(
+                  color: Color(0x4D07152F),
+                  blurRadius: 10,
+                  offset: Offset(0, 5),
+                ),
+                BoxShadow(
+                  color: PopColors.yellow,
+                  blurRadius: 0,
+                  offset: Offset(0, 3),
+                ),
+              ],
+            ),
+            child: DefaultTextStyle.merge(
+              style: const TextStyle(color: Colors.white),
+              child: Padding(
+                padding: EdgeInsets.all(compact ? 7 : 12),
+                child: box.maxWidth < 600
+                    ? Column(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          status,
+                          SizedBox(height: compact ? 6 : 12),
+                          desktopDiceHandStage,
+                          if (engine.isChaos) ...[
+                            SizedBox(height: compact ? 5 : 8),
+                            SizedBox(width: double.infinity, child: item),
+                          ],
                           SizedBox(height: compact ? 5 : 8),
-                          SizedBox(width: double.infinity, child: item),
-                        ],
-                        SizedBox(height: compact ? 5 : 8),
-                        Row(
-                          mainAxisAlignment: MainAxisAlignment.center,
-                          children: [
-                            Flexible(
-                              child: PopText(
-                                panelMessage,
-                                textAlign: TextAlign.center,
-                                maxLines: compact ? 2 : null,
-                                overflow: compact
-                                    ? TextOverflow.ellipsis
-                                    : null,
-                                style: const TextStyle(
-                                  fontSize: 12,
-                                  color: Color(0xFF667085),
+                          Row(
+                            mainAxisAlignment: MainAxisAlignment.center,
+                            children: [
+                              Flexible(
+                                child: PopText(
+                                  panelMessage,
+                                  textAlign: TextAlign.center,
+                                  maxLines: compact ? 2 : null,
+                                  overflow: compact
+                                      ? TextOverflow.ellipsis
+                                      : null,
+                                  style: const TextStyle(
+                                    fontSize: 12,
+                                    color: Color(0xFFE4ECFA),
+                                  ),
                                 ),
                               ),
-                            ),
-                          ],
-                        ),
-                      ],
-                    )
-                  : Row(
-                      mainAxisAlignment: MainAxisAlignment.spaceAround,
-                      children: [status, dice, if (engine.isChaos) item],
-                    ),
+                            ],
+                          ),
+                        ],
+                      )
+                    : Row(
+                        mainAxisAlignment: MainAxisAlignment.spaceAround,
+                        children: [
+                          status,
+                          desktopDiceHandStage,
+                          if (engine.isChaos) item,
+                        ],
+                      ),
+              ),
             ),
           );
         },
@@ -20755,6 +23078,8 @@ class _DiceRollGuideTarget extends StatelessWidget {
     required this.visible,
     required this.pulseSerial,
     required this.hand,
+    required this.handEffectEnabled,
+    this.visualScale = 1,
     required this.diceStyle,
     required this.throwing,
     required this.throwSerial,
@@ -20766,6 +23091,8 @@ class _DiceRollGuideTarget extends StatelessWidget {
   final bool visible;
   final int pulseSerial;
   final DiceHandPreference hand;
+  final bool handEffectEnabled;
+  final double visualScale;
   final DiceVisualSpec diceStyle;
   final bool throwing;
   final int throwSerial;
@@ -20776,7 +23103,10 @@ class _DiceRollGuideTarget extends StatelessWidget {
   Widget build(BuildContext context) {
     final reduceMotion =
         MediaQuery.maybeOf(context)?.disableAnimations ?? false;
-    final hideChild = visible || throwing;
+    // Turning off the hand effect leaves the real dice visible and tappable;
+    // only the decorative hand/guide overlay is removed.
+    final guideVisible = visible && handEffectEnabled;
+    final hideChild = guideVisible || throwing;
     final fadedChild = reduceMotion
         ? Opacity(
             opacity: hideChild ? 0 : 1,
@@ -20799,55 +23129,63 @@ class _DiceRollGuideTarget extends StatelessWidget {
             ),
           )
         : fadedChild;
+    final stage = Stack(
+      fit: expandedStage ? StackFit.expand : StackFit.loose,
+      clipBehavior: expandedStage ? Clip.hardEdge : Clip.none,
+      children: [
+        stagedChild,
+        if (throwing)
+          Positioned.fill(
+            child: ExcludeSemantics(
+              child: IgnorePointer(
+                child: _DiceThrowAnimation(
+                  key: ValueKey('dice-throw-animation-$throwSerial'),
+                  hand: hand,
+                  handEffectEnabled: handEffectEnabled,
+                  diceStyle: diceStyle,
+                  result: throwResult,
+                  expandedStage: expandedStage,
+                ),
+              ),
+            ),
+          )
+        else if (guideVisible)
+          Positioned.fill(
+            child: ExcludeSemantics(
+              child: IgnorePointer(
+                child: KeyedSubtree(
+                  key: const ValueKey('dice-roll-guide'),
+                  child: reduceMotion
+                      ? _StaticDiceRollGuide(
+                          hand: hand,
+                          diceStyle: diceStyle,
+                          expandedStage: expandedStage,
+                        )
+                      : _RepeatingDiceRollGuide(
+                          key: ValueKey(
+                            'dice-roll-guide-pulse-$pulseSerial-${hand.name}',
+                          ),
+                          hand: hand,
+                          diceStyle: diceStyle,
+                          expandedStage: expandedStage,
+                        ),
+                ),
+              ),
+            ),
+          ),
+      ],
+    );
     return Semantics(
       container: throwing,
       liveRegion: throwing,
       label: throwing ? appTranslate(context, 'Lanzando los dados…') : null,
-      child: Stack(
-        fit: expandedStage ? StackFit.expand : StackFit.loose,
-        clipBehavior: expandedStage ? Clip.hardEdge : Clip.none,
-        children: [
-          stagedChild,
-          if (throwing)
-            Positioned.fill(
-              child: ExcludeSemantics(
-                child: IgnorePointer(
-                  child: _DiceThrowAnimation(
-                    key: ValueKey('dice-throw-animation-$throwSerial'),
-                    hand: hand,
-                    diceStyle: diceStyle,
-                    result: throwResult,
-                    expandedStage: expandedStage,
-                  ),
-                ),
-              ),
-            )
-          else if (visible)
-            Positioned.fill(
-              child: ExcludeSemantics(
-                child: IgnorePointer(
-                  child: KeyedSubtree(
-                    key: const ValueKey('dice-roll-guide'),
-                    child: reduceMotion
-                        ? _StaticDiceRollGuide(
-                            hand: hand,
-                            diceStyle: diceStyle,
-                            expandedStage: expandedStage,
-                          )
-                        : _RepeatingDiceRollGuide(
-                            key: ValueKey(
-                              'dice-roll-guide-pulse-$pulseSerial-${hand.name}',
-                            ),
-                            hand: hand,
-                            diceStyle: diceStyle,
-                            expandedStage: expandedStage,
-                          ),
-                  ),
-                ),
-              ),
+      child: visualScale == 1
+          ? stage
+          : Transform.scale(
+              key: ValueKey('dice-roll-stage-scale-$visualScale'),
+              scale: visualScale,
+              child: stage,
             ),
-        ],
-      ),
     );
   }
 }
@@ -20915,12 +23253,14 @@ class _DiceThrowAnimation extends StatefulWidget {
   const _DiceThrowAnimation({
     super.key,
     required this.hand,
+    required this.handEffectEnabled,
     required this.diceStyle,
     required this.result,
     required this.expandedStage,
   });
 
   final DiceHandPreference hand;
+  final bool handEffectEnabled;
   final DiceVisualSpec diceStyle;
   final (int, int)? result;
   final bool expandedStage;
@@ -20983,12 +23323,18 @@ class _DiceThrowAnimationState extends State<_DiceThrowAnimation>
                 )
                 .toDouble();
             final firstStart = Offset(
-              width * (widget.hand == DiceHandPreference.right ? .47 : .53),
-              height * .58,
+              width *
+                  (widget.hand == DiceHandPreference.right
+                      ? (widget.expandedStage ? .60 : .48)
+                      : (widget.expandedStage ? .40 : .52)),
+              height * .62,
             );
             final secondStart = Offset(
-              width * (widget.hand == DiceHandPreference.right ? .60 : .40),
-              height * .61,
+              width *
+                  (widget.hand == DiceHandPreference.right
+                      ? (widget.expandedStage ? .68 : .56)
+                      : (widget.expandedStage ? .32 : .44)),
+              height * .65,
             );
             final firstEnd = Offset(width * .38, height * .43);
             final secondEnd = Offset(width * .66, height * .43);
@@ -21015,26 +23361,27 @@ class _DiceThrowAnimationState extends State<_DiceThrowAnimation>
                     ),
                   ),
                 ),
-                Positioned.fill(
-                  child: Transform.translate(
-                    key: const ValueKey('dice-throw-hand'),
-                    offset: Offset(
-                      direction * (shake - handExit * 17),
-                      5 + windUp * 4 + handExit * 17,
-                    ),
-                    child: Transform.rotate(
-                      angle: direction * (-.045 * windUp + .10 * handOpens),
-                      child: Opacity(
-                        opacity: (.72 * (1 - handExit)).clamp(0.0, 1.0),
-                        child: _DiceRollHandArtwork(
-                          hand: widget.hand,
-                          expandedStage: widget.expandedStage,
-                          releaseBlend: handOpens,
+                if (widget.handEffectEnabled)
+                  Positioned.fill(
+                    child: Transform.translate(
+                      key: const ValueKey('dice-throw-hand'),
+                      offset: Offset(
+                        direction * (shake - handExit * 17),
+                        5 + windUp * 4 + handExit * 17,
+                      ),
+                      child: Transform.rotate(
+                        angle: direction * (-.045 * windUp + .10 * handOpens),
+                        child: Opacity(
+                          opacity: (.72 * (1 - handExit)).clamp(0.0, 1.0),
+                          child: _DiceRollHandArtwork(
+                            hand: widget.hand,
+                            expandedStage: widget.expandedStage,
+                            releaseBlend: handOpens,
+                          ),
                         ),
                       ),
                     ),
                   ),
-                ),
                 _ThrownDie(
                   key: const ValueKey('dice-throw-die-0'),
                   slotIndex: 0,
@@ -21571,16 +23918,20 @@ class _DiceRollHandArtwork extends StatelessWidget {
       final height = constraints.hasBoundedHeight
           ? constraints.maxHeight
           : 72.0;
+      // The hand artwork is intentionally oversized inside the stage: the
+      // source PNG has transparent breathing room around the wrist, so a
+      // near-1:1 fit makes the visible hand look tiny.  Let it fill the
+      // available HUD area while the stage still clips the feathered edges.
       final artSize = expandedStage
-          ? math.max(width, height * 1.27)
-          : math.max(width * 1.34, height * 2.05);
+          ? math.max(width * 1.22, height * 1.52)
+          : math.max(width * 1.52, height * 2.35);
       return Align(
         alignment: expandedStage
             ? const Alignment(.24, .18)
             : const Alignment(-.04, .12),
         child: Transform.translate(
           offset: Offset(
-            expandedStage ? (hand == DiceHandPreference.right ? -16 : 16) : 0,
+            expandedStage ? (hand == DiceHandPreference.right ? -12 : 12) : 0,
             expandedStage ? 5 : 0,
           ),
           child: SizedBox.square(
@@ -21590,8 +23941,8 @@ class _DiceRollHandArtwork extends StatelessWidget {
               alignment: Alignment.center,
               transform: Matrix4.diagonal3Values(
                 (hand == DiceHandPreference.right ? 1 : -1) *
-                    (expandedStage ? 1.20 : 1.06),
-                expandedStage ? 1.05 : 1,
+                    (expandedStage ? 1.22 : 1.12),
+                expandedStage ? 1.08 : 1.04,
                 1,
               ),
               child: _DiceHandAssetFeather(
@@ -21677,12 +24028,18 @@ class _HeldDicePair extends StatelessWidget {
       final rollProgress = ((phase - .10) / .62).clamp(0.0, 1.0);
       final roll = Curves.easeInOutCubic.transform(rollProgress);
       final firstCenter = Offset(
-        width * (hand == DiceHandPreference.right ? .43 : .57),
-        height * .53,
+        width *
+            (hand == DiceHandPreference.right
+                ? (expandedStage ? .50 : .50)
+                : (expandedStage ? .50 : .50)),
+        height * .56,
       );
       final secondCenter = Offset(
-        width * (hand == DiceHandPreference.right ? .59 : .41),
-        height * .60,
+        width *
+            (hand == DiceHandPreference.right
+                ? (expandedStage ? .58 : .65)
+                : (expandedStage ? .42 : .35)),
+        height * .63,
       );
       final turnAngle = roll * math.pi * 4;
       final firstValue = ((1 - 1 + (roll * 12).floor()) % 6) + 1;
@@ -21805,10 +24162,19 @@ class _HudCosmeticsButton extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final visualDimension = compact ? 28.0 : 32.0;
+    final tablet = _isTabletGameViewport(context);
+    final visualDimension = tablet
+        ? 48.0
+        : compact
+        ? 28.0
+        : 42.0;
     return SizedBox.square(
       key: const ValueKey('game-owned-cosmetics-button'),
-      dimension: 44,
+      dimension: tablet
+          ? 64
+          : compact
+          ? 44
+          : 54,
       child: Tooltip(
         message: appTranslate(context, 'Mis diseños'),
         child: Semantics(
@@ -21822,7 +24188,11 @@ class _HudCosmeticsButton extends StatelessWidget {
               shape: CircleBorder(
                 side: BorderSide(
                   color: Colors.white.withValues(alpha: .94),
-                  width: 1.4,
+                  width: tablet
+                      ? 2.5
+                      : compact
+                      ? 1.4
+                      : 2.0,
                 ),
               ),
               clipBehavior: Clip.antiAlias,
@@ -21834,7 +24204,11 @@ class _HudCosmeticsButton extends StatelessWidget {
                   child: Icon(
                     Icons.checkroom_rounded,
                     color: PopColors.navy,
-                    size: compact ? 16 : 18,
+                    size: tablet
+                        ? 30
+                        : compact
+                        ? 16
+                        : 24,
                   ),
                 ),
               ),
@@ -21854,10 +24228,19 @@ class _HudMessageButton extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final visualDimension = compact ? 28.0 : 32.0;
+    final tablet = _isTabletGameViewport(context);
+    final visualDimension = tablet
+        ? 48.0
+        : compact
+        ? 28.0
+        : 42.0;
     return SizedBox.square(
       key: const ValueKey('game-safe-chat-button'),
-      dimension: 44,
+      dimension: tablet
+          ? 64
+          : compact
+          ? 44
+          : 54,
       child: Tooltip(
         message: appTranslate(context, 'Mensajes rápidos'),
         child: Semantics(
@@ -21871,7 +24254,11 @@ class _HudMessageButton extends StatelessWidget {
               shape: CircleBorder(
                 side: BorderSide(
                   color: Colors.white.withValues(alpha: .92),
-                  width: 1.4,
+                  width: tablet
+                      ? 2.5
+                      : compact
+                      ? 1.4
+                      : 2.0,
                 ),
               ),
               clipBehavior: Clip.antiAlias,
@@ -21883,7 +24270,11 @@ class _HudMessageButton extends StatelessWidget {
                   child: Icon(
                     Icons.chat_bubble_rounded,
                     color: Colors.white,
-                    size: compact ? 15 : 17,
+                    size: tablet
+                        ? 28
+                        : compact
+                        ? 15
+                        : 22,
                   ),
                 ),
               ),
@@ -23052,146 +25443,133 @@ class _ShopScreenState extends State<ShopScreen> {
         final accent = _shopProductColor(product);
         final owned = wallet.isOwned(product.id);
         final equipped = wallet.isEquipped(product.id);
-        return Dialog(
+        return PopDialog(
           key: ValueKey('shop-large-preview-${product.id}'),
-          backgroundColor: Colors.transparent,
-          insetPadding: const EdgeInsets.all(14),
           child: ConstrainedBox(
             constraints: BoxConstraints(
               maxWidth: 520,
               maxHeight: math.max(320, screen.height - 28),
             ),
-            child: DecoratedBox(
-              decoration: BoxDecoration(
-                color: Colors.white,
-                borderRadius: BorderRadius.circular(28),
-                border: Border.all(color: Colors.white, width: 3),
-                boxShadow: const [
-                  BoxShadow(
-                    color: Color(0x6617284D),
-                    blurRadius: 28,
-                    offset: Offset(0, 14),
+            child: SingleChildScrollView(
+              padding: const EdgeInsets.fromLTRB(17, 15, 17, 17),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  Row(
+                    children: [
+                      Container(
+                        width: 44,
+                        height: 44,
+                        decoration: BoxDecoration(
+                          color: accent,
+                          borderRadius: BorderRadius.circular(14),
+                        ),
+                        child: const Icon(
+                          Icons.visibility_rounded,
+                          color: Colors.white,
+                        ),
+                      ),
+                      const SizedBox(width: 11),
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            const PopText(
+                              'VISTA PREVIA EN GRANDE',
+                              style: TextStyle(
+                                color: Color(0xFFC8D6F2),
+                                fontSize: 10,
+                                fontWeight: FontWeight.w900,
+                                letterSpacing: .5,
+                              ),
+                            ),
+                            _AutoFitSingleLineText(
+                              product.name,
+                              style: const TextStyle(
+                                color: Colors.white,
+                                fontSize: 22,
+                                fontWeight: FontWeight.w900,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                      IconButton(
+                        tooltip: appTranslate(dialogContext, 'Cerrar'),
+                        onPressed: () => Navigator.pop(dialogContext, false),
+                        icon: const Icon(
+                          Icons.close_rounded,
+                          color: Colors.white,
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 13),
+                  AspectRatio(
+                    aspectRatio: 1.2,
+                    child: _ShopProductPreview(product: product, large: true),
+                  ),
+                  const SizedBox(height: 12),
+                  PopText(
+                    product.description,
+                    textAlign: TextAlign.center,
+                    style: const TextStyle(
+                      color: Color(0xFFEAF0FF),
+                      fontSize: 14,
+                      fontWeight: FontWeight.w800,
+                    ),
+                  ),
+                  const SizedBox(height: 5),
+                  const PopText(
+                    'Así se verá este diseño dentro del juego.',
+                    textAlign: TextAlign.center,
+                    style: TextStyle(
+                      color: Color(0xFFC8D6F2),
+                      fontSize: 11,
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
+                  const SizedBox(height: 14),
+                  SizedBox(
+                    height: 56,
+                    child: FilledButton.icon(
+                      key: ValueKey('shop-preview-action-${product.id}'),
+                      onPressed: equipped
+                          ? null
+                          : () => Navigator.pop(dialogContext, true),
+                      style: FilledButton.styleFrom(
+                        backgroundColor: accent,
+                        disabledBackgroundColor: PopColors.green,
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 12,
+                          vertical: 8,
+                        ),
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(17),
+                        ),
+                      ),
+                      icon: Icon(
+                        equipped
+                            ? Icons.check_circle_rounded
+                            : owned
+                            ? Icons.style_rounded
+                            : Icons.shopping_bag_rounded,
+                      ),
+                      label: FittedBox(
+                        fit: BoxFit.scaleDown,
+                        child: PopText(
+                          equipped
+                              ? 'YA ESTÁ EN USO'
+                              : owned
+                              ? 'USAR ESTE DISEÑO'
+                              : 'COMPRAR · 🪙 ${_formatCoins(product.price)}',
+                          style: const TextStyle(fontWeight: FontWeight.w900),
+                        ),
+                      ),
+                    ),
                   ),
                 ],
-              ),
-              child: SingleChildScrollView(
-                padding: const EdgeInsets.fromLTRB(17, 15, 17, 17),
-                child: Column(
-                  mainAxisSize: MainAxisSize.min,
-                  crossAxisAlignment: CrossAxisAlignment.stretch,
-                  children: [
-                    Row(
-                      children: [
-                        Container(
-                          width: 44,
-                          height: 44,
-                          decoration: BoxDecoration(
-                            color: accent,
-                            borderRadius: BorderRadius.circular(14),
-                          ),
-                          child: const Icon(
-                            Icons.visibility_rounded,
-                            color: Colors.white,
-                          ),
-                        ),
-                        const SizedBox(width: 11),
-                        Expanded(
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              const PopText(
-                                'VISTA PREVIA EN GRANDE',
-                                style: TextStyle(
-                                  color: Color(0xFF667085),
-                                  fontSize: 10,
-                                  fontWeight: FontWeight.w900,
-                                  letterSpacing: .5,
-                                ),
-                              ),
-                              _AutoFitSingleLineText(
-                                product.name,
-                                style: const TextStyle(
-                                  color: PopColors.navy,
-                                  fontSize: 22,
-                                  fontWeight: FontWeight.w900,
-                                ),
-                              ),
-                            ],
-                          ),
-                        ),
-                        IconButton(
-                          tooltip: appTranslate(dialogContext, 'Cerrar'),
-                          onPressed: () => Navigator.pop(dialogContext, false),
-                          icon: const Icon(Icons.close_rounded),
-                        ),
-                      ],
-                    ),
-                    const SizedBox(height: 13),
-                    AspectRatio(
-                      aspectRatio: 1.2,
-                      child: _ShopProductPreview(product: product, large: true),
-                    ),
-                    const SizedBox(height: 12),
-                    PopText(
-                      product.description,
-                      textAlign: TextAlign.center,
-                      style: const TextStyle(
-                        color: PopColors.ink,
-                        fontSize: 14,
-                        fontWeight: FontWeight.w800,
-                      ),
-                    ),
-                    const SizedBox(height: 5),
-                    const PopText(
-                      'Así se verá este diseño dentro del juego.',
-                      textAlign: TextAlign.center,
-                      style: TextStyle(
-                        color: Color(0xFF667085),
-                        fontSize: 11,
-                        fontWeight: FontWeight.w700,
-                      ),
-                    ),
-                    const SizedBox(height: 14),
-                    SizedBox(
-                      height: 56,
-                      child: FilledButton.icon(
-                        key: ValueKey('shop-preview-action-${product.id}'),
-                        onPressed: equipped
-                            ? null
-                            : () => Navigator.pop(dialogContext, true),
-                        style: FilledButton.styleFrom(
-                          backgroundColor: accent,
-                          disabledBackgroundColor: PopColors.green,
-                          padding: const EdgeInsets.symmetric(
-                            horizontal: 12,
-                            vertical: 8,
-                          ),
-                          shape: RoundedRectangleBorder(
-                            borderRadius: BorderRadius.circular(17),
-                          ),
-                        ),
-                        icon: Icon(
-                          equipped
-                              ? Icons.check_circle_rounded
-                              : owned
-                              ? Icons.style_rounded
-                              : Icons.shopping_bag_rounded,
-                        ),
-                        label: FittedBox(
-                          fit: BoxFit.scaleDown,
-                          child: PopText(
-                            equipped
-                                ? 'YA ESTÁ EN USO'
-                                : owned
-                                ? 'USAR ESTE DISEÑO'
-                                : 'COMPRAR · 🪙 ${_formatCoins(product.price)}',
-                            style: const TextStyle(fontWeight: FontWeight.w900),
-                          ),
-                        ),
-                      ),
-                    ),
-                  ],
-                ),
               ),
             ),
           ),
@@ -23246,197 +25624,186 @@ class _ShopScreenState extends State<ShopScreen> {
         final screen = MediaQuery.sizeOf(dialogContext);
         final accent = _shopProductColor(product);
         final balanceAfterPurchase = wallet.balance - product.price;
-        return Dialog(
+        return PopDialog(
           key: const ValueKey('shop-purchase-dialog'),
-          backgroundColor: Colors.transparent,
-          insetPadding: const EdgeInsets.all(18),
           child: ConstrainedBox(
             constraints: BoxConstraints(
               maxWidth: 430,
               maxHeight: math.max(300, screen.height - 36),
             ),
-            child: DecoratedBox(
-              decoration: BoxDecoration(
-                color: Colors.white,
-                borderRadius: BorderRadius.circular(28),
-                border: Border.all(color: Colors.white, width: 3),
-                boxShadow: const [
-                  BoxShadow(
-                    color: Color(0x5517284D),
-                    blurRadius: 24,
-                    offset: Offset(0, 13),
-                  ),
-                ],
-              ),
-              child: SingleChildScrollView(
-                padding: const EdgeInsets.all(18),
-                child: Column(
-                  mainAxisSize: MainAxisSize.min,
-                  crossAxisAlignment: CrossAxisAlignment.stretch,
-                  children: [
-                    Row(
-                      children: [
-                        Container(
-                          width: 44,
-                          height: 44,
-                          decoration: BoxDecoration(
-                            color: accent,
-                            borderRadius: BorderRadius.circular(14),
-                            boxShadow: [
-                              BoxShadow(
-                                color: accent.withValues(alpha: .32),
-                                blurRadius: 9,
-                                offset: const Offset(0, 5),
-                              ),
-                            ],
-                          ),
-                          child: const Icon(
-                            Icons.shopping_bag_rounded,
-                            color: Colors.white,
-                          ),
+            child: SingleChildScrollView(
+              padding: const EdgeInsets.all(18),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  Row(
+                    children: [
+                      Container(
+                        width: 44,
+                        height: 44,
+                        decoration: BoxDecoration(
+                          color: accent,
+                          borderRadius: BorderRadius.circular(14),
+                          boxShadow: [
+                            BoxShadow(
+                              color: accent.withValues(alpha: .32),
+                              blurRadius: 9,
+                              offset: const Offset(0, 5),
+                            ),
+                          ],
                         ),
-                        const SizedBox(width: 11),
+                        child: const Icon(
+                          Icons.shopping_bag_rounded,
+                          color: Colors.white,
+                        ),
+                      ),
+                      const SizedBox(width: 11),
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            const PopText(
+                              'VISTA PREVIA',
+                              style: TextStyle(
+                                color: Color(0xFFC8D6F2),
+                                fontSize: 10,
+                                fontWeight: FontWeight.w900,
+                                letterSpacing: .6,
+                              ),
+                            ),
+                            _AutoFitSingleLineText(
+                              product.name,
+                              style: const TextStyle(
+                                color: Colors.white,
+                                fontSize: 21,
+                                fontWeight: FontWeight.w900,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                      IconButton(
+                        tooltip: appTranslate(dialogContext, 'Cerrar'),
+                        onPressed: () => Navigator.pop(dialogContext, false),
+                        icon: const Icon(
+                          Icons.close_rounded,
+                          color: Colors.white,
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 14),
+                  SizedBox(
+                    height: 174,
+                    child: _ShopProductPreview(product: product),
+                  ),
+                  const SizedBox(height: 14),
+                  Container(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 13,
+                      vertical: 11,
+                    ),
+                    decoration: BoxDecoration(
+                      color: Colors.white.withValues(alpha: .10),
+                      borderRadius: BorderRadius.circular(16),
+                      border: Border.all(
+                        color: Colors.white.withValues(alpha: .20),
+                      ),
+                    ),
+                    child: Row(
+                      children: [
                         Expanded(
                           child: Column(
                             crossAxisAlignment: CrossAxisAlignment.start,
                             children: [
                               const PopText(
-                                'VISTA PREVIA',
+                                'TU SALDO',
                                 style: TextStyle(
-                                  color: Color(0xFF667085),
-                                  fontSize: 10,
+                                  color: Color(0xFFC8D6F2),
+                                  fontSize: 9,
                                   fontWeight: FontWeight.w900,
-                                  letterSpacing: .6,
                                 ),
                               ),
-                              _AutoFitSingleLineText(
-                                product.name,
+                              PopText(
+                                '🪙 ${_formatCoins(wallet.balance)}',
                                 style: const TextStyle(
-                                  color: PopColors.navy,
-                                  fontSize: 21,
+                                  color: Colors.white,
                                   fontWeight: FontWeight.w900,
                                 ),
                               ),
                             ],
                           ),
                         ),
-                        IconButton(
-                          tooltip: appTranslate(dialogContext, 'Cerrar'),
-                          onPressed: () => Navigator.pop(dialogContext, false),
-                          icon: const Icon(Icons.close_rounded),
+                        const Icon(
+                          Icons.arrow_forward_rounded,
+                          color: Color(0xFF98A2B3),
+                        ),
+                        Expanded(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.end,
+                            children: [
+                              const PopText(
+                                'DESPUÉS DE COMPRAR',
+                                textAlign: TextAlign.end,
+                                style: TextStyle(
+                                  color: Color(0xFFC8D6F2),
+                                  fontSize: 9,
+                                  fontWeight: FontWeight.w900,
+                                ),
+                              ),
+                              PopText(
+                                '🪙 ${_formatCoins(balanceAfterPurchase)}',
+                                style: TextStyle(
+                                  color: balanceAfterPurchase >= 0
+                                      ? PopColors.green
+                                      : PopColors.red,
+                                  fontWeight: FontWeight.w900,
+                                ),
+                              ),
+                            ],
+                          ),
                         ),
                       ],
                     ),
-                    const SizedBox(height: 14),
-                    SizedBox(
-                      height: 174,
-                      child: _ShopProductPreview(product: product),
+                  ),
+                  const SizedBox(height: 10),
+                  const PopText(
+                    'Artículo cosmético · no da ventajas',
+                    textAlign: TextAlign.center,
+                    style: TextStyle(
+                      color: Color(0xFF667085),
+                      fontSize: 11,
+                      fontWeight: FontWeight.w700,
                     ),
-                    const SizedBox(height: 14),
-                    Container(
-                      padding: const EdgeInsets.symmetric(
-                        horizontal: 13,
-                        vertical: 11,
-                      ),
-                      decoration: BoxDecoration(
-                        color: PopColors.cloud,
-                        borderRadius: BorderRadius.circular(16),
-                        border: Border.all(color: const Color(0xFFDDE5F2)),
-                      ),
-                      child: Row(
-                        children: [
-                          Expanded(
-                            child: Column(
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: [
-                                const PopText(
-                                  'TU SALDO',
-                                  style: TextStyle(
-                                    color: Color(0xFF667085),
-                                    fontSize: 9,
-                                    fontWeight: FontWeight.w900,
-                                  ),
-                                ),
-                                PopText(
-                                  '🪙 ${_formatCoins(wallet.balance)}',
-                                  style: const TextStyle(
-                                    color: PopColors.navy,
-                                    fontWeight: FontWeight.w900,
-                                  ),
-                                ),
-                              ],
-                            ),
-                          ),
-                          const Icon(
-                            Icons.arrow_forward_rounded,
-                            color: Color(0xFF98A2B3),
-                          ),
-                          Expanded(
-                            child: Column(
-                              crossAxisAlignment: CrossAxisAlignment.end,
-                              children: [
-                                const PopText(
-                                  'DESPUÉS DE COMPRAR',
-                                  textAlign: TextAlign.end,
-                                  style: TextStyle(
-                                    color: Color(0xFF667085),
-                                    fontSize: 9,
-                                    fontWeight: FontWeight.w900,
-                                  ),
-                                ),
-                                PopText(
-                                  '🪙 ${_formatCoins(balanceAfterPurchase)}',
-                                  style: TextStyle(
-                                    color: balanceAfterPurchase >= 0
-                                        ? PopColors.green
-                                        : PopColors.red,
-                                    fontWeight: FontWeight.w900,
-                                  ),
-                                ),
-                              ],
-                            ),
-                          ),
-                        ],
-                      ),
-                    ),
-                    const SizedBox(height: 10),
-                    const PopText(
-                      'Artículo cosmético · no da ventajas',
-                      textAlign: TextAlign.center,
-                      style: TextStyle(
-                        color: Color(0xFF667085),
-                        fontSize: 11,
-                        fontWeight: FontWeight.w700,
-                      ),
-                    ),
-                    const SizedBox(height: 14),
-                    SizedBox(
-                      height: 56,
-                      child: FilledButton.icon(
-                        key: const ValueKey('shop-confirm-purchase'),
-                        style: FilledButton.styleFrom(
-                          backgroundColor: accent,
-                          padding: const EdgeInsets.symmetric(
-                            horizontal: 12,
-                            vertical: 8,
-                          ),
-                          shape: RoundedRectangleBorder(
-                            borderRadius: BorderRadius.circular(16),
-                          ),
+                  ),
+                  const SizedBox(height: 14),
+                  SizedBox(
+                    height: 56,
+                    child: FilledButton.icon(
+                      key: const ValueKey('shop-confirm-purchase'),
+                      style: FilledButton.styleFrom(
+                        backgroundColor: accent,
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 12,
+                          vertical: 8,
                         ),
-                        onPressed: () => Navigator.pop(dialogContext, true),
-                        icon: const Icon(Icons.monetization_on_rounded),
-                        label: FittedBox(
-                          fit: BoxFit.scaleDown,
-                          child: PopText(
-                            'COMPRAR · 🪙 ${_formatCoins(product.price)}',
-                            style: const TextStyle(fontWeight: FontWeight.w900),
-                          ),
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(16),
+                        ),
+                      ),
+                      onPressed: () => Navigator.pop(dialogContext, true),
+                      icon: const Icon(Icons.monetization_on_rounded),
+                      label: FittedBox(
+                        fit: BoxFit.scaleDown,
+                        child: PopText(
+                          'COMPRAR · 🪙 ${_formatCoins(product.price)}',
+                          style: const TextStyle(fontWeight: FontWeight.w900),
                         ),
                       ),
                     ),
-                  ],
-                ),
+                  ),
+                ],
               ),
             ),
           ),
@@ -25451,7 +27818,7 @@ class _HomeProfileDialog extends StatelessWidget {
   Future<void> _deleteAccountAndData(BuildContext context) async {
     final confirmed = await showDialog<bool>(
       context: context,
-      builder: (dialogContext) => AlertDialog(
+      builder: (dialogContext) => PopAlertDialog(
         icon: const Icon(
           Icons.delete_forever_rounded,
           color: PopColors.red,
@@ -25509,7 +27876,7 @@ class _HomeProfileDialog extends StatelessWidget {
           barrierDismissible: false,
           builder: (_) => const PopScope(
             canPop: false,
-            child: AlertDialog(
+            child: PopAlertDialog(
               key: ValueKey('account-deletion-progress'),
               content: Row(
                 children: [
@@ -25535,7 +27902,7 @@ class _HomeProfileDialog extends StatelessWidget {
                   'intacta.';
         final retry = await showDialog<bool>(
           context: context,
-          builder: (dialogContext) => AlertDialog(
+          builder: (dialogContext) => PopAlertDialog(
             key: const ValueKey('account-deletion-retry'),
             icon: const Icon(Icons.cloud_off_rounded, color: PopColors.red),
             title: const PopText('No se completó el borrado'),
@@ -25572,312 +27939,264 @@ class _HomeProfileDialog extends StatelessWidget {
         elevation: 0,
         child: ConstrainedBox(
           constraints: BoxConstraints(maxWidth: 460, maxHeight: maxHeight),
-          child: ClipRRect(
-            borderRadius: BorderRadius.circular(32),
-            child: DecoratedBox(
-              decoration: BoxDecoration(
-                gradient: const LinearGradient(
-                  begin: Alignment.topLeft,
-                  end: Alignment.bottomRight,
-                  colors: [
-                    Color(0xFF103779),
-                    PopColors.blue,
-                    Color(0xFF6947D6),
-                  ],
-                ),
-                border: Border.all(color: Colors.white, width: 3),
-                borderRadius: BorderRadius.circular(32),
-                boxShadow: const [
-                  BoxShadow(
-                    color: Color(0x6607132D),
-                    blurRadius: 25,
-                    offset: Offset(0, 14),
-                  ),
-                ],
-              ),
-              child: Stack(
+          child: PopDialogSurface(
+            borderRadius: 30,
+            child: SingleChildScrollView(
+              padding: const EdgeInsets.all(22),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
-                  const Positioned.fill(
-                    child: ExcludeSemantics(
-                      child: CustomPaint(
-                        painter: _HomeArcadeBackdropPainter(1),
-                      ),
-                    ),
-                  ),
-                  SingleChildScrollView(
-                    padding: const EdgeInsets.all(22),
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.stretch,
-                      children: [
-                        Row(
-                          children: [
-                            Container(
-                              width: 46,
-                              height: 46,
-                              decoration: BoxDecoration(
-                                color: PopColors.yellow,
-                                borderRadius: BorderRadius.circular(15),
-                                border: Border.all(
-                                  color: Colors.white,
-                                  width: 2,
-                                ),
-                                boxShadow: const [
-                                  BoxShadow(
-                                    color: Color(0x3D000000),
-                                    blurRadius: 7,
-                                    offset: Offset(0, 4),
-                                  ),
-                                ],
-                              ),
-                              child: const Icon(
-                                Icons.person_rounded,
-                                color: PopColors.navy,
-                              ),
-                            ),
-                            const SizedBox(width: 11),
-                            const Expanded(
-                              child: PopText(
-                                'Perfil',
-                                style: TextStyle(
-                                  color: Colors.white,
-                                  fontSize: 25,
-                                  fontWeight: FontWeight.w900,
-                                  shadows: [
-                                    Shadow(
-                                      color: Color(0x55000000),
-                                      offset: Offset(0, 2),
-                                      blurRadius: 4,
-                                    ),
-                                  ],
-                                ),
-                              ),
-                            ),
-                            IconButton(
-                              key: const ValueKey('home-profile-close'),
-                              tooltip: appTranslate(context, 'Cerrar'),
-                              style: IconButton.styleFrom(
-                                backgroundColor: Colors.white.withValues(
-                                  alpha: .16,
-                                ),
-                                foregroundColor: Colors.white,
-                              ),
-                              onPressed: () => Navigator.pop(context, false),
-                              icon: const Icon(Icons.close_rounded),
+                  Row(
+                    children: [
+                      Container(
+                        width: 46,
+                        height: 46,
+                        decoration: BoxDecoration(
+                          color: PopColors.yellow,
+                          borderRadius: BorderRadius.circular(15),
+                          border: Border.all(color: Colors.white, width: 2),
+                          boxShadow: const [
+                            BoxShadow(
+                              color: Color(0x3D000000),
+                              blurRadius: 7,
+                              offset: Offset(0, 4),
                             ),
                           ],
                         ),
-                        const SizedBox(height: 18),
-                        Container(
-                          padding: const EdgeInsets.fromLTRB(18, 20, 18, 18),
-                          decoration: BoxDecoration(
-                            color: const Color(
-                              0xFF071B40,
-                            ).withValues(alpha: .56),
-                            borderRadius: BorderRadius.circular(26),
-                            border: Border.all(
-                              color: Colors.white.withValues(alpha: .34),
-                              width: 1.5,
-                            ),
-                          ),
-                          child: Column(
-                            children: [
-                              Container(
-                                width: 92,
-                                height: 92,
-                                alignment: Alignment.center,
-                                decoration: BoxDecoration(
-                                  gradient: const LinearGradient(
-                                    begin: Alignment.topLeft,
-                                    end: Alignment.bottomRight,
-                                    colors: [
-                                      Color(0xFFFFE168),
-                                      PopColors.yellow,
-                                      Color(0xFFFFA924),
-                                    ],
-                                  ),
-                                  shape: BoxShape.circle,
-                                  border: Border.all(
-                                    color: Colors.white,
-                                    width: 4,
-                                  ),
-                                  boxShadow: const [
-                                    BoxShadow(
-                                      color: Color(0x66000000),
-                                      blurRadius: 12,
-                                      offset: Offset(0, 7),
-                                    ),
-                                  ],
-                                ),
-                                child: _AvatarArt(
-                                  key: ValueKey(
-                                    'profile-avatar-${avatarId ?? 'default'}',
-                                  ),
-                                  avatarId: avatarId,
-                                  size: 82,
-                                  withFrame: false,
-                                ),
-                              ),
-                              const SizedBox(height: 13),
-                              _AutoFitSingleLineText(
-                                '${profile.name} ${profile.flag}',
-                                alignment: Alignment.center,
-                                textAlign: TextAlign.center,
-                                style: const TextStyle(
-                                  color: Colors.white,
-                                  fontSize: 26,
-                                  fontWeight: FontWeight.w900,
-                                  letterSpacing: -.5,
-                                ),
-                              ),
-                              const SizedBox(height: 7),
-                              Container(
-                                padding: const EdgeInsets.symmetric(
-                                  horizontal: 11,
-                                  vertical: 5,
-                                ),
-                                decoration: BoxDecoration(
-                                  color: PopColors.yellow,
-                                  borderRadius: BorderRadius.circular(20),
-                                ),
-                                child: PopText(
-                                  'Nv. ${profile.level}',
-                                  style: const TextStyle(
-                                    color: PopColors.navy,
-                                    fontSize: 11,
-                                    fontWeight: FontWeight.w900,
-                                  ),
-                                ),
-                              ),
-                              const SizedBox(height: 13),
-                              Container(
-                                width: double.infinity,
-                                padding: const EdgeInsets.symmetric(
-                                  horizontal: 12,
-                                  vertical: 11,
-                                ),
-                                decoration: BoxDecoration(
-                                  color: Colors.white.withValues(alpha: .12),
-                                  borderRadius: BorderRadius.circular(14),
-                                  border: Border.all(
-                                    color: Colors.white.withValues(alpha: .18),
-                                  ),
-                                ),
-                                child: Row(
-                                  children: [
-                                    const Icon(
-                                      Icons.email_rounded,
-                                      color: Colors.white70,
-                                      size: 19,
-                                    ),
-                                    const SizedBox(width: 8),
-                                    Expanded(
-                                      child: _AutoFitSingleLineText(
-                                        profile.email,
-                                        style: const TextStyle(
-                                          color: Colors.white,
-                                          fontSize: 13,
-                                          fontWeight: FontWeight.w700,
-                                        ),
-                                      ),
-                                    ),
-                                  ],
-                                ),
+                        child: const Icon(
+                          Icons.person_rounded,
+                          color: PopColors.navy,
+                        ),
+                      ),
+                      const SizedBox(width: 11),
+                      const Expanded(
+                        child: PopText(
+                          'Perfil',
+                          style: TextStyle(
+                            color: Colors.white,
+                            fontSize: 25,
+                            fontWeight: FontWeight.w900,
+                            shadows: [
+                              Shadow(
+                                color: Color(0x55000000),
+                                offset: Offset(0, 2),
+                                blurRadius: 4,
                               ),
                             ],
                           ),
                         ),
-                        const SizedBox(height: 16),
-                        if (authGateway.currentAccount != null) ...[
-                          Container(
-                            padding: const EdgeInsets.all(12),
-                            decoration: BoxDecoration(
-                              color: Colors.white.withValues(alpha: .13),
-                              borderRadius: BorderRadius.circular(16),
-                              border: Border.all(
-                                color: Colors.white.withValues(alpha: .22),
-                              ),
-                            ),
-                            child: Row(
-                              children: [
-                                const Icon(
-                                  Icons.verified_user_rounded,
-                                  color: PopColors.yellow,
-                                ),
-                                const SizedBox(width: 9),
-                                const Expanded(
-                                  child: PopText(
-                                    'Cuenta protegida con correo y contraseña',
-                                    style: TextStyle(
-                                      color: Colors.white,
-                                      fontSize: 11,
-                                      fontWeight: FontWeight.w800,
-                                    ),
-                                  ),
-                                ),
+                      ),
+                      IconButton(
+                        key: const ValueKey('home-profile-close'),
+                        tooltip: appTranslate(context, 'Cerrar'),
+                        style: IconButton.styleFrom(
+                          backgroundColor: Colors.white.withValues(alpha: .16),
+                          foregroundColor: Colors.white,
+                        ),
+                        onPressed: () => Navigator.pop(context, false),
+                        icon: const Icon(Icons.close_rounded),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 18),
+                  Container(
+                    padding: const EdgeInsets.fromLTRB(18, 20, 18, 18),
+                    decoration: BoxDecoration(
+                      color: const Color(0xFF071B40).withValues(alpha: .56),
+                      borderRadius: BorderRadius.circular(26),
+                      border: Border.all(
+                        color: Colors.white.withValues(alpha: .34),
+                        width: 1.5,
+                      ),
+                    ),
+                    child: Column(
+                      children: [
+                        Container(
+                          width: 92,
+                          height: 92,
+                          alignment: Alignment.center,
+                          decoration: BoxDecoration(
+                            gradient: const LinearGradient(
+                              begin: Alignment.topLeft,
+                              end: Alignment.bottomRight,
+                              colors: [
+                                Color(0xFFFFE168),
+                                PopColors.yellow,
+                                Color(0xFFFFA924),
                               ],
                             ),
+                            shape: BoxShape.circle,
+                            border: Border.all(color: Colors.white, width: 4),
+                            boxShadow: const [
+                              BoxShadow(
+                                color: Color(0x66000000),
+                                blurRadius: 12,
+                                offset: Offset(0, 7),
+                              ),
+                            ],
                           ),
-                          const SizedBox(height: 10),
-                          Row(
+                          child: _AvatarArt(
+                            key: ValueKey(
+                              'profile-avatar-${avatarId ?? 'default'}',
+                            ),
+                            avatarId: avatarId,
+                            size: 82,
+                            withFrame: false,
+                          ),
+                        ),
+                        const SizedBox(height: 13),
+                        _AutoFitSingleLineText(
+                          '${profile.name} ${profile.flag}',
+                          alignment: Alignment.center,
+                          textAlign: TextAlign.center,
+                          style: const TextStyle(
+                            color: Colors.white,
+                            fontSize: 26,
+                            fontWeight: FontWeight.w900,
+                            letterSpacing: -.5,
+                          ),
+                        ),
+                        const SizedBox(height: 7),
+                        Container(
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 11,
+                            vertical: 5,
+                          ),
+                          decoration: BoxDecoration(
+                            color: PopColors.yellow,
+                            borderRadius: BorderRadius.circular(20),
+                          ),
+                          child: PopText(
+                            'Nv. ${profile.level}',
+                            style: const TextStyle(
+                              color: PopColors.navy,
+                              fontSize: 11,
+                              fontWeight: FontWeight.w900,
+                            ),
+                          ),
+                        ),
+                        const SizedBox(height: 13),
+                        Container(
+                          width: double.infinity,
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 12,
+                            vertical: 11,
+                          ),
+                          decoration: BoxDecoration(
+                            color: Colors.white.withValues(alpha: .12),
+                            borderRadius: BorderRadius.circular(14),
+                            border: Border.all(
+                              color: Colors.white.withValues(alpha: .18),
+                            ),
+                          ),
+                          child: Row(
                             children: [
+                              const Icon(
+                                Icons.email_rounded,
+                                color: Colors.white70,
+                                size: 19,
+                              ),
+                              const SizedBox(width: 8),
                               Expanded(
-                                child: OutlinedButton.icon(
-                                  key: const ValueKey(
-                                    'profile-change-password',
+                                child: _AutoFitSingleLineText(
+                                  profile.email,
+                                  style: const TextStyle(
+                                    color: Colors.white,
+                                    fontSize: 13,
+                                    fontWeight: FontWeight.w700,
                                   ),
-                                  style: OutlinedButton.styleFrom(
-                                    foregroundColor: Colors.white,
-                                    side: const BorderSide(color: Colors.white),
-                                  ),
-                                  onPressed: () => showDialog<void>(
-                                    context: context,
-                                    builder: (_) => _ChangePasswordDialog(
-                                      authGateway: authGateway,
-                                    ),
-                                  ),
-                                  icon: const Icon(Icons.password_rounded),
-                                  label: const PopText('Cambiar clave'),
                                 ),
                               ),
                             ],
                           ),
-                          const SizedBox(height: 10),
-                        ],
-                        FilledButton.icon(
-                          key: const ValueKey('home-profile-edit'),
-                          style: FilledButton.styleFrom(
-                            backgroundColor: PopColors.yellow,
-                            foregroundColor: PopColors.navy,
-                            side: const BorderSide(
-                              color: Colors.white,
-                              width: 2,
-                            ),
-                            elevation: 8,
-                            shadowColor: const Color(0x66000000),
-                          ),
-                          onPressed: () => Navigator.pop(context, true),
-                          icon: const Icon(Icons.edit_rounded),
-                          label: const PopText(
-                            'Editar perfil',
-                            style: TextStyle(fontWeight: FontWeight.w900),
-                          ),
-                        ),
-                        const SizedBox(height: 10),
-                        OutlinedButton.icon(
-                          key: const ValueKey('home-profile-delete'),
-                          style: OutlinedButton.styleFrom(
-                            foregroundColor: Colors.white,
-                            side: const BorderSide(
-                              color: Color(0xFFFFA3A9),
-                              width: 1.5,
-                            ),
-                          ),
-                          onPressed: () => _deleteAccountAndData(context),
-                          icon: const Icon(Icons.delete_forever_rounded),
-                          label: const PopText('Eliminar cuenta y datos'),
                         ),
                       ],
                     ),
+                  ),
+                  const SizedBox(height: 16),
+                  if (authGateway.currentAccount != null) ...[
+                    Container(
+                      padding: const EdgeInsets.all(12),
+                      decoration: BoxDecoration(
+                        color: Colors.white.withValues(alpha: .13),
+                        borderRadius: BorderRadius.circular(16),
+                        border: Border.all(
+                          color: Colors.white.withValues(alpha: .22),
+                        ),
+                      ),
+                      child: Row(
+                        children: [
+                          const Icon(
+                            Icons.verified_user_rounded,
+                            color: PopColors.yellow,
+                          ),
+                          const SizedBox(width: 9),
+                          const Expanded(
+                            child: PopText(
+                              'Cuenta protegida con correo y contraseña',
+                              style: TextStyle(
+                                color: Colors.white,
+                                fontSize: 11,
+                                fontWeight: FontWeight.w800,
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                    const SizedBox(height: 10),
+                    Row(
+                      children: [
+                        Expanded(
+                          child: OutlinedButton.icon(
+                            key: const ValueKey('profile-change-password'),
+                            style: OutlinedButton.styleFrom(
+                              foregroundColor: Colors.white,
+                              side: const BorderSide(color: Colors.white),
+                            ),
+                            onPressed: () => showDialog<void>(
+                              context: context,
+                              builder: (_) => _ChangePasswordDialog(
+                                authGateway: authGateway,
+                              ),
+                            ),
+                            icon: const Icon(Icons.password_rounded),
+                            label: const PopText('Cambiar clave'),
+                          ),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 10),
+                  ],
+                  FilledButton.icon(
+                    key: const ValueKey('home-profile-edit'),
+                    style: FilledButton.styleFrom(
+                      backgroundColor: PopColors.yellow,
+                      foregroundColor: PopColors.navy,
+                      side: const BorderSide(color: Colors.white, width: 2),
+                      elevation: 8,
+                      shadowColor: const Color(0x66000000),
+                    ),
+                    onPressed: () => Navigator.pop(context, true),
+                    icon: const Icon(Icons.edit_rounded),
+                    label: const PopText(
+                      'Editar perfil',
+                      style: TextStyle(fontWeight: FontWeight.w900),
+                    ),
+                  ),
+                  const SizedBox(height: 10),
+                  OutlinedButton.icon(
+                    key: const ValueKey('home-profile-delete'),
+                    style: OutlinedButton.styleFrom(
+                      foregroundColor: Colors.white,
+                      side: const BorderSide(
+                        color: Color(0xFFFFA3A9),
+                        width: 1.5,
+                      ),
+                    ),
+                    onPressed: () => _deleteAccountAndData(context),
+                    icon: const Icon(Icons.delete_forever_rounded),
+                    label: const PopText('Eliminar cuenta y datos'),
                   ),
                 ],
               ),
@@ -25941,7 +28260,7 @@ class _ChangePasswordDialogState extends State<_ChangePasswordDialog> {
   }
 
   @override
-  Widget build(BuildContext context) => AlertDialog(
+  Widget build(BuildContext context) => PopAlertDialog(
     key: const ValueKey('change-password-dialog'),
     icon: const Icon(Icons.password_rounded, color: PopColors.blue, size: 38),
     title: const PopText('Cambiar contraseña'),
@@ -26104,6 +28423,10 @@ class _SettingsScreenState extends State<SettingsScreen> {
   bool music = true;
   bool vibration = true;
   bool rollGuide = true;
+  bool minimap = true;
+  bool diceHandEffect = true;
+  bool moveCallouts = true;
+  bool moveChoicePanel = true;
   bool anonymousAnalytics = false;
   DiceHandPreference diceHand = DiceHandPreference.right;
   final AppLanguageController localLanguage = AppLanguageController();
@@ -26118,7 +28441,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
           (analytics as AnalyticsPrivacyControl).analyticsCollectionEnabled;
     }
     localLanguage.initialize();
-    _loadSettings();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) unawaited(_loadSettings());
+    });
   }
 
   @override
@@ -26130,11 +28455,20 @@ class _SettingsScreenState extends State<SettingsScreen> {
   Future<void> _loadSettings() async {
     final store = await SharedPreferences.getInstance();
     if (!mounted) return;
+    final tabletViewport = _isTabletGameViewport(context);
     setState(() {
       sound = store.getBool('settings_sound') ?? true;
       music = store.getBool('settings_music') ?? true;
       vibration = store.getBool('settings_vibration') ?? true;
       rollGuide = store.getBool(settingsRollGuideKey) ?? true;
+      minimap = store.containsKey(settingsMinimapKey)
+          ? store.getBool(settingsMinimapKey) ?? !tabletViewport
+          : !tabletViewport;
+      diceHandEffect = store.containsKey(settingsDiceHandEffectKey)
+          ? store.getBool(settingsDiceHandEffectKey) ?? !tabletViewport
+          : !tabletViewport;
+      moveCallouts = store.getBool(settingsMoveCalloutsKey) ?? true;
+      moveChoicePanel = store.getBool(settingsMoveChoicePanelKey) ?? true;
       diceHand = diceHandPreferenceFromStorage(
         store.getString(settingsDiceHandKey),
       );
@@ -26195,7 +28529,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
   void _showLanguagePicker(AppLanguageController language) {
     showDialog<void>(
       context: context,
-      builder: (dialogContext) => AlertDialog(
+      builder: (dialogContext) => PopAlertDialog(
         key: const ValueKey('settings-language-selector'),
         icon: const Icon(
           Icons.language_rounded,
@@ -26405,6 +28739,45 @@ class _SettingsScreenState extends State<SettingsScreen> {
                             ),
                             secondary: const Icon(Icons.touch_app_rounded),
                           ),
+                          SwitchListTile(
+                            key: const ValueKey('settings-minimap'),
+                            value: minimap,
+                            onChanged: (value) {
+                              setState(() => minimap = value);
+                              _setPreference(settingsMinimapKey, value);
+                            },
+                            title: const PopText('Minimapa'),
+                            subtitle: const PopText(
+                              'Muestra una vista pequeña del tablero durante la partida',
+                            ),
+                            secondary: const Icon(Icons.map_rounded),
+                          ),
+                          SwitchListTile(
+                            key: const ValueKey('settings-move-callouts'),
+                            value: moveCallouts,
+                            onChanged: (value) {
+                              setState(() => moveCallouts = value);
+                              _setPreference(settingsMoveCalloutsKey, value);
+                            },
+                            title: const PopText('Burbujas de movimiento'),
+                            subtitle: const PopText(
+                              'Muestra u oculta los mensajes sobre las casillas',
+                            ),
+                            secondary: const Icon(Icons.forum_rounded),
+                          ),
+                          SwitchListTile(
+                            key: const ValueKey('settings-move-choice-panel'),
+                            value: moveChoicePanel,
+                            onChanged: (value) {
+                              setState(() => moveChoicePanel = value);
+                              _setPreference(settingsMoveChoicePanelKey, value);
+                            },
+                            title: const PopText('Panel para elegir pasos'),
+                            subtitle: const PopText(
+                              'Muestra u oculta la barra de pasos debajo del tablero',
+                            ),
+                            secondary: const Icon(Icons.view_agenda_rounded),
+                          ),
                           AnimatedOpacity(
                             duration: const Duration(milliseconds: 180),
                             opacity: rollGuide ? 1 : .48,
@@ -26442,6 +28815,32 @@ class _SettingsScreenState extends State<SettingsScreen> {
                                     ],
                                   ),
                                   const SizedBox(height: 10),
+                                  SwitchListTile(
+                                    key: const ValueKey(
+                                      'settings-dice-hand-effect',
+                                    ),
+                                    contentPadding: EdgeInsets.zero,
+                                    value: diceHandEffect,
+                                    onChanged: rollGuide
+                                        ? (value) {
+                                            setState(
+                                              () => diceHandEffect = value,
+                                            );
+                                            _setPreference(
+                                              settingsDiceHandEffectKey,
+                                              value,
+                                            );
+                                          }
+                                        : null,
+                                    title: const PopText('Efecto de mano'),
+                                    subtitle: const PopText(
+                                      'Muestra la mano animada al lanzar los dados',
+                                    ),
+                                    secondary: const Icon(
+                                      Icons.back_hand_rounded,
+                                    ),
+                                  ),
+                                  const SizedBox(height: 4),
                                   SizedBox(
                                     width: double.infinity,
                                     child: SegmentedButton<DiceHandPreference>(

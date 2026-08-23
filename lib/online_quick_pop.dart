@@ -9,8 +9,9 @@ import 'online_match.dart';
 import 'online_transport.dart';
 import 'online_transport_models.dart';
 
-/// A live two-human Quick Pop match. The two remaining clockwise seats are
-/// filled by CPU players and are driven only by the active room host.
+/// A live Quick Pop match. Between two and four humans are admitted during
+/// the shared search window; any seats still empty at the deadline are filled
+/// by CPU players driven only by the active room host.
 final class OnlineQuickPopPreparedMatch {
   const OnlineQuickPopPreparedMatch({
     required this.room,
@@ -39,22 +40,33 @@ final class OnlineQuickPopBootstrap {
     required QuickPopQueueTicket ticket,
     required QuickPopResolution resolution,
     GameMode mode = GameMode.traditional,
-    Duration hostTimeout = const Duration(seconds: 12),
+    Duration hostTimeout = const Duration(seconds: 25),
     Duration pollInterval = const Duration(milliseconds: 150),
   }) async {
-    if (resolution.kind != QuickPopResolutionKind.human ||
-        resolution.opponentUid == null) {
+    if (resolution.kind != QuickPopResolutionKind.human) {
       throw const OnlineGameSyncException(
         'Quick Pop online requires a human matchmaking result.',
       );
     }
     final localUid = transport.identity.uid;
-    final opponentUid = resolution.opponentUid!;
-    if (opponentUid == localUid ||
+    final humanUids = <String>{
+      if (resolution.participantUids.isNotEmpty)
+        ...resolution.participantUids
+      else ...<String>[
+        localUid,
+        if (resolution.opponentUid != null) resolution.opponentUid!,
+      ],
+    };
+    final isGroup = resolution.groupId != null;
+    if (humanUids.length < 2 ||
+        humanUids.length > LobbySeatColor.values.length ||
+        !humanUids.contains(localUid) ||
         ticket.uid != localUid ||
         ticket.ticketId != resolution.ticketId ||
         resolution.queueKey != ticket.queueKey ||
-        resolution.claimId == null) {
+        (isGroup
+            ? resolution.groupId == null
+            : resolution.claimId == null || resolution.opponentUid == null)) {
       throw const OnlineGameSyncException(
         'A Quick Pop opponent must come from this verified search ticket.',
       );
@@ -67,9 +79,8 @@ final class OnlineQuickPopBootstrap {
         'The Quick Pop launch was abandoned before room preparation.',
       );
     }
-    final humanUids = <String>[localUid, opponentUid]..sort();
-    final hostUid = humanUids.first;
-    final guestUid = humanUids.last;
+    final orderedHumanUids = humanUids.toList()..sort();
+    final hostUid = orderedHumanUids.first;
     final launchMetadata = await transport.quickPopLaunchMetadata(
       ticket: ticket,
       resolution: resolution,
@@ -78,20 +89,53 @@ final class OnlineQuickPopBootstrap {
     final roomCode = _roomCodeFor(resolution.roomId);
 
     if (localUid == hostUid) {
-      final hostName = transport.identity.displayName;
-      final guestName = await _verifiedOpponentDisplayName(
-        transport,
-        opponentUid: guestUid,
-        queueKey: ticket.queueKey,
-        claimId: resolution.claimId!,
-        launchMetadata: launchMetadata,
-      );
+      final names = <String, String>{
+        for (final uid in orderedHumanUids)
+          uid: uid == localUid
+              ? transport.identity.displayName
+              : await _verifiedParticipantDisplayName(
+                  transport,
+                  uid: uid,
+                  queueKey: ticket.queueKey,
+                  resolution: resolution,
+                  launchMetadata: launchMetadata,
+                ),
+      };
       if (await transport.isQuickPopLaunchAbandoned(
         ticket: ticket,
         resolution: resolution,
       )) {
         throw const OnlineGameSyncException(
           'The Quick Pop launch was abandoned before room creation.',
+        );
+      }
+      final members = <String, OnlineRoomMemberRecord>{};
+      final presence = <String, OnlinePresenceRecord>{};
+      for (var index = 0; index < LobbySeatColor.values.length; index++) {
+        final seat = LobbySeatColor.values[index];
+        final humanUid = index < orderedHumanUids.length
+            ? orderedHumanUids[index]
+            : null;
+        final uid = humanUid ?? _cpuUid(resolution.roomId, seat);
+        final isCpu = humanUid == null;
+        members[uid] = OnlineRoomMemberRecord(
+          uid: uid,
+          displayName: isCpu
+              ? _cpuDisplayName(seat)
+              : names[uid] ?? transport.identity.displayName,
+          seat: seat,
+          joinedAtMs: now,
+          ready: true,
+        );
+        presence[uid] = OnlinePresenceRecord(
+          uid: uid,
+          presence: isCpu
+              ? LobbyPresence.connected
+              : LobbyPresence.disconnected,
+          changedAtMs: now,
+          connectionId: isCpu
+              ? 'virtual_${resolution.roomId}'
+              : 'quick_${resolution.roomId}_$uid',
         );
       }
       final room = OnlineRoomRecord(
@@ -102,60 +146,8 @@ final class OnlineQuickPopBootstrap {
         status: RoomStatus.starting,
         mode: mode.name,
         matchFormat: MatchFormat.quickPop.name,
-        members: <String, OnlineRoomMemberRecord>{
-          hostUid: OnlineRoomMemberRecord(
-            uid: hostUid,
-            displayName: hostName,
-            seat: LobbySeatColor.red,
-            joinedAtMs: now,
-            ready: true,
-          ),
-          guestUid: OnlineRoomMemberRecord(
-            uid: guestUid,
-            displayName: guestName,
-            seat: LobbySeatColor.green,
-            joinedAtMs: now,
-            ready: true,
-          ),
-          _cpuUid(
-            resolution.roomId,
-            LobbySeatColor.yellow,
-          ): OnlineRoomMemberRecord(
-            uid: _cpuUid(resolution.roomId, LobbySeatColor.yellow),
-            displayName: 'CPU Rayo',
-            seat: LobbySeatColor.yellow,
-            joinedAtMs: now,
-            ready: true,
-          ),
-          _cpuUid(
-            resolution.roomId,
-            LobbySeatColor.blue,
-          ): OnlineRoomMemberRecord(
-            uid: _cpuUid(resolution.roomId, LobbySeatColor.blue),
-            displayName: 'CPU Pop',
-            seat: LobbySeatColor.blue,
-            joinedAtMs: now,
-            ready: true,
-          ),
-        },
-        presence: <String, OnlinePresenceRecord>{
-          for (final uid in <String>[
-            hostUid,
-            guestUid,
-            _cpuUid(resolution.roomId, LobbySeatColor.yellow),
-            _cpuUid(resolution.roomId, LobbySeatColor.blue),
-          ])
-            uid: OnlinePresenceRecord(
-              uid: uid,
-              presence: uid.startsWith('cpu_')
-                  ? LobbyPresence.connected
-                  : LobbyPresence.disconnected,
-              changedAtMs: now,
-              connectionId: uid.startsWith('cpu_')
-                  ? 'virtual_${resolution.roomId}'
-                  : 'quick_${resolution.roomId}_$uid',
-            ),
-        },
+        members: members,
+        presence: presence,
         revision: 0,
         createdAtMs: now,
         updatedAtMs: now,
@@ -169,7 +161,7 @@ final class OnlineQuickPopBootstrap {
       );
       if (!creation.committed) {
         final existing = OnlineRoomRecord.fromJson(creation.value);
-        _validateExistingRoom(existing, hostUid, humanUids);
+        _validateExistingRoom(existing, hostUid, orderedHumanUids);
       }
     }
 
@@ -177,7 +169,7 @@ final class OnlineQuickPopBootstrap {
       transport,
       roomId: resolution.roomId,
       hostUid: hostUid,
-      humanUids: humanUids,
+      humanUids: orderedHumanUids,
       timeout: hostTimeout,
       pollInterval: pollInterval,
       isAbandoned: () => transport.isQuickPopLaunchAbandoned(
@@ -251,40 +243,70 @@ final class OnlineQuickPopBootstrap {
     );
   }
 
-  static Future<String> _verifiedOpponentDisplayName(
+  static Future<String> _verifiedParticipantDisplayName(
     OnlineTransportClient transport, {
-    required String opponentUid,
+    required String uid,
     required String queueKey,
-    required String claimId,
+    required QuickPopResolution resolution,
     required Map<String, Object?> launchMetadata,
   }) async {
-    final expectedTicketId = launchMetadata['firstUid'] == opponentUid
+    final members = onlineMap(launchMetadata['members']);
+    final member = onlineMap(members[uid]);
+    final expectedTicketId = member['ticketId'] is String
+        ? member['ticketId'] as String
+        : launchMetadata['firstUid'] == uid
         ? launchMetadata['firstTicketId']
-        : launchMetadata['secondUid'] == opponentUid
+        : launchMetadata['secondUid'] == uid
         ? launchMetadata['secondTicketId']
         : null;
     if (expectedTicketId is! String || expectedTicketId.isEmpty) {
       throw const OnlineGameSyncException(
-        'The Quick Pop opponent is missing from the verified launch claim.',
+        'A Quick Pop player is missing from the verified launch group.',
+      );
+    }
+    if (resolution.groupId != null) {
+      // The group protocol admits between two and `LobbySeatColor.values.length`
+      // humans (currently four, but this scales to any future seat count
+      // without changes here). Unlike the legacy pair claim, there is no
+      // exact-record read grant for a group peer's own queue ticket, so an
+      // extra cross read would always be denied by the security rules.
+      // Instead trust this member snapshot: the security rules require the
+      // group writer to prove ownership of a 'waiting' ticket with a matching
+      // ticketId *and* displayName at write time, so the group record is
+      // already an authoritative mirror of that player's ticket.
+      final memberUid = member['uid'];
+      final memberTicketId = member['ticketId'];
+      final displayName = member['displayName'];
+      if (memberUid == uid &&
+          memberTicketId == expectedTicketId &&
+          displayName is String &&
+          displayName.isNotEmpty) {
+        return displayName;
+      }
+      throw const OnlineGameSyncException(
+        'The Quick Pop player ticket does not match the verified launch.',
       );
     }
     final raw = await transport.store.read(
-      '$onlineTransportRoot/quickQueues/$queueKey/$opponentUid',
+      '$onlineTransportRoot/quickQueues/$queueKey/$uid',
     );
     try {
-      final map = onlineMap(raw);
-      final opponent = QuickPopQueueTicket.fromJson(raw, uid: opponentUid);
-      if (map['uid'] == opponentUid &&
-          opponent.ticketId == expectedTicketId &&
-          opponent.queueKey == queueKey &&
-          opponent.claimId == claimId) {
-        return opponent.displayName;
+      final player = QuickPopQueueTicket.fromJson(raw, uid: uid);
+      final ticketMatches =
+          player.ticketId == expectedTicketId &&
+          player.queueKey == queueKey &&
+          player.claimId == resolution.claimId;
+      final expectedDisplayName = member['displayName'];
+      if (ticketMatches &&
+          (expectedDisplayName is! String ||
+              player.displayName == expectedDisplayName)) {
+        return player.displayName;
       }
     } on FormatException {
-      // The generic error below intentionally avoids exposing queue metadata.
+      // Fall through to the generic verification error below.
     }
     throw const OnlineGameSyncException(
-      'The Quick Pop opponent ticket does not match the verified launch claim.',
+      'The Quick Pop player ticket does not match the verified launch.',
     );
   }
 
@@ -312,8 +334,8 @@ final class OnlineQuickPopBootstrap {
       }
       final now = await transport.store.serverNowMs();
       if (now >= expiresAt) {
-        throw const OnlineGameSyncException(
-          'El anfitrión no pudo preparar la partida Quick Pop.',
+        throw OnlineGameSyncException(
+          'El anfitrión no pudo preparar la partida Quick Pop ($roomId).',
         );
       }
       await Future<void>.delayed(
@@ -350,15 +372,45 @@ final class OnlineQuickPopBootstrap {
       await transport.store.read('$onlineTransportRoot/rooms/$roomId'),
     );
     final launch = onlineMap(raw['quickPopLaunch']);
-    if (expected.entries.any((entry) => launch[entry.key] != entry.value)) {
+    if (expected.entries.any(
+      (entry) => !_wireValueEqual(launch[entry.key], entry.value),
+    )) {
       throw const OnlineGameSyncException(
         'La sala Quick Pop no contiene el acuerdo de inicio esperado.',
       );
     }
   }
 
+  static bool _wireValueEqual(Object? left, Object? right) {
+    if (left is Map && right is Map) {
+      if (left.length != right.length) return false;
+      for (final key in left.keys) {
+        if (!right.containsKey(key) ||
+            !_wireValueEqual(left[key], right[key])) {
+          return false;
+        }
+      }
+      return true;
+    }
+    if (left is List && right is List) {
+      return left.length == right.length &&
+          List<bool>.generate(
+            left.length,
+            (index) => _wireValueEqual(left[index], right[index]),
+          ).every((value) => value);
+    }
+    return left == right;
+  }
+
   static String _cpuUid(String roomId, LobbySeatColor seat) =>
       'cpu_${seat.name}_${sha256.convert(roomId.codeUnits).toString().substring(0, 12)}';
+
+  static String _cpuDisplayName(LobbySeatColor seat) => switch (seat) {
+    LobbySeatColor.red => 'CPU Rojo',
+    LobbySeatColor.green => 'CPU Verde',
+    LobbySeatColor.yellow => 'CPU Rayo',
+    LobbySeatColor.blue => 'CPU Pop',
+  };
 
   static RoomCode _roomCodeFor(String roomId) {
     final digest = sha256.convert(roomId.codeUnits).bytes;

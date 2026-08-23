@@ -703,9 +703,11 @@ Regla esencial: los elementos visuales pueden cambiar de textura, forma, imagen,
 - Analytics no recibe nombre, correo, mensajes, bandera, avatar ni otra
   identidad del jugador. La política de privacidad en español e inglés ya
   informa esta medición anónima.
-- Android, iOS y macOS inicializan Firebase. Windows y las plataformas no
-  configuradas mantienen un servicio sin envío para que el juego siga
-  funcionando sin incorporar secretos.
+- Android, iOS y macOS inicializan Firebase con sus registros nativos. Windows
+  usa el registro Web del mismo proyecto mediante `DefaultFirebaseOptions.windows`
+  para que Auth anónimo y Realtime Database compartan salas y partidas con
+  Android/iOS/macOS; no se incorporan secretos nuevos. Linux continúa sin
+  configuración. Analytics conserva el comportamiento sin envío en Windows.
 - Verificación: 267 pruebas aprobadas, análisis estático limpio y
   compilaciones correctas para iPhone Simulator, Android Debug y macOS
   Release.

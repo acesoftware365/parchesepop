@@ -246,8 +246,16 @@ String _translateDynamic(String source) {
       (match) => 'Turn ${match.group(1)} · #${match.group(2)}',
     ),
     (
-      RegExp(r'^(.+) sacó la ficha (\d+) de la cárcel\.$'),
+      RegExp(r'^(.+) sacó la ficha (\d+) de la (cárcel|base)\.$'),
       (match) => '${match.group(1)} moved piece ${match.group(2)} out.',
+    ),
+    (
+      RegExp(
+        r'^Tres dobles: la ficha (\d+) de (.+) volvió a la base\.( La barrera se abrió\.)?$',
+      ),
+      (match) =>
+          'Three doubles: ${match.group(2)}’s piece ${match.group(1)} returned to base.'
+          '${match.group(3) == null ? '' : ' The barrier opened.'}',
     ),
     (
       RegExp(r'^(.+) movió la ficha (\d+) (\d+) pasos\.$'),
@@ -823,6 +831,9 @@ const _english = <String, String>{
   'Juega ahora en este dispositivo': 'Play now on this device',
   'MODO DE JUEGO': 'GAME MODE',
   'QUIÉN PUEDE ENTRAR': 'WHO CAN JOIN',
+  'Panel para elegir pasos': 'Step selection panel',
+  'Muestra u oculta la barra de pasos debajo del tablero':
+      'Show or hide the step bar below the board',
   'PRIVADA': 'PRIVATE',
   'PÚBLICA': 'PUBLIC',
   'Solo entran quienes tengan tu código o invitación.':
@@ -938,10 +949,17 @@ const _english = <String, String>{
       'Confirming the match with the other player…',
   'Luego jugarás contra CPU automáticamente':
       'Then you will automatically play against the CPU',
+  'Al terminar podrás comenzar contra CPU':
+      'When the search ends, you can start against the CPU',
+  'La búsqueda terminó. ¿Quieres comenzar la partida contra CPU?':
+      'The search ended. Do you want to start the match against the CPU?',
+  'COMENZAR PARTIDA': 'START GAME',
   'ONLINE · LISTO': 'ONLINE · READY',
-  'Buscaremos otro jugador durante 10 segundos. Si no aparece nadie, la partida empieza automáticamente contra el CPU.':
-      'We will search for another player for 10 seconds. If no one appears, the match starts automatically against the CPU.',
-  'JUGAR ONLINE · BUSCAR 10 S': 'PLAY ONLINE · SEARCH 10 S',
+  'Busca un rival y empieza en segundos':
+      'Find an opponent and start in seconds',
+  'Buscaremos otro jugador durante 30 segundos. Si no aparece nadie, podrás comenzar la partida contra el CPU.':
+      'We will search for another player for 30 seconds. If no one appears, you can start the match against the CPU.',
+  'JUGAR ONLINE · BUSCAR 30 S': 'PLAY ONLINE · SEARCH 30 S',
   'JUGAR AHORA CONTRA CPU': 'PLAY NOW AGAINST CPU',
   'VOLVER': 'BACK',
   'El servidor no autorizó esta partida. Actualiza el juego e inténtalo otra vez.':
@@ -1560,16 +1578,16 @@ const _english = <String, String>{
   '2 FICHAS': '2 PIECES',
   'Cada jugador usa 2 fichas en el tablero completo de 68 casillas.':
       'Each player uses 2 pieces on the complete 68-space board.',
-  'Las dos fichas empiezan juntas en la salida; no pasan por la cárcel.':
-      'Both pieces begin together on the starting space; they do not wait in base.',
+  'Las dos fichas empiezan dentro de la base; cualquier número puede sacar una.':
+      'Both pieces start inside base; any number can bring one out.',
   'Gana quien lleve primero sus 2 fichas al centro.':
       'The first player to bring both pieces to the center wins.',
   'Empieza de inmediato': 'Start immediately',
   'SIN 5': 'NO 5 NEEDED',
   'No necesitas sacar un 5 para comenzar: toca una ficha y elige un movimiento legal.':
       'You do not need a 5 to begin: tap a piece and choose a legal move.',
-  'La pareja inicial está protegida y no bloquea el paso como barrera.':
-      'The initial pair is protected and does not block the route like a blockade.',
+  'Las fichas que salen pueden formar una barrera normal de dos fichas.':
+      'Pieces that leave can form a normal two-piece blockade.',
   'Cuando solo existe una jugada legal, el juego la realiza automáticamente.':
       'When only one legal move exists, the game performs it automatically.',
   'Dados y decisiones': 'Dice and decisions',
@@ -1582,8 +1600,8 @@ const _english = <String, String>{
   'Capturas y regreso': 'Captures and return',
   'Captura al caer exactamente sobre una ficha rival fuera de una casilla segura.':
       'Capture by landing exactly on a rival piece outside a safe space.',
-  'La ficha capturada vuelve a su salida, no a una cárcel.':
-      'A captured piece returns to its starting space, not to base.',
+  'La ficha capturada vuelve a la base y puede salir con cualquier número.':
+      'A captured piece returns to base and can leave with any number.',
   'Capturar concede +20 y completar una ficha concede +10.':
       'A capture grants +20, and bringing a piece home grants +10.',
   'Reglas que se conservan': 'Rules that remain',
@@ -1591,8 +1609,8 @@ const _english = <String, String>{
       'Safe spaces, blockades, colored entrances, and 7-space home lanes remain.',
   'Quick Pop acorta la partida sin recortar el recorrido original.':
       'Quick Pop shortens the match without trimming the original route.',
-  'Quick Pop: tablero completo, 2 fichas ya en salida y una carrera más corta sin esperar un 5.':
-      'Quick Pop: the complete board, 2 pieces already at the start, and a shorter race without waiting for a 5.',
+  'Quick Pop: tablero completo, 2 fichas en la base y una carrera más corta sin esperar un 5.':
+      'Quick Pop: the complete board, 2 pieces in base, and a shorter race without waiting for a 5.',
   '2 fichas': '2 pieces',
   'Sin 5 de salida': 'No starting 5',
   'Objetivo y tablero': 'Goal and board',

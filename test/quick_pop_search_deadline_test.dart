@@ -16,10 +16,16 @@ final class _Resolution {
 final class _Prepared {}
 
 final class _SearchHarness {
-  _SearchHarness({this.connectFailure, this.abandonment}) {
+  _SearchHarness({
+    this.connectFailure,
+    this.abandonment,
+    this.deferFallbackUntilDeadline = false,
+    this.resolutionResults,
+  }) {
     search =
         QuickPopDeadlineSearch<_Connection, _Ticket, _Resolution, _Prepared>(
           window: const Duration(seconds: 5),
+          deferFallbackUntilDeadline: deferFallbackUntilDeadline,
           elapsed: () => elapsed,
           connect: () {
             connectCalls++;
@@ -33,6 +39,10 @@ final class _SearchHarness {
           },
           resolve: (_, _) {
             resolveCalls++;
+            final results = resolutionResults;
+            if (results != null && results.isNotEmpty) {
+              return Future<_Resolution?>.value(results.removeAt(0));
+            }
             return resolution.future;
           },
           isHumanResolution: (result) => result.human,
@@ -84,6 +94,8 @@ final class _SearchHarness {
 
   final Object? connectFailure;
   final Completer<void>? abandonment;
+  final bool deferFallbackUntilDeadline;
+  final List<_Resolution?>? resolutionResults;
   final connection = Completer<_Connection>();
   final ticket = Completer<_Ticket>();
   final resolution = Completer<_Resolution?>();
@@ -132,7 +144,7 @@ Future<void> _flushAsyncWork([int turns = 1]) async {
 
 void main() {
   test(
-    'slow connect falls back once at five seconds and ignores late work',
+    'slow connect falls back once at the deadline and ignores late work',
     () async {
       final harness = _SearchHarness();
       final terminal = harness.search.start();
@@ -168,6 +180,47 @@ void main() {
       expect(harness.enqueueCalls, 0);
     },
   );
+
+  test('desktop startup failure keeps the ten-second search promise', () async {
+    final failure = StateError('desktop Firebase warming up');
+    final harness = _SearchHarness(
+      connectFailure: failure,
+      deferFallbackUntilDeadline: true,
+    );
+    final terminal = harness.search.start();
+    await _flushAsyncWork();
+
+    expect(harness.fallbackResults, isEmpty);
+    expect(harness.scheduledDelay, const Duration(seconds: 5));
+
+    harness.elapsed = const Duration(seconds: 5);
+    harness.fireDeadline();
+    expect(await terminal, QuickPopDeadlineOutcome.fallback);
+    expect(harness.fallbackResults, hasLength(1));
+
+    // Release the deferred error handler after the authoritative deadline;
+    // it must not emit a second fallback or navigate again.
+    harness.pollDelay.complete();
+    await _flushAsyncWork(2);
+    expect(harness.fallbackResults, hasLength(1));
+  });
+
+  test('CPU fallback does not try to abandon a non-human resolution', () async {
+    final harness = _SearchHarness(
+      resolutionResults: <_Resolution?>[const _Resolution(human: false)],
+    );
+    harness.connection.complete(_Connection());
+    harness.ticket.complete(_Ticket());
+
+    final terminal = harness.search.start();
+    expect(await terminal, QuickPopDeadlineOutcome.fallback);
+    await _flushAsyncWork(2);
+
+    expect(harness.fallbackResults, hasLength(1));
+    expect(harness.abandonCalls, 0);
+    expect(harness.cancelCalls, 1);
+    expect(harness.releaseCalls, 1);
+  });
 
   test('human ready at 4999 ms waits for deadline settlement', () async {
     final harness = _SearchHarness();
@@ -239,6 +292,68 @@ void main() {
       expect(harness.abandonCalls, 1);
     },
   );
+
+  test(
+    'in-flight deadline resolution cannot abandon a committed human group',
+    () async {
+      final harness = _SearchHarness(deferFallbackUntilDeadline: true);
+      harness.connection.complete(_Connection());
+      harness.ticket.complete(_Ticket());
+      final terminal = harness.search.start();
+      await _flushAsyncWork();
+
+      harness.elapsed = const Duration(seconds: 5);
+      harness.fireDeadline();
+      await _flushAsyncWork();
+      expect(harness.scheduledDelay, const Duration(seconds: 10));
+      expect(harness.fallbackResults, isEmpty);
+      expect(harness.abandonCalls, 0);
+
+      harness.resolution.complete(const _Resolution(human: true));
+      await _flushAsyncWork(2);
+      expect(harness.prepareCalls, 1);
+      expect(harness.scheduledDelay, const Duration(seconds: 10));
+      expect(harness.fallbackResults, isEmpty);
+      expect(harness.abandonCalls, 0);
+
+      harness.prepared.complete(_Prepared());
+      await _flushAsyncWork();
+      harness.synchronized.complete(true);
+      await _flushAsyncWork();
+      harness.settlement.complete(QuickPopDeadlineSettlement.human);
+      expect(await terminal, QuickPopDeadlineOutcome.human);
+      expect(harness.humanResults, hasLength(1));
+      expect(harness.abandonCalls, 0);
+    },
+  );
+
+  test('deadline guard polls again after a pending group read', () async {
+    final harness = _SearchHarness(
+      deferFallbackUntilDeadline: true,
+      resolutionResults: <_Resolution?>[null, const _Resolution(human: true)],
+    );
+    harness.connection.complete(_Connection());
+    harness.ticket.complete(_Ticket());
+    final terminal = harness.search.start();
+    await _flushAsyncWork(2);
+    expect(harness.resolveCalls, 1);
+
+    harness.elapsed = const Duration(seconds: 5);
+    harness.pollDelay.complete();
+    await _flushAsyncWork(4);
+    expect(harness.resolveCalls, 2);
+    expect(harness.prepareCalls, 1);
+    expect(harness.fallbackResults, isEmpty);
+    expect(harness.abandonCalls, 0);
+
+    harness.prepared.complete(_Prepared());
+    await _flushAsyncWork();
+    harness.synchronized.complete(true);
+    await _flushAsyncWork();
+    harness.settlement.complete(QuickPopDeadlineSettlement.human);
+    expect(await terminal, QuickPopDeadlineOutcome.human);
+    expect(harness.humanResults, hasLength(1));
+  });
 
   test(
     'authoritative settlement wins an exact 5000 ms readiness race',

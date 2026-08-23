@@ -671,6 +671,7 @@ class _AdaptiveMobileBannerState extends State<AdaptiveMobileBanner> {
     _disposeBanner();
     final size = await resolveAnchoredAdaptiveBannerSize(
       width,
+      orientation: orientation,
       loadAdaptive: widget.sizeLoader,
     );
     if (!mounted ||
@@ -802,17 +803,22 @@ typedef AdaptiveBannerContentBuilder =
     Widget Function(BuildContext context, AdSize size);
 
 /// Resolves a full-width anchored banner while keeping every fallback inside
-/// the available logical width. The native SDK supplies the optimized height.
+/// the available logical width. Use the standard anchored-adaptive format:
+/// its height stays compact on tablets, preserving the game's bottom actions.
 @visibleForTesting
 Future<AdSize?> resolveAnchoredAdaptiveBannerSize(
   int availableWidth, {
+  Orientation orientation = Orientation.portrait,
   AdaptiveBannerSizeLoader? loadAdaptive,
 }) async {
   if (availableWidth <= 0) return null;
 
   try {
+    // The SDK's replacement only requests a *large* anchored size. This
+    // compact variant is intentional so the banner never covers game actions.
     final adaptive = await (loadAdaptive == null
-        ? AdSize.getLargeAnchoredAdaptiveBannerAdSize(availableWidth)
+        // ignore: deprecated_member_use
+        ? AdSize.getAnchoredAdaptiveBannerAdSize(orientation, availableWidth)
         : loadAdaptive(availableWidth));
     if (adaptive != null &&
         adaptive.width > 0 &&

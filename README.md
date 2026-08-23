@@ -37,6 +37,10 @@ macOS y Windows.
   controles, pausar ni interrumpir una jugada. Los rewarded ads se abren solo
   cuando el jugador los elige voluntariamente; macOS no muestra anuncios.
 - Diseño adaptable para teléfono, tableta, escritorio y ambas orientaciones.
+- La conexión online usa el mismo proyecto Firebase en Android, iOS, macOS y
+  Windows. Windows queda configurado con las credenciales del registro Web del
+  proyecto porque FlutterFire no crea un registro nativo Windows; la ejecución
+  visual y el enlace cruzado deben confirmarse en un equipo Windows real.
 
 Quick Pop online y las salas casuales de Quick Table están disponibles para
 pruebas controladas sobre Firebase. El modo clasificado, premios competitivos y
@@ -44,24 +48,27 @@ una publicación social a gran escala todavía requieren autoridad confiable del
 servidor, App Check, moderación y endurecimiento operativo; por eso no se
 anuncian como funciones de producción.
 
-## Verificación QA · 11 de agosto de 2026
+## Verificación QA · 12 de agosto de 2026
 
-- `flutter analyze`: sin problemas.
-- Suite Flutter completa: 711 pruebas aprobadas; repetición de las suites
+- `flutter analyze`: sin problemas después de habilitar Firebase para Windows.
+- Suite Flutter completa: 726 pruebas aprobadas; repetición de las suites
   online críticas: 68 aprobadas.
-- Reglas Firebase: 21 aprobadas; smoke multicliente: 5 aprobadas, incluyendo
+- Reglas Firebase: 22 aprobadas; smoke multicliente: 5 aprobadas, incluyendo
   cuatro clientes de Quick Table, preparación, tirada inicial, orden de turnos
   y cierre.
 - Verificación manual: Traditional CPU, Chaos CPU, Quick Pop contra CPU con
   fallback de diez segundos, Quick Pop humano entre dos Android, Quick Table
   privado y público con código/invitación, compartir por Android y Pass & Play
   Traditional/Chaos.
-- iPhone 13 e iPhone 17: instalación limpia y arranque comprobados.
+- iPhone 16e e iPhone 17 Simulator: instalación/arranque y capturas de inicio.
+- macOS Debug: build limpio y arranque comprobados en una copia temporal fuera
+  del disco externo; el disco externo genera archivos AppleDouble durante
+  CocoaPods/Xcode y no se usa como artefacto de compilación.
 
-La integración interactiva de cuatro ventanas físicas y los servicios de
-producción (Firebase/AdMob reales, consentimiento y autoridad de servidor)
-requieren una pasada final en dispositivos desbloqueados y configuración de
-producción antes de publicar en una tienda.
+La integración interactiva de cuatro ventanas físicas, la ejecución visual de
+Windows y los servicios de producción (Firebase/AdMob reales, consentimiento y
+autoridad de servidor) requieren una pasada final en dispositivos desbloqueados
+y configuración de producción antes de publicar en una tienda.
 
 ## Ejecutar
 

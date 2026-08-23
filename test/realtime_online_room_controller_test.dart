@@ -76,8 +76,454 @@ final class _ControlledRealtimeStore implements OnlineRealtimeStore {
   Future<int> serverNowMs() => delegate.serverNowMs();
 }
 
+final class _DelayedWaitingRoomSnapshotStore implements OnlineRealtimeStore {
+  _DelayedWaitingRoomSnapshotStore(this.delegate);
+
+  final InMemoryOnlineRealtimeStore delegate;
+  final List<StreamController<Object?>> _roomWatchers =
+      <StreamController<Object?>>[];
+  Object? _lastWaitingRoom;
+
+  void emitDelayedWaitingRoom() {
+    final snapshot = _lastWaitingRoom;
+    if (snapshot == null) return;
+    for (final watcher in List<StreamController<Object?>>.of(_roomWatchers)) {
+      if (!watcher.isClosed) watcher.add(snapshot);
+    }
+  }
+
+  @override
+  Future<Object?> read(String path) => delegate.read(path);
+
+  @override
+  Stream<Object?> watch(String path) {
+    final isRoomRoot =
+        path.startsWith('$onlineTransportRoot/rooms/') &&
+        path.split('/').length == 3;
+    if (!isRoomRoot) return delegate.watch(path);
+    late final StreamController<Object?> controller;
+    StreamSubscription<Object?>? subscription;
+    controller = StreamController<Object?>.broadcast(
+      sync: true,
+      onListen: () {
+        subscription = delegate.watch(path).listen((value) {
+          final room = value == null
+              ? null
+              : OnlineRoomRecord.fromJson(onlineMap(value));
+          if (room?.status == RoomStatus.waiting) _lastWaitingRoom = value;
+          controller.add(value);
+        }, onError: controller.addError);
+      },
+      onCancel: () async {
+        _roomWatchers.remove(controller);
+        await subscription?.cancel();
+      },
+    );
+    _roomWatchers.add(controller);
+    return controller.stream;
+  }
+
+  @override
+  Future<void> set(String path, Object? value) => delegate.set(path, value);
+
+  @override
+  Future<void> update(String path, Map<String, Object?> values) =>
+      delegate.update(path, values);
+
+  @override
+  Future<OnlineStoreTransactionResult> transaction(
+    String path,
+    OnlineStoreTransactionUpdater updater,
+  ) => delegate.transaction(path, updater);
+
+  @override
+  Future<void> setOnDisconnect(String path, Object? value) =>
+      delegate.setOnDisconnect(path, value);
+
+  @override
+  Future<void> cancelOnDisconnect(String path) =>
+      delegate.cancelOnDisconnect(path);
+
+  @override
+  Future<int> serverNowMs() => delegate.serverNowMs();
+}
+
+/// Simulates an Android Firebase child listener that misses the lifecycle
+/// event while the room-root listener continues to receive the atomic room.
+final class _DroppedAdvancedLobbyWatchStore implements OnlineRealtimeStore {
+  _DroppedAdvancedLobbyWatchStore(this.delegate);
+
+  final InMemoryOnlineRealtimeStore delegate;
+
+  @override
+  Future<Object?> read(String path) => delegate.read(path);
+
+  @override
+  Stream<Object?> watch(String path) {
+    final isLobbyState =
+        path.startsWith('$onlineTransportRoot/rooms/') &&
+        path.endsWith('/lobbyState');
+    if (!isLobbyState) return delegate.watch(path);
+    return delegate.watch(path).where((raw) {
+      if (raw == null) return true;
+      return OnlineLobby.fromJson(onlineMap(raw)).status == RoomStatus.waiting;
+    });
+  }
+
+  @override
+  Future<void> set(String path, Object? value) => delegate.set(path, value);
+
+  @override
+  Future<void> update(String path, Map<String, Object?> values) =>
+      delegate.update(path, values);
+
+  @override
+  Future<OnlineStoreTransactionResult> transaction(
+    String path,
+    OnlineStoreTransactionUpdater updater,
+  ) => delegate.transaction(path, updater);
+
+  @override
+  Future<void> setOnDisconnect(String path, Object? value) =>
+      delegate.setOnDisconnect(path, value);
+
+  @override
+  Future<void> cancelOnDisconnect(String path) =>
+      delegate.cancelOnDisconnect(path);
+
+  @override
+  Future<int> serverNowMs() => delegate.serverNowMs();
+}
+
+/// Simulates a native Firebase socket that stops delivering both room
+/// listeners after the initial waiting snapshot while direct reads still
+/// reach the server.
+final class _DroppedAdvancedRoomListenersStore implements OnlineRealtimeStore {
+  _DroppedAdvancedRoomListenersStore(this.delegate);
+
+  final InMemoryOnlineRealtimeStore delegate;
+
+  @override
+  Future<Object?> read(String path) => delegate.read(path);
+
+  @override
+  Stream<Object?> watch(String path) {
+    final isRoomPath = path.startsWith('$onlineTransportRoot/rooms/');
+    if (!isRoomPath) return delegate.watch(path);
+    return delegate.watch(path).where((raw) {
+      if (raw == null) return true;
+      if (path.endsWith('/lobbyState')) {
+        return OnlineLobby.fromJson(onlineMap(raw)).status ==
+            RoomStatus.waiting;
+      }
+      if (path.split('/').length == 3) {
+        return OnlineRoomRecord.fromJson(onlineMap(raw)).status ==
+            RoomStatus.waiting;
+      }
+      return true;
+    });
+  }
+
+  @override
+  Future<void> set(String path, Object? value) => delegate.set(path, value);
+
+  @override
+  Future<void> update(String path, Map<String, Object?> values) =>
+      delegate.update(path, values);
+
+  @override
+  Future<OnlineStoreTransactionResult> transaction(
+    String path,
+    OnlineStoreTransactionUpdater updater,
+  ) => delegate.transaction(path, updater);
+
+  @override
+  Future<void> setOnDisconnect(String path, Object? value) =>
+      delegate.setOnDisconnect(path, value);
+
+  @override
+  Future<void> cancelOnDisconnect(String path) =>
+      delegate.cancelOnDisconnect(path);
+
+  @override
+  Future<int> serverNowMs() => delegate.serverNowMs();
+}
+
+final class _StalledServerClockStore implements OnlineRealtimeStore {
+  _StalledServerClockStore(this.delegate);
+
+  final InMemoryOnlineRealtimeStore delegate;
+  int allowedClockReads = 1 << 30;
+  int _clockReads = 0;
+
+  @override
+  Future<Object?> read(String path) => delegate.read(path);
+
+  @override
+  Stream<Object?> watch(String path) => delegate.watch(path);
+
+  @override
+  Future<void> set(String path, Object? value) => delegate.set(path, value);
+
+  @override
+  Future<void> update(String path, Map<String, Object?> values) =>
+      delegate.update(path, values);
+
+  @override
+  Future<OnlineStoreTransactionResult> transaction(
+    String path,
+    OnlineStoreTransactionUpdater updater,
+  ) => delegate.transaction(path, updater);
+
+  @override
+  Future<void> setOnDisconnect(String path, Object? value) =>
+      delegate.setOnDisconnect(path, value);
+
+  @override
+  Future<void> cancelOnDisconnect(String path) =>
+      delegate.cancelOnDisconnect(path);
+
+  @override
+  Future<int> serverNowMs() {
+    if (_clockReads++ >= allowedClockReads) return Completer<int>().future;
+    return delegate.serverNowMs();
+  }
+}
+
 void main() {
   group('RealtimeOnlineRoomController', () {
+    test(
+      'opening roll does not stall when Firebase server clock is unavailable',
+      () async {
+        final memory = InMemoryOnlineRealtimeStore(initialNowMs: 9_500);
+        final store = _StalledServerClockStore(memory);
+        final host = RealtimeOnlineRoomController(
+          transport: OnlineTransportClient(
+            store: store,
+            identity: OnlineTransportIdentity(
+              uid: 'clock-host',
+              displayName: 'Host',
+            ),
+            random: Random(95),
+          ),
+        );
+        final guest = RealtimeOnlineRoomController(
+          transport: OnlineTransportClient(
+            store: memory,
+            identity: OnlineTransportIdentity(
+              uid: 'clock-guest',
+              displayName: 'Guest',
+            ),
+            random: Random(96),
+          ),
+        );
+        addTearDown(() async {
+          await host.shutdown();
+          await guest.shutdown();
+          host.dispose();
+          guest.dispose();
+        });
+
+        await host.createRoom(
+          mode: OnlineRoomGameMode.classic,
+          visibility: RoomVisibility.private,
+        );
+        await guest.joinRoomByCode(host.lobby!.roomCode);
+        await _eventually(() => host.lobby?.occupiedSeatCount == 2);
+        await host.setReady(true);
+        await guest.setReady(true);
+        await _eventually(() => host.lobby?.canStart == true);
+
+        // Reserving the two CPU seats needs one valid clock read. The next
+        // read is the lifecycle sample that Android may never deliver.
+        store.allowedClockReads = store._clockReads + 1;
+        await host.startOpeningRoll();
+
+        expect(host.lobby?.status, RoomStatus.openingRoll);
+        expect(host.roomRecord?.status, RoomStatus.openingRoll);
+      },
+      timeout: const Timeout(Duration(seconds: 5)),
+    );
+
+    test(
+      'a delayed waiting room snapshot cannot roll back the opening roll',
+      () async {
+        final memory = InMemoryOnlineRealtimeStore(initialNowMs: 9_000);
+        final store = _DelayedWaitingRoomSnapshotStore(memory);
+        final host = RealtimeOnlineRoomController(
+          transport: OnlineTransportClient(
+            store: store,
+            identity: OnlineTransportIdentity(
+              uid: 'race-host',
+              displayName: 'Host',
+            ),
+            random: Random(90),
+          ),
+        );
+        final guest = RealtimeOnlineRoomController(
+          transport: OnlineTransportClient(
+            store: store,
+            identity: OnlineTransportIdentity(
+              uid: 'race-guest',
+              displayName: 'Guest',
+            ),
+            random: Random(91),
+          ),
+        );
+        addTearDown(() async {
+          await host.shutdown();
+          await guest.shutdown();
+          host.dispose();
+          guest.dispose();
+        });
+
+        await host.createRoom(
+          mode: OnlineRoomGameMode.classic,
+          visibility: RoomVisibility.private,
+        );
+        await guest.joinRoomByCode(host.lobby!.roomCode);
+        await _eventually(() => host.lobby?.occupiedSeatCount == 2);
+        await host.setReady(true);
+        await guest.setReady(true);
+        await _eventually(() => host.lobby?.canStart == true);
+
+        memory.clearOperations();
+        await host.startOpeningRoll();
+        await _eventually(() => host.lobby?.status == RoomStatus.openingRoll);
+        store.emitDelayedWaitingRoom();
+        await Future<void>.delayed(Duration.zero);
+
+        expect(host.lobby?.status, RoomStatus.openingRoll);
+        expect(host.lobby?.openingRoll, isNotNull);
+        expect(host.roomRecord?.status, RoomStatus.openingRoll);
+        expect(
+          memory.operations.where(
+            (operation) =>
+                operation.kind == InMemoryStoreOperationKind.update &&
+                operation.path ==
+                    '$onlineTransportRoot/rooms/${host.roomRecord!.id}',
+          ),
+          // One atomic update reserves the two CPU seats for this two-human
+          // room; the second advances the room lifecycle to openingRoll.
+          hasLength(2),
+        );
+        expect(
+          memory.operations.where(
+            (operation) =>
+                operation.kind == InMemoryStoreOperationKind.transaction &&
+                operation.path ==
+                    '$onlineTransportRoot/rooms/${host.roomRecord!.id}',
+          ),
+          isEmpty,
+        );
+      },
+    );
+
+    test(
+      'room-root snapshot advances a guest when child lobby event is dropped',
+      () async {
+        final memory = InMemoryOnlineRealtimeStore(initialNowMs: 9_250);
+        final guestStore = _DroppedAdvancedLobbyWatchStore(memory);
+        final host = RealtimeOnlineRoomController(
+          transport: OnlineTransportClient(
+            store: memory,
+            identity: OnlineTransportIdentity(
+              uid: 'root-host',
+              displayName: 'Host',
+            ),
+            random: Random(92),
+          ),
+        );
+        final guest = RealtimeOnlineRoomController(
+          transport: OnlineTransportClient(
+            store: guestStore,
+            identity: OnlineTransportIdentity(
+              uid: 'root-guest',
+              displayName: 'Guest',
+            ),
+            random: Random(93),
+          ),
+        );
+        addTearDown(() async {
+          await host.shutdown();
+          await guest.shutdown();
+          host.dispose();
+          guest.dispose();
+        });
+
+        await host.createRoom(
+          mode: OnlineRoomGameMode.classic,
+          visibility: RoomVisibility.private,
+        );
+        await guest.joinRoomByCode(host.lobby!.roomCode);
+        await _eventually(() => host.lobby?.occupiedSeatCount == 2);
+        await host.setReady(true);
+        await guest.setReady(true);
+        await _eventually(() => host.lobby?.canStart == true);
+
+        await host.startOpeningRoll();
+
+        await _eventually(() => guest.lobby?.status == RoomStatus.openingRoll);
+        expect(guest.lobby?.openingRoll, isNotNull);
+        expect(guest.roomRecord?.status, RoomStatus.openingRoll);
+      },
+    );
+
+    test(
+      'authoritative reconciliation advances a guest when both listeners drop',
+      () async {
+        final memory = InMemoryOnlineRealtimeStore(initialNowMs: 9_500);
+        final guestStore = _DroppedAdvancedRoomListenersStore(memory);
+        final host = RealtimeOnlineRoomController(
+          transport: OnlineTransportClient(
+            store: memory,
+            identity: OnlineTransportIdentity(
+              uid: 'poll-host',
+              displayName: 'Host',
+            ),
+            random: Random(94),
+          ),
+          roomReconciliationInterval: const Duration(milliseconds: 5),
+        );
+        final guest = RealtimeOnlineRoomController(
+          transport: OnlineTransportClient(
+            store: guestStore,
+            identity: OnlineTransportIdentity(
+              uid: 'poll-guest',
+              displayName: 'Guest',
+            ),
+            random: Random(95),
+          ),
+          roomReconciliationInterval: const Duration(milliseconds: 5),
+        );
+        addTearDown(() async {
+          await host.shutdown();
+          await guest.shutdown();
+          host.dispose();
+          guest.dispose();
+        });
+
+        await host.createRoom(
+          mode: OnlineRoomGameMode.classic,
+          visibility: RoomVisibility.private,
+        );
+        await guest.joinRoomByCode(host.lobby!.roomCode);
+        await _eventually(() => host.lobby?.occupiedSeatCount == 2);
+        await host.setReady(true);
+        await guest.setReady(true);
+        await _eventually(() => host.lobby?.canStart == true);
+
+        await host.startOpeningRoll();
+
+        await _eventually(
+          () => guest.lobby?.status == RoomStatus.openingRoll,
+          delay: const Duration(milliseconds: 5),
+        );
+        expect(guest.lobby?.openingRoll, isNotNull);
+        expect(guest.roomRecord?.status, RoomStatus.openingRoll);
+      },
+    );
+
     test(
       'four controllers create, join, ready, reroll a tie, and enter game',
       () async {
@@ -702,10 +1148,11 @@ RealtimeOnlineRoomController _controller(
 Future<void> _eventually(
   bool Function() predicate, {
   int attempts = 300,
+  Duration delay = Duration.zero,
 }) async {
   for (var attempt = 0; attempt < attempts; attempt++) {
     if (predicate()) return;
-    await Future<void>.delayed(Duration.zero);
+    await Future<void>.delayed(delay);
   }
   fail('Condition did not become true after $attempts event-loop turns.');
 }

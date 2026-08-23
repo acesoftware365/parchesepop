@@ -46,7 +46,10 @@ OnlineParticipant _participant({
   loadout: const CosmeticLoadout(),
 );
 
-OnlineMatchSession _sessionFor(PlayerColor localColor) {
+OnlineMatchSession _sessionFor(
+  PlayerColor localColor, {
+  GameMode mode = GameMode.traditional,
+}) {
   const ids = <PlayerColor, String>{
     PlayerColor.red: 'host_red',
     PlayerColor.green: 'guest_green',
@@ -56,7 +59,7 @@ OnlineMatchSession _sessionFor(PlayerColor localColor) {
   return OnlineMatchSession(
     matchId: 'room_sync_001_match',
     seed: 91827,
-    mode: GameMode.traditional,
+    mode: mode,
     participants: <OnlineParticipant>[
       for (final color in PlayerColor.values)
         _participant(
@@ -99,7 +102,10 @@ OnlineMatchSession _sessionWithVirtualGreen(
   );
 }
 
-OnlineMatchSession _quickPopSessionFor(PlayerColor localColor) {
+OnlineMatchSession _quickPopSessionFor(
+  PlayerColor localColor, {
+  GameMode mode = GameMode.traditional,
+}) {
   const ids = <PlayerColor, String>{
     PlayerColor.red: 'host_red',
     PlayerColor.green: 'guest_green',
@@ -109,7 +115,7 @@ OnlineMatchSession _quickPopSessionFor(PlayerColor localColor) {
   return OnlineMatchSession(
     matchId: 'room_sync_001_match',
     seed: 91827,
-    mode: GameMode.traditional,
+    mode: mode,
     participants: <OnlineParticipant>[
       for (final color in PlayerColor.values)
         _participant(
@@ -502,6 +508,25 @@ void main() {
           0,
         );
         expect(_checkpoint(guest.engine), _checkpoint(host.engine));
+        expect(
+          store.operations.where(
+            (operation) =>
+                operation.kind == InMemoryStoreOperationKind.transaction &&
+                operation.path.contains('/commands/'),
+          ),
+          isEmpty,
+          reason:
+              'Append-only commands must use a normal write; native iOS '
+              'transactions rejected otherwise valid move payloads.',
+        );
+        expect(
+          store.operations.where(
+            (operation) =>
+                operation.kind == InMemoryStoreOperationKind.set &&
+                operation.path.contains('/commands/'),
+          ),
+          hasLength(2),
+        );
 
         final beforeRejected = _checkpoint(host.engine);
         final stale = await guest.submitMove(
@@ -628,6 +653,177 @@ void main() {
         expect(_checkpoint(guest.engine), _checkpoint(host.engine));
       },
     );
+
+    test(
+      'Quick Pop accepts a base exit with any rolled die on the online host',
+      () async {
+        final store = InMemoryOnlineRealtimeStore(initialNowMs: 1250);
+        final hostEngine = _engine(
+          localColor: PlayerColor.red,
+          random: Random(405),
+          initialPlayer: PlayerColor.red,
+          matchFormat: MatchFormat.quickPop,
+        );
+        final guestEngine = _engine(
+          localColor: PlayerColor.green,
+          random: Random(406),
+          initialPlayer: PlayerColor.red,
+          matchFormat: MatchFormat.quickPop,
+        );
+        hostEngine
+          ..hasRolled = true
+          ..dice = const <int>[4, 6];
+        hostEngine.remainingDice.addAll(const <int>[4, 6]);
+        final host = OnlineGameSyncClient(
+          transport: _transport(store, uid: 'host_red'),
+          roomId: 'room_sync_001',
+          session: _quickPopSessionFor(PlayerColor.red),
+          engine: hostEngine,
+          isHost: true,
+        );
+        final guest = OnlineGameSyncClient(
+          transport: _transport(store, uid: 'guest_green'),
+          roomId: 'room_sync_001',
+          session: _quickPopSessionFor(PlayerColor.green),
+          engine: guestEngine,
+          isHost: false,
+        );
+        addTearDown(() {
+          guest.dispose();
+          host.dispose();
+          guestEngine.dispose();
+          hostEngine.dispose();
+        });
+
+        await _seedInGameRoom(
+          store,
+          host.session,
+          matchFormat: MatchFormat.quickPop,
+        );
+        await host.start();
+        await guest.start();
+        expect(host.engine.currentPlayer.color, PlayerColor.red);
+        expect(
+          host.engine.canMove(host.engine.currentPlayer.tokens.first, 4),
+          isTrue,
+        );
+        expect(
+          host.engine.canMove(host.engine.currentPlayer.tokens.first, 6),
+          isTrue,
+        );
+
+        final exit = await host.submitMove(
+          tokenId: 0,
+          die: 4,
+          actionId: 'quick_pop_host_base_exit_4_001',
+        );
+        expect(exit.status, OnlineCommandStatus.accepted);
+        await _eventually(() => guest.revision == exit.stateRevision);
+        expect(host.engine.currentPlayer.tokens.first.progress, 0);
+        expect(
+          guest.engine.players[PlayerColor.red.index].tokens.first.progress,
+          0,
+        );
+        expect(_checkpoint(guest.engine), _checkpoint(host.engine));
+      },
+    );
+
+    for (final format in MatchFormat.values) {
+      for (final mode in GameMode.values) {
+        test(
+          '${format.name} ${mode.name} keeps the +10 goal bonus immediately playable online',
+          () async {
+            final store = InMemoryOnlineRealtimeStore(initialNowMs: 1300);
+            final hostSession = format == MatchFormat.quickPop
+                ? _quickPopSessionFor(PlayerColor.red, mode: mode)
+                : _sessionFor(PlayerColor.red, mode: mode);
+            final guestSession = format == MatchFormat.quickPop
+                ? _quickPopSessionFor(PlayerColor.green, mode: mode)
+                : _sessionFor(PlayerColor.green, mode: mode);
+            final hostEngine = _engine(
+              localColor: PlayerColor.red,
+              random: Random(411),
+              initialPlayer: PlayerColor.green,
+              matchFormat: format,
+              mode: mode,
+            );
+            final guestEngine = _engine(
+              localColor: PlayerColor.green,
+              random: Random(412),
+              initialPlayer: PlayerColor.green,
+              matchFormat: format,
+              mode: mode,
+            );
+            final green = hostEngine.players[PlayerColor.green.index];
+            green.tokens.first.progress = GameEngine.finishProgress - 1;
+            green.tokens.last.progress = 4;
+            hostEngine
+              ..currentPlayerIndex = PlayerColor.green.index
+              ..hasRolled = true
+              ..dice = const <int>[1, 6];
+            hostEngine.remainingDice.addAll(const <int>[1, 6]);
+
+            final host = OnlineGameSyncClient(
+              transport: _transport(store, uid: 'host_red'),
+              roomId: 'room_sync_001',
+              session: hostSession,
+              engine: hostEngine,
+              isHost: true,
+            );
+            final guest = OnlineGameSyncClient(
+              transport: _transport(store, uid: 'guest_green'),
+              roomId: 'room_sync_001',
+              session: guestSession,
+              engine: guestEngine,
+              isHost: false,
+            );
+            addTearDown(() {
+              guest.dispose();
+              host.dispose();
+              guestEngine.dispose();
+              hostEngine.dispose();
+            });
+
+            await _seedInGameRoom(store, host.session, matchFormat: format);
+            await host.start();
+            await guest.start();
+
+            final goalFuture = guest.submitMove(
+              tokenId: 0,
+              die: 1,
+              actionId: '${format.name}_${mode.name}_goal_10_001',
+            );
+            await _eventually(() => guest.engine.remainingDice.contains(10));
+            final bonusFuture = guest.submitMove(
+              tokenId: green.tokens.last.id,
+              die: 10,
+              actionId: '${format.name}_${mode.name}_goal_10_play_001',
+            );
+
+            final goal = await goalFuture;
+            expect(goal.status, OnlineCommandStatus.accepted);
+            await _eventually(() => guest.revision == goal.authorityRevision);
+
+            final bonus = await bonusFuture;
+            expect(bonus.status, OnlineCommandStatus.accepted);
+            await _eventually(() => guest.revision == bonus.authorityRevision);
+            expect(host.engine.remainingDice, const <int>[6]);
+            expect(guest.engine.remainingDice, const <int>[6]);
+            expect(green.tokens.last.progress, 14);
+            expect(
+              guest
+                  .engine
+                  .players[PlayerColor.green.index]
+                  .tokens
+                  .last
+                  .progress,
+              14,
+            );
+            expect(_checkpoint(guest.engine), _checkpoint(host.engine));
+          },
+        );
+      }
+    }
 
     test('guest accepts a Firebase-normalized initial checkpoint', () async {
       final store = InMemoryOnlineRealtimeStore(initialNowMs: 1500);
@@ -1318,18 +1514,18 @@ void main() {
           await _persistedPresence(store, 'guest_green'),
           OnlineParticipantPresence.connected,
         );
-        expect(host.canHostDriveParticipant('guest_green'), isTrue);
+        expect(host.canHostDriveParticipant('guest_green'), isFalse);
 
-        expect(guest.localParticipantAwaitingNextTurn, isTrue);
-        final blockedRoll = await guest.submitRoll(
-          actionId: 'roll_after_pause_too_soon_001',
+        // The reconnect happened at a clean dice boundary, so there is no
+        // interrupted roll for the host to finish. The returning guest can
+        // safely roll immediately instead of being stranded behind a stale
+        // "wait for next turn" marker.
+        expect(guest.localParticipantAwaitingNextTurn, isFalse);
+        final rollAfterPause = await guest.submitRoll(
+          actionId: 'roll_after_pause_at_clean_boundary_001',
         );
-        expect(
-          blockedRoll.rejection,
-          OnlineCommandRejection.participantUnavailable,
-        );
+        expect(rollAfterPause.status, OnlineCommandStatus.accepted);
         host.engine.endTurn();
-        await _eventually(() => !guest.localParticipantAwaitingNextTurn);
       },
     );
 
@@ -1409,6 +1605,86 @@ void main() {
           () async =>
               onlineMap(await store.read(guestPresencePath))['state'] ==
               LobbyPresence.disconnected.name,
+        );
+      },
+    );
+
+    test(
+      'an active match restores its one-shot presence lease after a transient '
+      'disconnect',
+      () async {
+        final store = InMemoryOnlineRealtimeStore(initialNowMs: 10500);
+        final hostSession = _sessionFor(PlayerColor.red);
+        final hostEngine = _engine(
+          localColor: PlayerColor.red,
+          random: Random(106),
+          matchFormat: MatchFormat.quickPop,
+        );
+        final guestEngine = _engine(
+          localColor: PlayerColor.green,
+          random: Random(107),
+          matchFormat: MatchFormat.quickPop,
+        );
+        final host = OnlineGameSyncClient(
+          transport: _transport(store, uid: 'host_red'),
+          roomId: 'room_sync_001',
+          session: hostSession,
+          engine: hostEngine,
+          isHost: true,
+          presenceRecoveryInterval: const Duration(milliseconds: 20),
+        );
+        final guest = OnlineGameSyncClient(
+          transport: _transport(store, uid: 'guest_green'),
+          roomId: 'room_sync_001',
+          session: _sessionFor(PlayerColor.green),
+          engine: guestEngine,
+          isHost: false,
+          presenceRecoveryInterval: const Duration(milliseconds: 20),
+        );
+        addTearDown(() {
+          guest.dispose();
+          host.dispose();
+          guestEngine.dispose();
+          hostEngine.dispose();
+        });
+
+        await _seedInGameRoom(
+          store,
+          hostSession,
+          matchFormat: MatchFormat.quickPop,
+        );
+        await host.start();
+        await guest.start();
+        const guestPresencePath =
+            '$onlineTransportRoot/rooms/room_sync_001/presence/guest_green';
+
+        store.clearOperations();
+        await store.simulateDisconnect(path: guestPresencePath);
+        expect(
+          onlineMap(await store.read(guestPresencePath))['state'],
+          LobbyPresence.disconnected.name,
+        );
+
+        await _eventuallyAsync(
+          () async =>
+              onlineMap(await store.read(guestPresencePath))['state'] ==
+              LobbyPresence.connected.name,
+        );
+        expect(
+          store.operations.where(
+            (operation) =>
+                operation.kind == InMemoryStoreOperationKind.onDisconnect &&
+                operation.path == guestPresencePath,
+          ),
+          isNotEmpty,
+        );
+
+        // Recovery re-arms the server hook; a second socket loss is detected
+        // instead of leaving a stale connected participant forever.
+        await store.simulateDisconnect(path: guestPresencePath);
+        expect(
+          onlineMap(await store.read(guestPresencePath))['state'],
+          LobbyPresence.disconnected.name,
         );
       },
     );

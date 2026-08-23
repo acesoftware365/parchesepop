@@ -327,6 +327,21 @@ void main() {
     fixture.guest.sync.dispose();
   });
 
+  test('production settlement budget tolerates a delayed matched peer', () {
+    // Native Firebase startup/presence work on a second device can take more
+    // than the former 1.2-second peer window. Once both clients have passed
+    // launchReady, settlement must retain the provisional room long enough for
+    // the slower client instead of splitting both players into CPU rooms.
+    expect(
+      quickPopSettlementPeerWait,
+      greaterThanOrEqualTo(const Duration(seconds: 10)),
+    );
+    expect(
+      quickPopSettlementOperationTimeout,
+      greaterThan(quickPopSettlementPeerWait),
+    );
+  });
+
   test(
     'peer cancellation after provisional commit makes both fallback',
     () async {

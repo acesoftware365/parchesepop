@@ -126,33 +126,45 @@ void main() {
       game.dispose();
     });
 
-    test(
-      'Quick Pop starts two tokens per player on their departure square',
-      () {
-        final game = GameEngine(matchFormat: MatchFormat.quickPop);
+    test('Quick Pop starts two tokens in base without a visible stack', () {
+      final game = GameEngine(matchFormat: MatchFormat.quickPop);
 
-        expect(game.rules.tokenCount, 2);
-        expect(game.rules.tokensRequiredToWin, 2);
-        expect(game.rules.requiresFiveToExit, isFalse);
-        expect(game.rules.initialStackFormsBarrier, isFalse);
-        for (final player in game.players) {
-          expect(player.tokens, hasLength(2));
-          expect(player.tokens.every((token) => token.progress == 0), isTrue);
-          expect(
-            player.tokens.every(
-              (token) =>
-                  game.tokenCell(token) ==
-                  GameEngine.loop[GameEngine.startOffset[player.color]!],
-            ),
-            isTrue,
-          );
-        }
+      expect(game.rules.tokenCount, 2);
+      expect(game.rules.tokensRequiredToWin, 2);
+      expect(game.rules.requiresFiveToExit, isFalse);
+      expect(game.rules.initialTokenProgress, -1);
+      expect(game.rules.initialStackFormsBarrier, isFalse);
+      for (final player in game.players) {
+        expect(player.tokens, hasLength(2));
+        expect(player.tokens.every((token) => token.inNest), isTrue);
+        expect(
+          player.tokens.every((token) => game.tokenCell(token) == null),
+          isTrue,
+        );
+      }
 
-        game.dispose();
-      },
-    );
+      game.dispose();
+    });
 
-    test('a five is an ordinary five-step move in Quick Pop', () {
+    test('any die can release a Quick Pop token from base', () {
+      final game = GameEngine(matchFormat: MatchFormat.quickPop);
+      final token = game.currentPlayer.tokens.first;
+      game
+        ..hasRolled = true
+        ..dice = const <int>[1, 6];
+      game.remainingDice.addAll(const <int>[1, 6]);
+
+      expect(game.mustUseFiveToLeaveNest(PlayerColor.red), isFalse);
+      expect(game.canMove(token, 1), isTrue);
+      expect(game.moveToken(token, die: 1), isTrue);
+      expect(token.inNest, isFalse);
+      expect(token.progress, 0);
+      expect(game.remainingDice, <int>[6]);
+
+      game.dispose();
+    });
+
+    test('a five releases one Quick Pop token like any other die', () {
       final game = GameEngine(matchFormat: MatchFormat.quickPop);
       final token = game.currentPlayer.tokens.first;
       game
@@ -162,48 +174,41 @@ void main() {
 
       expect(game.mustUseFiveToLeaveNest(PlayerColor.red), isFalse);
       expect(game.moveToken(token, die: 5), isTrue);
-      expect(token.progress, 5);
+      // Leaving base places the token on its own departure square; the die
+      // value is the permission to leave, not five travelled spaces.
+      expect(token.progress, 0);
       expect(game.remainingDice, <int>[2]);
 
       game.dispose();
     });
 
-    test('the untouched Quick Pop start stack can be crossed', () {
+    test('the empty Quick Pop departure square can be crossed', () {
       final game = GameEngine(matchFormat: MatchFormat.quickPop);
       final red = game.players.first.tokens.first..progress = 16;
 
-      // Green starts at global square 17. Red crosses it from progress 16 to
-      // 18, but may not land on the occupied two-token square itself.
+      // Green's pieces are still in base, so there is no initial stack on
+      // global square 17 to block or capture.
       expect(game.canMove(red, 2), isTrue);
-      expect(game.canMove(red, 1), isFalse);
+      expect(game.canMove(red, 1), isTrue);
 
       game.dispose();
     });
 
-    test(
-      'the start stack becomes a normal barrier after either token moves',
-      () {
-        final game = GameEngine(matchFormat: MatchFormat.quickPop);
-        final green = game.players[1];
-        game.currentPlayerIndex = 1;
-        game
-          ..hasRolled = true
-          ..dice = const <int>[1, 6];
-        game.remainingDice.addAll(const <int>[1, 6]);
+    test('two Quick Pop tokens can form a barrier after leaving base', () {
+      final game = GameEngine(matchFormat: MatchFormat.quickPop);
+      final green = game.players[1];
+      green.tokens[0].progress = 0;
+      green.tokens[1].progress = 0;
+      green.initialStackIntact = false;
 
-        expect(game.moveToken(green.tokens.first, die: 1), isTrue);
-        // Simulate that token later completing a lap and rejoining its partner.
-        green.tokens.first.progress = 0;
+      game.currentPlayerIndex = 0;
+      final red = game.currentPlayer.tokens.first..progress = 16;
+      expect(game.canMove(red, 2), isFalse);
 
-        game.currentPlayerIndex = 0;
-        final red = game.currentPlayer.tokens.first..progress = 16;
-        expect(game.canMove(red, 2), isFalse);
+      game.dispose();
+    });
 
-        game.dispose();
-      },
-    );
-
-    test('a captured Quick Pop token returns ready to its start', () {
+    test('a captured Quick Pop token returns inside base', () {
       final game = GameEngine(matchFormat: MatchFormat.quickPop);
       final red = game.currentPlayer.tokens.first..progress = 1;
       final green = game.players[1].tokens.first
@@ -216,8 +221,8 @@ void main() {
       game.remainingDice.addAll(const <int>[3, 6]);
 
       expect(game.moveToken(red, die: 3), isTrue);
-      expect(green.progress, 0);
-      expect(green.inNest, isFalse);
+      expect(green.progress, -1);
+      expect(green.inNest, isTrue);
 
       game.dispose();
     });
@@ -316,14 +321,14 @@ void main() {
 
       final checkpoint = _checkpointFor(game);
       expect(checkpoint['matchFormat'], MatchFormat.quickPop.name);
-      expect(checkpoint['rulesVersion'], MatchRules.currentRulesVersion);
+      expect(checkpoint['rulesVersion'], MatchRules.quickPopRulesVersion);
 
       final restored = GameEngine.fromCheckpoint(checkpoint);
       expect(restored.matchFormat, MatchFormat.quickPop);
       expect(restored.players.first.tokens, hasLength(2));
       expect(
         restored.players.first.tokens.map((token) => token.progress),
-        <int>[4, 0],
+        <int>[0, -1],
       );
       expect(restored.players.first.initialStackIntact, isFalse);
 
@@ -356,7 +361,7 @@ void main() {
       expect(
         () => GameEngine.fromCheckpoint(<String, dynamic>{
           'matchFormat': MatchFormat.quickPop.name,
-          'rulesVersion': MatchRules.currentRulesVersion + 1,
+          'rulesVersion': MatchRules.quickPopRulesVersion + 1,
         }),
         throwsFormatException,
       );

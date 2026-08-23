@@ -17,6 +17,13 @@ import 'package:parchesepop/wallet.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 void main() {
+  final binding = TestWidgetsFlutterBinding.ensureInitialized();
+  setUp(() {
+    binding.platformDispatcher.accessibilityFeaturesTestValue =
+        const FakeAccessibilityFeatures(disableAnimations: true);
+  });
+  tearDown(binding.platformDispatcher.clearAccessibilityFeaturesTestValue);
+
   group('supportsMobileAds', () {
     test('supports only native Android and iOS', () {
       expect(supportsMobileAds(TargetPlatform.android), isTrue);
@@ -567,7 +574,6 @@ void main() {
           'Tienda',
           'Misiones',
           'Cómo jugar',
-          'Trampas',
         ]) {
           final text = find.text(label);
           expect(text, findsOneWidget);
@@ -632,7 +638,6 @@ void main() {
         'Tienda',
         'Misiones',
         'Cómo jugar',
-        'Trampas',
       ]) {
         final text = find.text(label);
         expect(text, findsOneWidget);

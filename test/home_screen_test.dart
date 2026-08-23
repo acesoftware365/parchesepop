@@ -44,7 +44,16 @@ void _useSpanish() {
   addTearDown(binding.platformDispatcher.clearLocaleTestValue);
 }
 
+void _disableTestAnimations(WidgetTester tester) {
+  tester.binding.platformDispatcher.accessibilityFeaturesTestValue =
+      const FakeAccessibilityFeatures(disableAnimations: true);
+  addTearDown(
+    tester.binding.platformDispatcher.clearAccessibilityFeaturesTestValue,
+  );
+}
+
 Future<void> _pumpLoadedHome(WidgetTester tester) async {
+  _disableTestAnimations(tester);
   await tester.pumpWidget(const ParchesePopApp());
   for (var attempt = 0; attempt < 30; attempt++) {
     await tester.pump(const Duration(milliseconds: 100));
@@ -166,6 +175,51 @@ void main() {
     expect(tester.takeException(), isNull);
   });
 
+  for (final viewport in <String, Size>{
+    'small phone': const Size(320, 568),
+    'fold cover': const Size(360, 600),
+    'iPhone 17': const Size(402, 874),
+    '8 inch tablet': const Size(800, 1280),
+    '13 inch tablet': const Size(1024, 1366),
+  }.entries) {
+    testWidgets(
+      '${viewport.key} keeps complete mode copy inside every button',
+      (tester) async {
+        _useSpanish();
+        _useViewport(tester, viewport.value);
+        _useCompactSystemText(tester, 1.35);
+        SharedPreferences.setMockInitialValues({});
+
+        await _pumpLoadedHome(tester);
+
+        for (final entry in const <String, String>{
+          'home-mode-quick-pop': 'Partida rápida online',
+          'home-mode-quick-table': 'Amigos online · crea una sala',
+          'home-mode-cpu': 'Juega contra el CPU',
+          'home-mode-pass-and-play': 'Pasa el teléfono · 2–4 jugadores',
+        }.entries) {
+          final card = find.byKey(ValueKey<String>(entry.key));
+          final copy = find.descendant(
+            of: card,
+            matching: find.text(entry.value),
+          );
+          expect(copy, findsOneWidget);
+          expect(
+            tester.widget<Text>(copy).overflow,
+            isNot(TextOverflow.ellipsis),
+          );
+          final cardRect = tester.getRect(card);
+          final copyRect = tester.getRect(copy);
+          expect(copyRect.left, greaterThanOrEqualTo(cardRect.left));
+          expect(copyRect.right, lessThanOrEqualTo(cardRect.right));
+          expect(copyRect.top, greaterThanOrEqualTo(cardRect.top));
+          expect(copyRect.bottom, lessThanOrEqualTo(cardRect.bottom));
+        }
+        expect(tester.takeException(), isNull);
+      },
+    );
+  }
+
   testWidgets('foldable cover portrait keeps the compact home in one view', (
     tester,
   ) async {
@@ -184,7 +238,6 @@ void main() {
       'Tienda',
       'Misiones',
       'Cómo jugar',
-      'Trampas',
     ]) {
       _expectInitiallyVisibleControl(tester, label, viewport);
     }
@@ -213,7 +266,6 @@ void main() {
         'Tienda',
         'Misiones',
         'Cómo jugar',
-        'Trampas',
       ]) {
         _expectInitiallyVisibleControl(tester, label, viewport);
       }
@@ -245,7 +297,6 @@ void main() {
           'Tienda',
           'Misiones',
           'Cómo jugar',
-          'Trampas',
         ]) {
           await _expectReachableControl(tester, label, viewport.value);
         }
@@ -327,7 +378,7 @@ void main() {
     expect(dock, findsOneWidget);
     expect(tester.getSize(dock).height, lessThanOrEqualTo(68));
     final centers = <double>[];
-    for (final label in const ['Tienda', 'Misiones', 'Cómo jugar', 'Trampas']) {
+    for (final label in const ['Tienda', 'Misiones', 'Cómo jugar']) {
       final button = find
           .ancestor(of: find.text(label), matching: find.byType(InkWell))
           .first;
@@ -366,7 +417,6 @@ void main() {
         'Tienda',
         'Misiones',
         'Cómo jugar',
-        'Trampas',
       ]) {
         _expectInitiallyVisibleControl(tester, label, viewport);
       }
@@ -510,6 +560,7 @@ void main() {
     (tester) async {
       _useSpanish();
       _useViewport(tester, const Size(390, 844));
+      _disableTestAnimations(tester);
       final analytics = _ConsentAwareAnalytics();
       SharedPreferences.setMockInitialValues({
         'profile_name': 'JuanPop',
@@ -663,6 +714,7 @@ void main() {
     (tester) async {
       _useSpanish();
       _useViewport(tester, const Size(390, 844));
+      _disableTestAnimations(tester);
       SharedPreferences.setMockInitialValues({
         'profile_name': 'JuanPop',
         'profile_email': 'juan@example.com',
@@ -729,6 +781,7 @@ void main() {
     (tester) async {
       _useSpanish();
       _useViewport(tester, const Size(390, 844));
+      _disableTestAnimations(tester);
       SharedPreferences.setMockInitialValues({
         'private-test-marker': 'guest data',
       });

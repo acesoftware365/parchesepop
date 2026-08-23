@@ -278,6 +278,7 @@ class OnlineGameSyncClient extends ChangeNotifier {
     Random? random,
     this.commandTimeout = const Duration(seconds: 12),
     this.hostReconnectGrace = const Duration(seconds: 30),
+    this.presenceRecoveryInterval = const Duration(seconds: 2),
   }) : _engine = authority?.engine ?? engine,
        _authority = authority,
        _random = random ?? Random.secure() {
@@ -296,6 +297,13 @@ class OnlineGameSyncClient extends ChangeNotifier {
         'The host reconnect grace period cannot be negative.',
       );
     }
+    if (presenceRecoveryInterval <= Duration.zero) {
+      throw ArgumentError.value(
+        presenceRecoveryInterval,
+        'presenceRecoveryInterval',
+        'The presence recovery interval must be positive.',
+      );
+    }
     if (isHost) {
       _authority ??= OnlineMatchAuthority(session: session, engine: _engine);
     } else if (_authority != null) {
@@ -309,6 +317,7 @@ class OnlineGameSyncClient extends ChangeNotifier {
   final bool isHost;
   final Duration commandTimeout;
   final Duration hostReconnectGrace;
+  final Duration presenceRecoveryInterval;
   final Random _random;
 
   GameEngine _engine;
@@ -318,11 +327,22 @@ class OnlineGameSyncClient extends ChangeNotifier {
   StreamSubscription<Object?>? _presenceSubscription;
   StreamSubscription<Object?>? _safeChatSubscription;
   OnlinePresenceLease? _presenceLease;
+  Timer? _presenceRecoveryTimer;
+  bool _recoveringOwnPresence = false;
   final Map<String, Timer> _disconnectGraceTimers = <String, Timer>{};
   Timer? _hostResumeTurnTimer;
   Timer? _hostResumeEffectTimer;
   Timer? _hostRecoveryTimer;
   Future<void> _serial = Future<void>.value();
+  // App lifecycle callbacks can arrive in a burst on iOS (inactive, paused,
+  // hidden, then resumed).  Keep start/pause/reconnect in one queue so an old
+  // pause cannot finish after a new reconnect and tear down its listeners.
+  Future<void> _lifecycleSerial = Future<void>.value();
+  // The callbacks are not guaranteed to arrive in order.  A pause that was
+  // queued before a resume must not run after that resume has become the
+  // latest lifecycle intent.  Incrementing this revision lets the queue skip
+  // stale operations while preserving the existing transport state machine.
+  int _lifecycleRevision = 0;
   final Map<String, Map<String, OnlineGameCommandResultRecord>> _results = {};
   final Set<String> _processingActionKeys = <String>{};
   final Set<String> _seenSafeChatMessageIds = <String>{};
@@ -390,7 +410,26 @@ class OnlineGameSyncClient extends ChangeNotifier {
         OnlineParticipantPresence.cpuControlled;
   }
 
-  Future<void> start() async {
+  Future<void> _queueLifecycle(Future<void> Function() operation) {
+    final next = _lifecycleSerial.then((_) => operation());
+    _lifecycleSerial = next.then<void>(
+      (_) {},
+      onError: (Object error, StackTrace stack) {},
+    );
+    return next;
+  }
+
+  Future<void> start() {
+    final revision = ++_lifecycleRevision;
+    return _queueLifecycle(() {
+      if (_disposed || revision != _lifecycleRevision) {
+        return Future<void>.value();
+      }
+      return _startInternal();
+    });
+  }
+
+  Future<void> _startInternal() async {
     _ensureUsable();
     if (_started) return;
     _started = true;
@@ -447,6 +486,7 @@ class OnlineGameSyncClient extends ChangeNotifier {
       _safeChatSubscription = transport.store
           .watch(_safeChatPath)
           .listen(_handleSafeChatSnapshot, onError: _handleSafeChatStreamError);
+      _startOwnPresenceRecovery();
       _initialized = true;
       if (_hostAvailability != OnlineHostAvailability.unavailable) {
         _lastError = null;
@@ -463,20 +503,40 @@ class OnlineGameSyncClient extends ChangeNotifier {
 
   /// Stops network watches without destroying the replicated engine.
   /// Calling [start] again reads the newest checkpoint and reconnects.
-  Future<void> pause() async {
+  Future<void> pause() {
+    final revision = ++_lifecycleRevision;
+    return _queueLifecycle(() {
+      if (_disposed || revision != _lifecycleRevision) {
+        return Future<void>.value();
+      }
+      return _pauseInternal();
+    });
+  }
+
+  Future<void> _pauseInternal() async {
     if (_disposed || !_started) return;
     _started = false;
     await _cancelSubscriptions(disconnectPresence: true);
     if (!_disposed) _setConnectionState(OnlineGameConnectionState.idle);
   }
 
-  Future<void> reconnect() async {
+  Future<void> reconnect() {
+    final revision = ++_lifecycleRevision;
+    return _queueLifecycle(() {
+      if (_disposed || revision != _lifecycleRevision) {
+        return Future<void>.value();
+      }
+      return _reconnectInternal();
+    });
+  }
+
+  Future<void> _reconnectInternal() async {
     _ensureUsable();
     if (_started) {
       _started = false;
       await _cancelSubscriptions(disconnectPresence: true);
     }
-    await start();
+    await _startInternal();
   }
 
   /// Explicit recovery action for a guest after [requiresHostRecovery].
@@ -678,32 +738,76 @@ class OnlineGameSyncClient extends ChangeNotifier {
       tokenId: tokenId,
       die: die,
     );
+    if (kDebugMode) {
+      debugPrint(
+        'Submitting online command to $commandParticipantId: '
+        '${command.toJson()}',
+      );
+    }
     final commandPath =
         '$_commandsPath/$commandParticipantId/$resolvedActionId';
-    final transaction = await transport.store.transaction(commandPath, (raw) {
-      if (raw == null) {
-        return OnlineStoreTransactionDecision.commit(command.toJson());
-      }
-      return const OnlineStoreTransactionDecision.abort();
-    });
-    if (!transaction.committed) {
-      OnlineGameCommandRecord? existing;
-      try {
-        existing = OnlineGameCommandRecord.fromJson(
-          transaction.value,
-          pathParticipantId: commandParticipantId,
-          pathActionId: resolvedActionId,
-        );
-      } on FormatException {
-        // The immutable path contains a malformed or unrelated command.
-      }
-      if (existing == null || !existing.representsSameAction(command)) {
-        throw const OnlineGameSyncException(
-          'That action ID already belongs to another command.',
-        );
-      }
-    }
+    await _publishImmutableCommand(commandPath, command);
     return _waitForResult(commandParticipantId, resolvedActionId);
+  }
+
+  /// Publishes one append-only command without a native Firebase transaction.
+  ///
+  /// Command IDs are already unique and Realtime Database Rules allow a write
+  /// only while this exact path is empty. Using `runTransaction` for this
+  /// single immutable record caused valid iOS move commands to be rejected by
+  /// the native transaction path even though the preceding roll and the same
+  /// payload through a normal write were accepted. A read followed by `set`
+  /// keeps the wire operation simple; the rules remain the final atomic
+  /// compare-and-set guard. If two retries race, the loser reads the winner
+  /// and treats an identical command as the same idempotent action.
+  Future<void> _publishImmutableCommand(
+    String commandPath,
+    OnlineGameCommandRecord command,
+  ) async {
+    final existingBeforeWrite = _decodeCommandAtPath(
+      await transport.store.read(commandPath),
+      command,
+    );
+    if (existingBeforeWrite != null) {
+      if (existingBeforeWrite.representsSameAction(command)) return;
+      throw const OnlineGameSyncException(
+        'That action ID already belongs to another command.',
+      );
+    }
+
+    try {
+      await transport.store.set(commandPath, command.toJson());
+    } catch (_) {
+      // The immutable rules reject the second writer in a same-action race.
+      // Re-read before surfacing the transport error so an identical winner
+      // remains an idempotent retry, while a real permission/network failure
+      // is never hidden.
+      final existingAfterFailure = _decodeCommandAtPath(
+        await transport.store.read(commandPath),
+        command,
+      );
+      if (existingAfterFailure != null &&
+          existingAfterFailure.representsSameAction(command)) {
+        return;
+      }
+      rethrow;
+    }
+  }
+
+  OnlineGameCommandRecord? _decodeCommandAtPath(
+    Object? raw,
+    OnlineGameCommandRecord command,
+  ) {
+    if (raw == null) return null;
+    try {
+      return OnlineGameCommandRecord.fromJson(
+        raw,
+        pathParticipantId: command.participantId,
+        pathActionId: command.actionId,
+      );
+    } on FormatException {
+      return null;
+    }
   }
 
   Future<OnlineGameCommandResultRecord> _waitForResult(
@@ -1054,9 +1158,10 @@ class OnlineGameSyncClient extends ChangeNotifier {
 
   void _handleGuestPresenceSnapshot(Object? raw) {
     if (_disposed || !_started || isHost) return;
+    final records = onlineMap(raw);
     final hostUid = _activeHostUid;
     if (hostUid == null) return;
-    final hostRecord = onlineMap(onlineMap(raw)[hostUid]);
+    final hostRecord = onlineMap(records[hostUid]);
     final roomPresence = LobbyPresence.values
         .where((value) => value.name == hostRecord['state'])
         .firstOrNull;
@@ -1065,6 +1170,37 @@ class OnlineGameSyncClient extends ChangeNotifier {
       return;
     }
     _markHostReconnecting();
+  }
+
+  void _startOwnPresenceRecovery() {
+    _presenceRecoveryTimer?.cancel();
+    _presenceRecoveryTimer = Timer.periodic(presenceRecoveryInterval, (_) {
+      if (_disposed || !_started || _recoveringOwnPresence) return;
+      unawaited(
+        transport.store
+            .read(_presencePath)
+            .then((raw) => _recoverOwnPresenceIfNeeded(onlineMap(raw)))
+            .catchError(_handleStreamError),
+      );
+    });
+  }
+
+  void _recoverOwnPresenceIfNeeded(Map<String, Object?> records) {
+    if (_disposed || !_started || _recoveringOwnPresence) return;
+    final ownRecord = onlineMap(records[participantId]);
+    if (ownRecord['state'] == LobbyPresence.connected.name) return;
+    _recoveringOwnPresence = true;
+    unawaited(
+      transport
+          .connectRoomPresence(roomId)
+          .then((lease) {
+            if (!_disposed && _started) _presenceLease = lease;
+          })
+          .catchError((Object error, StackTrace stackTrace) {
+            _handleStreamError(error, stackTrace);
+          })
+          .whenComplete(() => _recoveringOwnPresence = false),
+    );
   }
 
   void _markHostAvailable() {
@@ -1273,9 +1409,12 @@ class OnlineGameSyncClient extends ChangeNotifier {
     _hostResumeTurnTimer?.cancel();
     _hostResumeEffectTimer?.cancel();
     _hostRecoveryTimer?.cancel();
+    _presenceRecoveryTimer?.cancel();
     _hostResumeTurnTimer = null;
     _hostResumeEffectTimer = null;
     _hostRecoveryTimer = null;
+    _presenceRecoveryTimer = null;
+    _recoveringOwnPresence = false;
     for (final timer in _disconnectGraceTimers.values) {
       timer.cancel();
     }
@@ -1415,6 +1554,7 @@ class OnlineGameSyncClient extends ChangeNotifier {
   void dispose() {
     if (_disposed) return;
     _disposed = true;
+    _lifecycleRevision++;
     _started = false;
     if (_hostListenerAttached) {
       _engine.removeListener(_handleHostEngineMutation);
@@ -1431,11 +1571,14 @@ class OnlineGameSyncClient extends ChangeNotifier {
     _hostResumeTurnTimer?.cancel();
     _hostResumeEffectTimer?.cancel();
     _hostRecoveryTimer?.cancel();
+    _presenceRecoveryTimer?.cancel();
     for (final timer in _disconnectGraceTimers.values) {
       timer.cancel();
     }
     _disconnectGraceTimers.clear();
     _hostRecoveryTimer = null;
+    _presenceRecoveryTimer = null;
+    _recoveringOwnPresence = false;
     _commandSubscription = null;
     _matchSubscription = null;
     _presenceSubscription = null;

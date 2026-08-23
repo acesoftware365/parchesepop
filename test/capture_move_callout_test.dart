@@ -550,8 +550,9 @@ void main() {
     await tester.pump();
 
     expect(mover.progress, 3);
-    expect(target.progress, 0);
-    expect(target.inNest, isFalse);
+    // Captured Quick Pop pieces return to base under rules version 2.
+    expect(target.progress, -1);
+    expect(target.inNest, isTrue);
     expect(engine.remainingDice, containsAllInOrder(<int>[6, 20]));
     expect(
       engine.eventHistory.where((event) => event.type == GameEventType.capture),

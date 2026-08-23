@@ -143,7 +143,9 @@ void main() {
     await tester.pump(const Duration(milliseconds: 120));
 
     expect(progression.dailyMissions.tokenReleased, isTrue);
-    expect(progression.dailyMissions.cellsMoved, 1);
+    // Quick Pop now begins in base. The first die releases the piece onto its
+    // departure square; it does not also count as a travelled board cell.
+    expect(progression.dailyMissions.cellsMoved, 0);
     expect(wallet.balance, 285);
 
     await tester.pumpWidget(const SizedBox.shrink());
@@ -160,6 +162,8 @@ void main() {
     addTearDown(progression.dispose);
 
     Future<void> playOneRun(GameEngine engine) async {
+      // Exercise an actual board move instead of the new base-release action.
+      engine.currentPlayer.tokens.first.progress = 0;
       engine
         ..hasRolled = true
         ..dice = const [1, 2];

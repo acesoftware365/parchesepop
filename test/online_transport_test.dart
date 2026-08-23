@@ -352,6 +352,71 @@ final class _DelayedAdmissionCommitStore implements OnlineRealtimeStore {
   Future<int> serverNowMs() => delegate.serverNowMs();
 }
 
+final class _AdmittedGuestAcknowledgementStore implements OnlineRealtimeStore {
+  _AdmittedGuestAcknowledgementStore({
+    required this.delegate,
+    required this.guest,
+  });
+
+  final InMemoryOnlineRealtimeStore delegate;
+  final OnlineTransportClient guest;
+  String? roomId;
+  OnlineRoomJoinRequestRecord? request;
+  bool _acknowledged = false;
+
+  @override
+  Future<Object?> read(String path) async {
+    final activeRoomId = roomId;
+    final activeRequest = request;
+    if (!_acknowledged &&
+        activeRoomId != null &&
+        activeRequest != null &&
+        path ==
+            '$onlineTransportRoot/rooms/$activeRoomId/'
+                'joinFences/${activeRequest.uid}') {
+      final room = await guest.readRoom(activeRoomId);
+      if (room?.members.containsKey(activeRequest.uid) ?? false) {
+        _acknowledged = true;
+        await guest.connectRoomPresence(activeRoomId);
+        await delegate.set(
+          '$onlineTransportRoot/joinRequests/$activeRoomId/'
+          '${activeRequest.uid}',
+          null,
+        );
+        await delegate.set(path, null);
+      }
+    }
+    return delegate.read(path);
+  }
+
+  @override
+  Stream<Object?> watch(String path) => delegate.watch(path);
+
+  @override
+  Future<void> set(String path, Object? value) => delegate.set(path, value);
+
+  @override
+  Future<void> update(String path, Map<String, Object?> values) =>
+      delegate.update(path, values);
+
+  @override
+  Future<OnlineStoreTransactionResult> transaction(
+    String path,
+    OnlineStoreTransactionUpdater updater,
+  ) => delegate.transaction(path, updater);
+
+  @override
+  Future<void> setOnDisconnect(String path, Object? value) =>
+      delegate.setOnDisconnect(path, value);
+
+  @override
+  Future<void> cancelOnDisconnect(String path) =>
+      delegate.cancelOnDisconnect(path);
+
+  @override
+  Future<int> serverNowMs() => delegate.serverNowMs();
+}
+
 final class _FailAfterPublicRoomPublicationStore
     implements OnlineRealtimeStore {
   _FailAfterPublicRoomPublicationStore(this.delegate);
@@ -758,6 +823,73 @@ void main() {
       );
     });
 
+    test('host maintenance restores presence and admission after a transient '
+        'disconnect', () async {
+      final store = InMemoryOnlineRealtimeStore(initialNowMs: 3500);
+      final host = _client(
+        store,
+        'reconnecting-host',
+        'Host',
+        codeFactory: (_) => RoomCode.parse('BACK24'),
+      );
+      final guest = _client(store, 'patient-guest', 'Guest');
+      final room = await host.createRoom(
+        visibility: RoomVisibility.public,
+        mode: 'classic',
+        matchFormat: 'quickTable',
+      );
+      final presencePath =
+          '$onlineTransportRoot/rooms/${room.id}/presence/${host.identity.uid}';
+      final publicPath = '$onlineTransportRoot/publicRooms/${room.id}';
+      final maintenance = await host.maintainHostedRoom(room.id);
+      addTearDown(maintenance.close);
+
+      await store.simulateDisconnect(path: presencePath);
+      await store.simulateDisconnect(path: publicPath);
+      expect(
+        (await host.readRoom(room.id))!.presenceFor(host.identity.uid),
+        LobbyPresence.disconnected,
+      );
+      expect(await store.read(publicPath), isNull);
+
+      // A join request published while the host socket is recovering must
+      // be admitted once maintenance restores the still-open host lease.
+      final request = OnlineRoomJoinRequestRecord(
+        roomId: room.id,
+        roomCode: room.code,
+        uid: guest.identity.uid,
+        displayName: guest.identity.displayName,
+        attemptId: 'join_after_reconnect_001',
+        requestedAtMs: store.nowMs,
+      );
+      await store.set(
+        '$onlineTransportRoot/rooms/${room.id}/joinFences/${guest.identity.uid}',
+        <String, Object?>{
+          'uid': guest.identity.uid,
+          'attemptId': request.attemptId,
+          'requestedAt': request.requestedAtMs,
+        },
+      );
+      await store.set(
+        '$onlineTransportRoot/joinRequests/${room.id}/${guest.identity.uid}',
+        request.toJson(),
+      );
+
+      await Future<void>.delayed(const Duration(milliseconds: 2100));
+
+      final restored = await host.readRoom(room.id);
+      expect(restored?.presenceFor(host.identity.uid), LobbyPresence.connected);
+      expect(restored?.members, contains(guest.identity.uid));
+      expect(await store.read(publicPath), isNotNull);
+
+      // The restored lease also registered a fresh one-shot hook.
+      await store.simulateDisconnect(path: presencePath);
+      expect(
+        (await host.readRoom(room.id))!.presenceFor(host.identity.uid),
+        LobbyPresence.disconnected,
+      );
+    });
+
     test('host maintenance admits join-by-code and can be cancelled', () async {
       final store = InMemoryOnlineRealtimeStore(initialNowMs: 4000);
       final host = _client(
@@ -791,13 +923,24 @@ void main() {
 
     test('a disconnected host cannot receive a new join request', () async {
       final store = InMemoryOnlineRealtimeStore(initialNowMs: 4500);
+      var wallNow = DateTime.utc(2026);
       final host = _client(
         store,
         'offline-host',
         'Host',
         codeFactory: (_) => RoomCode.parse('AFF234'),
       );
-      final guest = _client(store, 'offline-guest', 'Guest');
+      final guest = OnlineTransportClient(
+        store: store,
+        identity: OnlineTransportIdentity(
+          uid: 'offline-guest',
+          displayName: 'Guest',
+        ),
+        wallClock: () => wallNow,
+        delay: (duration) async {
+          wallNow = wallNow.add(duration);
+        },
+      );
       final room = await host.createRoom(
         visibility: RoomVisibility.public,
         mode: 'classic',
@@ -818,6 +961,65 @@ void main() {
         guest.requestRoomJoinByCode(room.code.value),
         throwsA(_transportError(OnlineTransportErrorCode.roomNotFound)),
       );
+    });
+
+    test('join by code survives a host presence recovery window', () async {
+      final store = InMemoryOnlineRealtimeStore(initialNowMs: 4550);
+      var wallNow = DateTime.utc(2026);
+      final host = _client(
+        store,
+        'recovering-code-host',
+        'Host',
+        codeFactory: (_) => RoomCode.parse('WAT234'),
+      );
+      final guest = OnlineTransportClient(
+        store: store,
+        identity: OnlineTransportIdentity(
+          uid: 'recovering-code-guest',
+          displayName: 'Guest',
+        ),
+        wallClock: () => wallNow,
+        delay: (duration) async {
+          wallNow = wallNow.add(duration);
+          if (wallNow.millisecondsSinceEpoch >=
+              DateTime.utc(2026).millisecondsSinceEpoch + 150) {
+            final rooms = onlineMap(
+              await store.read('$onlineTransportRoot/rooms'),
+            );
+            if (rooms.isNotEmpty) {
+              final roomId = rooms.keys.single;
+              await store.set(
+                '$onlineTransportRoot/rooms/$roomId/presence/recovering-code-host',
+                OnlinePresenceRecord(
+                  uid: 'recovering-code-host',
+                  presence: LobbyPresence.connected,
+                  changedAtMs: store.nowMs,
+                  connectionId: 'restored-code-connection',
+                ).toJson(),
+              );
+            }
+          }
+        },
+      );
+      final room = await host.createRoom(
+        visibility: RoomVisibility.private,
+        mode: 'classic',
+        matchFormat: 'quickTable',
+      );
+      await store.set(
+        '$onlineTransportRoot/rooms/${room.id}/presence/${room.hostUid}',
+        OnlinePresenceRecord(
+          uid: room.hostUid,
+          presence: LobbyPresence.disconnected,
+          changedAtMs: store.nowMs,
+          connectionId: 'transient-code-connection',
+        ).toJson(),
+      );
+
+      final request = await guest.requestRoomJoinByCode(room.code.value);
+
+      expect(request.roomId, room.id);
+      expect(request.roomCode, room.code);
     });
 
     test('host maintenance registers public-room disconnect cleanup', () async {
@@ -977,6 +1179,50 @@ void main() {
           isNull,
         );
         expect((await host.listPublicRooms()).single.occupiedSeatCount, 1);
+      },
+    );
+
+    test(
+      'a guest acknowledgement cannot be mistaken for join cancellation',
+      () async {
+        final memory = InMemoryOnlineRealtimeStore(initialNowMs: 6750);
+        late final OnlineTransportClient guest;
+        final store = _AdmittedGuestAcknowledgementStore(
+          delegate: memory,
+          guest: guest = _client(memory, 'ack-guest', 'Guest'),
+        );
+        final host = _client(
+          store,
+          'ack-host',
+          'Host',
+          codeFactory: (_) => RoomCode.parse('ACK234'),
+        );
+        final room = await host.createRoom(
+          visibility: RoomVisibility.private,
+          mode: 'classic',
+          matchFormat: 'quickTable',
+        );
+        final request = await guest.requestRoomJoinByCode(room.code.value);
+        store
+          ..roomId = room.id
+          ..request = request;
+
+        final admitted = await host.admitPendingJoinRequests(room.id);
+
+        expect(admitted.members, contains(request.uid));
+        expect(admitted.presenceFor(request.uid), LobbyPresence.connected);
+        expect(
+          await memory.read(
+            '$onlineTransportRoot/joinRequests/${room.id}/${request.uid}',
+          ),
+          isNull,
+        );
+        expect(
+          await memory.read(
+            '$onlineTransportRoot/rooms/${room.id}/joinFences/${request.uid}',
+          ),
+          isNull,
+        );
       },
     );
 
@@ -1398,7 +1644,7 @@ void main() {
       expect(resolution?.opponentUid, isNull);
     });
 
-    test('CPU fallback begins at exactly ten seconds, never earlier', () async {
+    test('CPU fallback begins at exactly fifteen seconds, never earlier', () async {
       final store = InMemoryOnlineRealtimeStore(initialNowMs: 20_000);
       final player = _client(store, 'solo', 'Solo', seed: 20);
       final ticket = await player.enqueueQuickPop(mode: 'classic');
@@ -1536,7 +1782,7 @@ void main() {
     );
 
     test(
-      'findQuickPop waits a deterministic total of exactly ten seconds',
+      'findQuickPop waits a deterministic total of exactly fifteen seconds',
       () async {
         final store = InMemoryOnlineRealtimeStore(initialNowMs: 0);
         var delayedMs = 0;

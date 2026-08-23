@@ -707,12 +707,22 @@ class OnlineMatchAuthority {
       }
     }
 
-    final cameBackDuringOwnTurn =
-        !engine.gameOver && participant.color == engine.currentPlayer.color;
+    // Returning at the start of a clean dice turn must not strand the seat:
+    // there is no interrupted action for the CPU to finish.  Only hold the
+    // player when a roll/effect is actually in progress; this is especially
+    // important after iOS sends duplicate Home/resume callbacks around a
+    // double, because the same player legitimately keeps the next turn.
+    final cameBackDuringActiveDiceTurn =
+        !engine.gameOver &&
+        participant.color == engine.currentPlayer.color &&
+        (engine.hasRolled ||
+            engine.remainingDice.isNotEmpty ||
+            engine.effectResolving ||
+            engine.pendingTrapPlacement);
     connection
       ..presence = OnlineParticipantPresence.connected
       ..disconnectedAt = null;
-    if (cameBackDuringOwnTurn) {
+    if (cameBackDuringActiveDiceTurn) {
       _awaitingNextTurn[participantId] = engine.turnNumber;
     } else {
       _awaitingNextTurn.remove(participantId);

@@ -441,6 +441,44 @@ void main() {
     expect(tester.takeException(), isNull);
   });
 
+  testWidgets(
+    'Quick Table desktop screens use Pop theme and working back buttons',
+    (tester) async {
+      final controller = _FakeOnlineRoomController();
+      await _pumpPhone(tester, QuickTableHubScreen(controller: controller));
+
+      final hubScaffold = tester.widget<Scaffold>(find.byType(Scaffold).first);
+      expect(hubScaffold.backgroundColor, const Color(0xFF12234A));
+
+      await tester.tap(find.byKey(const ValueKey('quick-table-create-room')));
+      await tester.pumpAndSettle();
+      expect(find.byKey(const ValueKey('create-room-back')), findsOneWidget);
+      expect(
+        tester.widget<Scaffold>(find.byType(Scaffold).last).backgroundColor,
+        const Color(0xFF12234A),
+      );
+
+      await tester.tap(find.byKey(const ValueKey('create-room-back')));
+      await tester.pumpAndSettle();
+      expect(find.byType(CreateRoomScreen), findsNothing);
+      expect(find.byType(QuickTableHubScreen), findsOneWidget);
+
+      await tester.tap(find.byKey(const ValueKey('quick-table-join-code')));
+      await tester.pumpAndSettle();
+      expect(find.byKey(const ValueKey('join-room-back')), findsOneWidget);
+      await tester.tap(find.byKey(const ValueKey('join-room-back')));
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.byKey(const ValueKey('quick-table-public-rooms')));
+      await tester.pumpAndSettle();
+      expect(find.byKey(const ValueKey('public-rooms-back')), findsOneWidget);
+      await tester.tap(find.byKey(const ValueKey('public-rooms-back')));
+      await tester.pumpAndSettle();
+      expect(find.byType(QuickTableHubScreen), findsOneWidget);
+      expect(tester.takeException(), isNull);
+    },
+  );
+
   testWidgets('create flow selects Chaos/public and reaches its lobby', (
     tester,
   ) async {
@@ -578,6 +616,47 @@ void main() {
     expect(terminals.single.stage, OnlineFlowStage.createFailed);
     expect(terminals.single.failureReason, OnlineFlowFailureReason.timeout);
     expect(find.textContaining('tardó demasiado'), findsOneWidget);
+  });
+
+  testWidgets('default room creation tolerates a slow 20 second response', (
+    tester,
+  ) async {
+    final controller = _FakeOnlineRoomController()
+      ..createGate = Completer<void>();
+    final analytics = _RecordingAnalytics();
+    await _pumpPhone(
+      tester,
+      QuickTableHubScreen(
+        controller: controller,
+        onPlayLocal: () {},
+        analytics: analytics,
+      ),
+    );
+
+    await tester.tap(find.byKey(const ValueKey('quick-table-create-room')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const ValueKey('create-room-submit')));
+    await tester.pump();
+    await tester.pump(const Duration(seconds: 20));
+
+    expect(controller.cancelPendingCreateCalls, 0);
+    expect(
+      find.byKey(const ValueKey('create-room-cancel')).hitTestable(),
+      findsOneWidget,
+    );
+
+    controller.createGate!.complete();
+    await tester.pumpAndSettle();
+
+    expect(controller.lobby, isNotNull);
+    expect(find.byType(RoomLobbyScreen), findsOneWidget);
+    expect(
+      analytics.onlineEvents.map((event) => event.stage),
+      containsAllInOrder(<OnlineFlowStage>[
+        OnlineFlowStage.createStarted,
+        OnlineFlowStage.roomCreated,
+      ]),
+    );
   });
 
   testWidgets('join code validates six characters before joining', (

@@ -386,13 +386,13 @@ const _playModeGuideSpecs = <_PlayModeGuideSpec>[
   _PlayModeGuideSpec(
     id: 'quick-pop',
     title: 'QUICK POP',
-    badge: 'ONLINE · 10 S',
+    badge: 'ONLINE · 30 S',
     description:
-        'Partida casual online con 2 fichas. Busca un rival durante 10 segundos; si no aparece, continúa contra el CPU.',
+        'Partida casual online con 2 fichas. Busca un rival durante 30 segundos; si no aparece, continúa contra el CPU.',
     steps: [
       'Toca Quick Pop y comienza la búsqueda.',
       'Si se conecta alguien, juegan en el mismo tablero.',
-      'A los 10 segundos sin rival, entra el CPU automáticamente.',
+      'A los 30 segundos sin rival, entra el CPU automáticamente.',
     ],
     icon: Icons.bolt_rounded,
     color: GuidePalette.violet,
@@ -737,7 +737,7 @@ const quickPopRuleSections = <GuideRuleSection>[
     badge: '2 FICHAS',
     rules: [
       'Cada jugador usa 2 fichas en el tablero completo de 68 casillas.',
-      'Las dos fichas empiezan juntas en la salida; no pasan por la cárcel.',
+      'Las dos fichas empiezan dentro de la base; cualquier número puede sacar una.',
       'Gana quien lleve primero sus 2 fichas al centro.',
     ],
   ),
@@ -748,7 +748,7 @@ const quickPopRuleSections = <GuideRuleSection>[
     badge: 'SIN 5',
     rules: [
       'No necesitas sacar un 5 para comenzar: toca una ficha y elige un movimiento legal.',
-      'La pareja inicial está protegida y no bloquea el paso como barrera.',
+      'Las fichas que salen pueden formar una barrera normal de dos fichas.',
       'Cuando solo existe una jugada legal, el juego la realiza automáticamente.',
     ],
   ),
@@ -769,7 +769,7 @@ const quickPopRuleSections = <GuideRuleSection>[
     badge: '+20',
     rules: [
       'Captura al caer exactamente sobre una ficha rival fuera de una casilla segura.',
-      'La ficha capturada vuelve a su salida, no a una cárcel.',
+      'La ficha capturada vuelve a la base y puede salir con cualquier número.',
       'Capturar concede +20 y completar una ficha concede +10.',
     ],
   ),
@@ -1300,7 +1300,7 @@ class _ModeSummary extends StatelessWidget {
       GameGuideMode.quickPop => (
         GuidePalette.green,
         Icons.speed_rounded,
-        'Quick Pop: tablero completo, 2 fichas ya en salida y una carrera más corta sin esperar un 5.',
+        'Quick Pop: tablero completo, 2 fichas en la base y una carrera más corta sin esperar un 5.',
       ),
       GameGuideMode.quickTable => (
         GuidePalette.blue,

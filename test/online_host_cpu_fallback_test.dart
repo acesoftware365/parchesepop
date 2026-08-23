@@ -72,6 +72,11 @@ void main() {
         findsNothing,
       );
       expect(
+        find.byKey(const ValueKey('online-host-recovery-banner')),
+        findsOneWidget,
+      );
+      expect(find.text('CPU JUGANDO POR EL ANFITRIÓN'), findsOneWidget);
+      expect(
         find.text('El anfitrión salió. El CPU continúa la partida.'),
         findsOneWidget,
       );

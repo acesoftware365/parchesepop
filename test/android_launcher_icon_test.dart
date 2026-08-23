@@ -5,6 +5,16 @@ import 'package:crypto/crypto.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {
+  final canonicalIcon = File('assets/images/parchis_pop_icon.png');
+  late final String canonicalIconHash;
+
+  setUpAll(() {
+    expect(canonicalIcon.existsSync(), isTrue);
+    canonicalIconHash = sha256
+        .convert(canonicalIcon.readAsBytesSync())
+        .toString();
+  });
+
   const legacySizes = <String, int>{
     'mdpi': 48,
     'hdpi': 72,
@@ -78,9 +88,17 @@ void main() {
       ).existsSync(),
       isTrue,
     );
+    // The rendered four-player board is the single canonical icon source.
+    // Keeping the retired yellow die SVGs would make it too easy for a future
+    // regeneration to silently restore the wrong launcher artwork.
+    expect(File('assets/images/parchis_pop_icon.png').existsSync(), isTrue);
     expect(
-      File('assets/branding/parchis_pop_app_icon.svg').readAsStringSync(),
-      contains('id="gold"'),
+      File('assets/branding/parchis_pop_app_icon.svg').existsSync(),
+      isFalse,
+    );
+    expect(
+      File('assets/branding/parchis_pop_app_icon_foreground.svg').existsSync(),
+      isFalse,
     );
   });
 
@@ -90,6 +108,29 @@ void main() {
     ).readAsStringSync();
     expect(manifest, contains('android:icon="@mipmap/ic_launcher"'));
     expect(manifest, contains('android:roundIcon="@mipmap/ic_launcher_round"'));
+  });
+
+  test('iOS launcher keeps the canonical four-player board artwork', () {
+    final iosMarketingIcon = File(
+      'ios/Runner/Assets.xcassets/AppIcon.appiconset/'
+      'Icon-App-1024x1024@1x.png',
+    );
+    expect(iosMarketingIcon.existsSync(), isTrue);
+    expect(
+      sha256.convert(iosMarketingIcon.readAsBytesSync()).toString(),
+      canonicalIconHash,
+    );
+  });
+
+  test('retired yellow die icon sources stay removed', () {
+    expect(
+      File('assets/branding/parchis_pop_app_icon.svg').existsSync(),
+      isFalse,
+    );
+    expect(
+      File('assets/branding/parchis_pop_app_icon_foreground.svg').existsSync(),
+      isFalse,
+    );
   });
 }
 

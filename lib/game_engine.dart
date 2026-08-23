@@ -235,9 +235,9 @@ class GameEngine extends ChangeNotifier {
            initialTokenProgress: MatchRules.forFormat(
              matchFormat,
            ).initialTokenProgress,
-           initialStackIntact: !MatchRules.forFormat(
-             matchFormat,
-           ).initialStackFormsBarrier,
+           // Quick Pop starts in base, so there is no protected opening
+           // stack to preserve. Later two-token stacks are normal barriers.
+           initialStackIntact: false,
          ),
          PlayerState(
            PlayerColor.green,
@@ -253,9 +253,7 @@ class GameEngine extends ChangeNotifier {
            initialTokenProgress: MatchRules.forFormat(
              matchFormat,
            ).initialTokenProgress,
-           initialStackIntact: !MatchRules.forFormat(
-             matchFormat,
-           ).initialStackFormsBarrier,
+           initialStackIntact: false,
          ),
          PlayerState(
            PlayerColor.yellow,
@@ -271,9 +269,7 @@ class GameEngine extends ChangeNotifier {
            initialTokenProgress: MatchRules.forFormat(
              matchFormat,
            ).initialTokenProgress,
-           initialStackIntact: !MatchRules.forFormat(
-             matchFormat,
-           ).initialStackFormsBarrier,
+           initialStackIntact: false,
          ),
          PlayerState(
            PlayerColor.blue,
@@ -289,9 +285,7 @@ class GameEngine extends ChangeNotifier {
            initialTokenProgress: MatchRules.forFormat(
              matchFormat,
            ).initialTokenProgress,
-           initialStackIntact: !MatchRules.forFormat(
-             matchFormat,
-           ).initialStackFormsBarrier,
+           initialStackIntact: false,
          ),
        ] {
     currentPlayerIndex = initialPlayerColor.index;
@@ -402,12 +396,11 @@ class GameEngine extends ChangeNotifier {
       player.shielded = saved['shielded'] as bool? ?? false;
       player.skippedTurns = saved['skippedTurns'] as int? ?? 0;
     }
-    final savedInitialStacks = checkpoint['initialStackIntact'] as Map?;
     for (final player in engine.players) {
-      player.initialStackIntact = engine.rules.initialStackFormsBarrier
-          ? false
-          : savedInitialStacks?[player.color.name] as bool? ??
-                player.tokens.every((token) => token.progress == 0);
+      // The old Quick Pop format placed both pieces on the departure square
+      // and marked that pair as protected. Version 2 starts in base, so a
+      // restored match must never recreate that special opening stack.
+      player.initialStackIntact = false;
     }
     engine.traps
       ..clear()
@@ -1348,7 +1341,7 @@ class GameEngine extends ChangeNotifier {
                 : 'Tres dobles: no había una ficha en juego para penalizar.'
           : 'Tres dobles: la ficha ${penalized.id + 1} de '
                 '${currentPlayer.name} volvió '
-                '${rules.requiresFiveToExit ? 'a la cárcel' : 'a la salida'}.'
+                '${rules.requiresFiveToExit ? 'a la cárcel' : 'a la base'}.'
                 '${openedBarrier ? ' La barrera se abrió.' : ''}';
       _recordEvent(
         type: GameEventType.threeDoublesPenalty,
@@ -1717,7 +1710,7 @@ class GameEngine extends ChangeNotifier {
     _recordEvent(
       type: enteredFromNest ? GameEventType.departure : GameEventType.move,
       description: enteredFromNest
-          ? '${currentPlayer.name} sacó la ficha ${token.id + 1} de la cárcel.'
+          ? '${currentPlayer.name} sacó la ficha ${token.id + 1} de la base.'
           : usingAllDice
           ? '${currentPlayer.name} usó todos los dados '
                 '(${consumedDice.join(' + ')}) con la ficha '
@@ -2357,12 +2350,12 @@ class GameEngine extends ChangeNotifier {
         token.progress = rules.initialTokenProgress;
         message = rules.requiresFiveToExit
             ? '¡TRAMPA CÁRCEL! ${player.name} volvió a la cárcel.'
-            : '¡TRAMPA! ${player.name} volvió a la salida.';
+            : '¡TRAMPA! ${player.name} volvió a la base.';
       case PowerUp.bomb:
         token.progress = rules.initialTokenProgress;
         message = rules.requiresFiveToExit
             ? '¡BOMBA! ${player.name} volvió a la cárcel.'
-            : '¡BOMBA! ${player.name} volvió a la salida.';
+            : '¡BOMBA! ${player.name} volvió a la base.';
       case PowerUp.shield || PowerUp.boost:
         return false;
     }

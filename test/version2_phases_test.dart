@@ -177,6 +177,35 @@ void main() {
       expect(rect.right, lessThanOrEqualTo(_mobileViewport.width));
       expect(rect.width, greaterThanOrEqualTo(48));
       expect(rect.height, greaterThanOrEqualTo(48));
+      expect(
+        find.descendant(
+          of: card,
+          matching: find.byIcon(Icons.arrow_forward_rounded),
+        ),
+        findsNothing,
+        reason:
+            'Mode cards should be centered and use the whole card as the tap target.',
+      );
+    }
+    for (final title in [
+      'QUICK POP',
+      'MESA RÁPIDA',
+      'CONTRA CPU',
+      'PASS & PLAY',
+    ]) {
+      final titleFinder = find.text(title);
+      final titleCenter = tester.getCenter(titleFinder);
+      final card = switch (title) {
+        'QUICK POP' => quickPop,
+        'MESA RÁPIDA' => quickTable,
+        'CONTRA CPU' => cpu,
+        _ => passAndPlay,
+      };
+      expect(
+        titleCenter.dx,
+        closeTo(tester.getRect(card).center.dx, 2),
+        reason: '$title should be centered inside its mode card.',
+      );
     }
     final featuredTop = tester.getTopLeft(quickPop).dy;
     expect(
@@ -225,7 +254,7 @@ void main() {
     await _unmount(tester);
   });
 
-  testWidgets('online startup is playable locally by ten seconds', (
+  testWidgets('online startup is playable locally by fifteen seconds', (
     tester,
   ) async {
     _useMobileViewport(tester);
@@ -267,11 +296,20 @@ void main() {
     await tester.pump();
     await tester.tap(find.byKey(const ValueKey('quick-pop-online-start')));
     await tester.pump();
-    await tester.pump(const Duration(milliseconds: 9999));
+    await tester.pump(const Duration(milliseconds: 14999));
     if (find.byType(GameScreen).evaluate().isEmpty) {
       await tester.pump(const Duration(milliseconds: 1));
     }
+    await _pumpUntil(
+      tester,
+      () => find
+          .byKey(const ValueKey('quick-pop-start-cpu'))
+          .evaluate()
+          .isNotEmpty,
+    );
+    await tester.tap(find.byKey(const ValueKey('quick-pop-start-cpu')));
     await tester.pump();
+    await tester.pump(const Duration(milliseconds: 250));
 
     final screen = tester.widget<GameScreen>(find.byType(GameScreen));
     final local = screen.onlineSession!.localParticipant;

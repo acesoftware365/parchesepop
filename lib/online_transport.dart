@@ -7,6 +7,22 @@ import 'package:crypto/crypto.dart';
 import 'online_lobby.dart';
 import 'online_transport_models.dart';
 
+/// Optional, UI-facing trace sink for the Quick Pop matchmaking protocol.
+///
+/// The transport never depends on the diagnostic screen: production callers
+/// can omit this callback and the protocol behaves exactly as before. When a
+/// caller supplies it, each Firebase boundary (queue scan, group bootstrap,
+/// member join and resolution) is reported with enough context to compare two
+/// devices' traces without changing the authoritative data flow.
+typedef QuickPopDebugSink =
+    void Function(
+      String step, {
+      String detail,
+      String? path,
+      bool success,
+      bool error,
+    });
+
 sealed class OnlineStoreTransactionDecision {
   const OnlineStoreTransactionDecision();
 
@@ -131,6 +147,7 @@ final class OnlineTransportIdentity {
 
 typedef OnlineDelay = Future<void> Function(Duration duration);
 typedef OnlineRoomCodeFactory = RoomCode Function(Random random);
+typedef OnlineWallClock = DateTime Function();
 
 /// Durable, private resource index used to finish account deletion after an
 /// app restart. The Firebase path is:
@@ -145,21 +162,70 @@ final class OnlinePresenceLease {
     required this.uid,
     required this.connectionId,
     required String path,
+    required Map<String, Object?> connectedValue,
+    required Map<String, Object?> disconnectedValue,
   }) : _store = store,
-       _path = path;
+       _path = path,
+       _connectedValue = connectedValue,
+       _disconnectedValue = disconnectedValue;
 
   final OnlineRealtimeStore _store;
   final String _path;
+  final Map<String, Object?> _connectedValue;
+  final Map<String, Object?> _disconnectedValue;
   final String roomId;
   final String uid;
   final String connectionId;
   bool _closed = false;
+  Future<void>? _refreshing;
 
   bool get closed => _closed;
+
+  /// Restores this participant's server-side disconnect hook and connected
+  /// record after a transient Firebase socket interruption.
+  ///
+  /// Realtime Database onDisconnect registrations are one-shot: once a brief
+  /// network loss fires the hook, Firebase does not recreate it when the same
+  /// app reconnects. Keeping the lease object alive without re-arming the hook
+  /// left an open lobby marked as disconnected and made its room code look
+  /// invalid to every guest. Concurrent refresh attempts share one operation
+  /// so the host maintenance timer and lifecycle recovery cannot race.
+  Future<void> refresh() {
+    if (_closed) return Future<void>.value();
+    final active = _refreshing;
+    if (active != null) return active;
+    late final Future<void> operation;
+    operation = _refreshPresence().whenComplete(() {
+      if (identical(_refreshing, operation)) _refreshing = null;
+    });
+    _refreshing = operation;
+    return operation;
+  }
+
+  Future<void> _refreshPresence() async {
+    if (_closed) return;
+    final now = await _store.serverNowMs();
+    if (_closed) return;
+    final disconnectedValue = <String, Object?>{
+      ..._disconnectedValue,
+      'changedAt': now,
+    };
+    final connectedValue = <String, Object?>{
+      ..._connectedValue,
+      'changedAt': now,
+    };
+    await _store.setOnDisconnect(_path, disconnectedValue);
+    if (_closed) {
+      await _store.cancelOnDisconnect(_path);
+      return;
+    }
+    await _store.set(_path, connectedValue);
+  }
 
   Future<void> disconnect() async {
     if (_closed) return;
     _closed = true;
+    await _refreshing;
     await _store.cancelOnDisconnect(_path);
     final now = await _store.serverNowMs();
     await _store.set(
@@ -178,6 +244,7 @@ final class OnlinePresenceLease {
   Future<void> cancel() async {
     if (_closed) return;
     _closed = true;
+    await _refreshing;
     await _store.cancelOnDisconnect(_path);
   }
 }
@@ -248,29 +315,49 @@ final class OnlineTransportClient {
     required this.identity,
     Random? random,
     OnlineDelay? delay,
+    OnlineWallClock? wallClock,
     OnlineRoomCodeFactory? roomCodeFactory,
+    QuickPopDebugSink? quickPopDebugSink,
   }) : _random = random ?? Random.secure(),
        _delay = delay ?? Future<void>.delayed,
-       _roomCodeFactory = roomCodeFactory ?? RoomCode.generate;
+       _wallClock = wallClock ?? DateTime.now,
+       _roomCodeFactory = roomCodeFactory ?? RoomCode.generate,
+       _quickPopDebugSink = quickPopDebugSink;
 
   static const int _maximumRoomCodeAttempts = 32;
   static const Duration _roomReservationLifetime = Duration(minutes: 2);
   static const Duration _quickClaimHandshakeGrace = Duration(milliseconds: 250);
   static const Duration _quickServerDeadlineRetry = Duration(milliseconds: 250);
+  // A group resolution is committed by its deterministic leader at the
+  // shared deadline.  A follower can cross that deadline while its last
+  // group read is still in flight, so give the resolution write a bounded
+  // propagation window before settling that follower as CPU.  This prevents
+  // two human clients from receiving different outcomes at the deadline
+  // without keeping a disconnected leader alive forever.
+  static const Duration _quickGroupResolutionGrace = Duration(seconds: 2);
   static const int _quickQueueReadLimit = 64;
 
   final OnlineRealtimeStore store;
   final OnlineTransportIdentity identity;
   final Random _random;
   final OnlineDelay _delay;
+  final OnlineWallClock _wallClock;
   final OnlineRoomCodeFactory _roomCodeFactory;
+  final QuickPopDebugSink? _quickPopDebugSink;
   final Map<String, OnlinePresenceLease> _presenceLeases = {};
   final Map<String, OnlineRoomJoinRequestRecord> _pendingJoinRequests = {};
   final Map<String, QuickPopQueueTicket> _ownedQuickTickets = {};
 
+  /// The last deterministic group seen by this client. Keeping this small
+  /// locator lets a ticket finish its launch at the exact deadline even when
+  /// the Firebase active-queue query has just rolled past that deadline.
+  final Map<String, String> _ownedQuickGroupIds = {};
+
   static const Set<String> _knownQuickQueueKeys = <String>{
     'traditional_quickPop',
     'chaos_quickPop',
+    'traditional_quickPop_v2',
+    'chaos_quickPop_v2',
   };
 
   String get _profilesPath => '$onlineTransportRoot/profiles';
@@ -280,8 +367,28 @@ final class OnlineTransportClient {
   String get _joinRequestsPath => '$onlineTransportRoot/joinRequests';
   String get _quickQueuesPath => '$onlineTransportRoot/quickQueues';
   String get _quickClaimsPath => '$onlineTransportRoot/quickClaims';
+  String get _quickGroupsPath => '$onlineTransportRoot/quickPopGroups';
   String get _accountResourcesPath =>
       '$onlineTransportRoot/$onlineAccountResourcesNode/${identity.uid}';
+
+  void _emitQuickPopDebug(
+    String step, {
+    String detail = '',
+    String? path,
+    bool success = false,
+    bool error = false,
+  }) {
+    final sink = _quickPopDebugSink;
+    if (sink == null) return;
+    // Diagnostics must never be able to break matchmaking. This also keeps a
+    // clipboard/UI failure from turning an otherwise valid Firebase result
+    // into a transport exception.
+    try {
+      sink(step, detail: detail, path: path, success: success, error: error);
+    } catch (_) {
+      // Best effort only.
+    }
+  }
 
   Future<SyncedOnlineProfile> syncProfile() async {
     final now = await store.serverNowMs();
@@ -301,13 +408,18 @@ final class OnlineTransportClient {
     final needsBackendCleanup =
         existingResources['requiresBackendCleanup'] == true ||
         (existing.isNotEmpty && existingResources.isEmpty);
-    await store.update(onlineTransportRoot, <String, Object?>{
-      'profiles/${identity.uid}': profile.toJson(),
-      '$onlineAccountResourcesNode/${identity.uid}/schemaVersion':
-          onlineAccountResourcesSchemaVersion,
-      '$onlineAccountResourcesNode/${identity.uid}/updatedAt': now,
-      '$onlineAccountResourcesNode/${identity.uid}/requiresBackendCleanup':
-          needsBackendCleanup,
+    // Keep these writes at their authorized Firebase paths. A root-level
+    // multi-location PATCH is rejected by some deployed rulesets because the
+    // parent `onlineV2` node is intentionally non-writable, even though both
+    // child records grant the current uid write access. Profile and resource
+    // metadata are independently retryable initialization records, so writing
+    // them separately preserves the same data while remaining compatible with
+    // both the current and the deployed rules.
+    await store.update(path, profile.toJson());
+    await store.update(_accountResourcesPath, <String, Object?>{
+      'schemaVersion': onlineAccountResourcesSchemaVersion,
+      'updatedAt': now,
+      'requiresBackendCleanup': needsBackendCleanup,
     });
     return profile;
   }
@@ -471,7 +583,7 @@ final class OnlineTransportClient {
         'The room code is not active.',
       );
     }
-    final room = await readRoom(roomId);
+    var room = await readRoom(roomId);
     if (room == null) {
       throw const OnlineTransportException(
         OnlineTransportErrorCode.roomNotFound,
@@ -494,10 +606,29 @@ final class OnlineTransportClient {
     // connectivity. Reject it immediately instead of making a guest wait for
     // the full admission timeout.
     if (room.presenceFor(room.hostUid) != LobbyPresence.connected) {
-      throw const OnlineTransportException(
-        OnlineTransportErrorCode.roomNotFound,
-        'The room host is no longer connected.',
-      );
+      // A brief network hand-off fires Firebase's one-shot disconnect value
+      // before the still-open host can re-arm it. Give host maintenance one
+      // bounded reconciliation window instead of rejecting a valid code on
+      // that transient snapshot. A genuinely closed host still fails fast.
+      final recoveryDeadline = _wallClock().add(const Duration(seconds: 3));
+      do {
+        await _delay(const Duration(milliseconds: 150));
+        room = await readRoom(roomId);
+        if (room == null) {
+          throw const OnlineTransportException(
+            OnlineTransportErrorCode.roomNotFound,
+            'The room no longer exists.',
+          );
+        }
+        if (room.status != RoomStatus.waiting) break;
+      } while (room.presenceFor(room.hostUid) != LobbyPresence.connected &&
+          _wallClock().isBefore(recoveryDeadline));
+      if (room.presenceFor(room.hostUid) != LobbyPresence.connected) {
+        throw const OnlineTransportException(
+          OnlineTransportErrorCode.roomNotFound,
+          'The room host is no longer connected.',
+        );
+      }
     }
     if (!room.members.containsKey(identity.uid) &&
         room.members.length >= LobbySeatColor.values.length) {
@@ -604,10 +735,24 @@ final class OnlineTransportClient {
     });
 
     Future<void> reconcile() async {
-      final snapshot = await readRoom(cleanRoomId);
-      if (snapshot == null ||
-          snapshot.presenceFor(snapshot.hostUid) != LobbyPresence.connected) {
-        return;
+      var snapshot = await readRoom(cleanRoomId);
+      if (snapshot == null) return;
+      // Presence restoration must run before this read. Otherwise a one-shot
+      // onDisconnect write from a brief network change makes the still-open
+      // host skip admission forever and every valid room code appears dead.
+      if (snapshot.presenceFor(snapshot.hostUid) != LobbyPresence.connected) {
+        final refreshed = await refreshRoomPresence(cleanRoomId);
+        if (!refreshed) return;
+        snapshot = await readRoom(cleanRoomId);
+        if (snapshot == null ||
+            snapshot.presenceFor(snapshot.hostUid) != LobbyPresence.connected) {
+          return;
+        }
+        // The public-index cleanup hook is one-shot as well. Re-arm it only
+        // after a real reconnect, then recreate the summary removed by the
+        // previous disconnect.
+        await store.setOnDisconnect('$_publicRoomsPath/$cleanRoomId', null);
+        await _syncPublicRoom(snapshot);
       }
       await admitPendingJoinRequests(cleanRoomId);
     }
@@ -722,8 +867,20 @@ final class OnlineTransportClient {
       final liveRequest = await store.read(
         '$_joinRequestsPath/$cleanRoomId/${request.uid}',
       );
-      if (!_joinFenceMatches(fence, request) ||
-          !_joinRequestMatches(liveRequest, request)) {
+      // The admitted guest can observe its membership immediately, connect
+      // presence, and remove both request records before this host-side
+      // verification runs. That is a successful acknowledgement, not a
+      // cancellation. Only compensate the admission while the guest has not
+      // established presence; a connected presence proves that the admitted
+      // client accepted the seat.
+      final latestRoom = await readRoom(cleanRoomId);
+      final guestAcknowledgedAdmission =
+          latestRoom != null &&
+          _memberMatchesJoinRequest(latestRoom.members[request.uid], request) &&
+          latestRoom.presenceFor(request.uid) == LobbyPresence.connected;
+      if ((!_joinFenceMatches(fence, request) ||
+              !_joinRequestMatches(liveRequest, request)) &&
+          !guestAcknowledgedAdmission) {
         // Defense in depth for stores that do not implement Firebase's
         // parent/child transaction retry semantics. Production Firebase
         // already linearizes the fence deletion against the transaction.
@@ -1068,8 +1225,9 @@ final class OnlineTransportClient {
   /// member/presence paths.
   Future<OnlineRoomRecord> ensureQuickTableCpuSeats(String roomId) async {
     final cleanRoomId = _validatedSegment(roomId, 'roomId');
-    final now = await store.serverNowMs();
-    final result = await store.transaction('$_roomsPath/$cleanRoomId', (raw) {
+    final roomPath = '$_roomsPath/$cleanRoomId';
+    for (var attempt = 0; attempt < 3; attempt++) {
+      final raw = await store.read(roomPath);
       if (raw == null) {
         throw const OnlineTransportException(
           OnlineTransportErrorCode.roomNotFound,
@@ -1090,21 +1248,22 @@ final class OnlineTransportClient {
           'At least two players are required to start a Quick Table.',
         );
       }
-      final map = onlineMap(raw);
-      final members = onlineMap(map['members']);
-      final presence = onlineMap(map['presence']);
+      if (room.members.length == LobbySeatColor.values.length) return room;
+
+      final now = await store.serverNowMs();
+      final updates = <String, Object?>{};
       final occupied = room.members.values.map((member) => member.seat).toSet();
       for (final seat in LobbySeatColor.values) {
         if (occupied.contains(seat)) continue;
         final uid = cpuParticipantIdForSeat(room.code, seat);
-        members[uid] = OnlineRoomMemberRecord(
+        updates['members/$uid'] = OnlineRoomMemberRecord(
           uid: uid,
           displayName: cpuDisplayNameForSeat(seat),
           seat: seat,
           joinedAtMs: now,
           ready: true,
         ).toJson();
-        presence[uid] = OnlinePresenceRecord(
+        updates['presence/$uid'] = OnlinePresenceRecord(
           uid: uid,
           presence: LobbyPresence.connected,
           changedAtMs: now,
@@ -1112,14 +1271,36 @@ final class OnlineTransportClient {
         ).toJson();
         occupied.add(seat);
       }
-      map
-        ..['members'] = members
-        ..['presence'] = presence
+      updates
         ..['revision'] = room.revision + 1
         ..['updatedAt'] = now;
-      return OnlineStoreTransactionDecision.commit(map);
-    });
-    return OnlineRoomRecord.fromJson(result.value);
+      try {
+        // Use one multi-location update instead of a room-root transaction.
+        // Native Firebase transactions can first observe an empty Android
+        // cache; the rules already validate these exact CPU member, presence,
+        // revision, and timestamp children atomically.
+        await store.update(roomPath, updates);
+      } catch (_) {
+        if (attempt == 2) rethrow;
+        continue;
+      }
+      final verified = await readRoom(cleanRoomId);
+      if (verified == null) {
+        throw const OnlineTransportException(
+          OnlineTransportErrorCode.roomNotFound,
+          'The room no longer exists.',
+        );
+      }
+      if (verified.members.length == LobbySeatColor.values.length &&
+          verified.members.values.map((member) => member.seat).toSet().length ==
+              LobbySeatColor.values.length) {
+        return verified;
+      }
+    }
+    throw const OnlineTransportException(
+      OnlineTransportErrorCode.roomFull,
+      'The table could not reserve one unique member for every seat.',
+    );
   }
 
   Future<OnlineRoomRecord> updatePrivacy({
@@ -1218,7 +1399,10 @@ final class OnlineTransportClient {
   Future<OnlinePresenceLease> connectRoomPresence(String roomId) async {
     final cleanRoomId = _validatedSegment(roomId, 'roomId');
     final existingLease = _presenceLeases[cleanRoomId];
-    if (existingLease != null && !existingLease.closed) return existingLease;
+    if (existingLease != null && !existingLease.closed) {
+      await existingLease.refresh();
+      return existingLease;
+    }
     final room = await readRoom(cleanRoomId);
     if (room == null || !room.members.containsKey(identity.uid)) {
       throw const OnlineTransportException(
@@ -1245,11 +1429,52 @@ final class OnlineTransportClient {
       throw ArgumentError.value(
         searchWindow,
         'searchWindow',
-        'Quick Pop search budget must be between 1 ms and 10 seconds.',
+        'Quick Pop search budget must be between 1 ms and 30 seconds.',
       );
     }
     final queueKey = _queueKey(mode, matchFormat);
     final now = await store.serverNowMs();
+    final ticketPath = '$_quickQueuesPath/$queueKey/${identity.uid}';
+
+    // A native Firebase session can survive an app termination. If the
+    // previous search was interrupted while its ticket is still active, the
+    // rules correctly reject replacing it with a different ticket id. Reuse
+    // that ticket instead: it is already the authenticated player's
+    // authoritative queue entry and keeps Home/resume from creating a second
+    // competing search. Only the current user's exact record is inspected.
+    try {
+      final existingRaw = await store.read(ticketPath);
+      if (existingRaw != null) {
+        try {
+          final existing = QuickPopQueueTicket.fromJson(
+            existingRaw,
+            uid: identity.uid,
+          );
+          if (existing.uid == identity.uid &&
+              existing.queueKey == queueKey &&
+              existing.state == QuickPopTicketState.waiting &&
+              existing.deadlineAtMs > now) {
+            _ownedQuickTickets[queueKey] = existing;
+            _emitQuickPopDebug(
+              'QUEUE_TICKET_REUSED',
+              success: true,
+              detail:
+                  'ticketId=${existing.ticketId} deadline=${existing.deadlineAtMs}',
+              path: ticketPath,
+            );
+            return existing;
+          }
+        } on FormatException {
+          // A malformed record belongs to this uid and can be removed before
+          // publishing a valid replacement. The rules allow the owner to
+          // delete its own queue ticket without a validation payload.
+          await store.set(ticketPath, null);
+        }
+      }
+    } catch (_) {
+      // The normal write below remains the source of truth. A transient read
+      // failure must not turn a recoverable enqueue into a hard failure.
+    }
     final ticketId = _stableId(
       '$queueKey|${identity.uid}|$now|${_random.nextInt(0x7fffffff)}',
       prefix: 't_',
@@ -1262,25 +1487,86 @@ final class OnlineTransportClient {
       joinedAtMs: now,
       deadlineAtMs: now + searchWindow.inMilliseconds,
     );
-    await store.update(onlineTransportRoot, <String, Object?>{
-      'quickQueues/$queueKey/${identity.uid}': ticket.toJson(),
-      ..._accountResourceRootUpdates(<String, Object?>{
+    // Publish the ticket and its durable locator through their own authorized
+    // paths. A root-level multi-location PATCH is rejected by the deployed
+    // ruleset because `onlineV2` itself is not writable, even though the
+    // caller owns both child records. The ticket is the matchmaking source of
+    // truth; the locator is retryable metadata, so the two writes are safe to
+    // perform sequentially.
+    _emitQuickPopDebug(
+      'QUEUE_TICKET_WRITE_START',
+      detail: 'ticketId=$ticketId deadline=${ticket.deadlineAtMs}',
+      path: ticketPath,
+    );
+    try {
+      // Use a complete PUT for a new ticket. It avoids a native SDK PATCH
+      // being merged with a cancelled record left by Home/resume, while the
+      // deployed rules still enforce the same owner and ticket invariants.
+      await store.set(ticketPath, ticket.toJson());
+      _emitQuickPopDebug(
+        'QUEUE_TICKET_WRITE',
+        success: true,
+        detail: 'ticketId=$ticketId',
+        path: ticketPath,
+      );
+    } catch (error) {
+      _emitQuickPopDebug(
+        'QUEUE_TICKET_WRITE',
+        error: true,
+        detail: 'ticketId=$ticketId error=$error',
+        path: ticketPath,
+      );
+      rethrow;
+    }
+    final indexPath = _accountResourcesPath;
+    _emitQuickPopDebug(
+      'QUEUE_INDEX_WRITE_START',
+      detail: 'ticketId=$ticketId',
+      path: indexPath,
+    );
+    try {
+      await _updateAccountResources(<String, Object?>{
         'quickQueues/$queueKey': <String, Object?>{
           'queueKey': queueKey,
           'ticketId': ticketId,
           'indexedAt': now,
         },
-      }, nowMs: now),
-    });
+      }, nowMs: now);
+      _emitQuickPopDebug(
+        'QUEUE_INDEX_WRITE',
+        success: true,
+        detail: 'ticketId=$ticketId',
+        path: indexPath,
+      );
+    } catch (error) {
+      _emitQuickPopDebug(
+        'QUEUE_INDEX_WRITE',
+        error: true,
+        detail: 'ticketId=$ticketId error=$error',
+        path: indexPath,
+      );
+      // The ticket is already visible to the matchmaking query. Preserve it
+      // so a short-lived account-resource hiccup can be retried on resume.
+      rethrow;
+    }
     _ownedQuickTickets[queueKey] = ticket;
     return ticket;
   }
 
   Future<QuickPopResolution?> resolveQuickPop(
-    QuickPopQueueTicket ticket,
-  ) async {
+    QuickPopQueueTicket ticket, {
+
+    /// The production Quick Pop UI keeps the queue open until the 30-second
+    /// window closes (unless four humans have already joined). The optional
+    /// flag preserves the legacy pair handshake for migration fixtures and
+    /// old persisted claims while all new UI searches use the group path.
+    bool waitForGroupWindow = false,
+  }) async {
     _validateTicketOwner(ticket);
     var current = await _readOwnedTicket(ticket);
+    if (waitForGroupWindow) {
+      return _resolveQuickPopGroup(current);
+    }
     var now = await store.serverNowMs();
     final immediate = _resolutionFor(current, now);
     if (immediate != null) return immediate;
@@ -1309,7 +1595,7 @@ final class OnlineTransportClient {
       final queue = onlineMap(
         await _readActiveQuickQueue(
           ticket.queueKey,
-          startAtJoinedAtMs: current.joinedAtMs,
+          startAtActiveUntilMs: current.joinedAtMs,
         ),
       );
       pair = _deterministicPairFor(current, queue);
@@ -1406,7 +1692,8 @@ final class OnlineTransportClient {
 
   Future<Object?> _readActiveQuickQueue(
     String queueKey, {
-    required int startAtJoinedAtMs,
+    int startAtActiveUntilMs = 0,
+    int limit = _quickQueueReadLimit,
   }) {
     final path = '$_quickQueuesPath/$queueKey';
     final currentStore = store;
@@ -1414,8 +1701,8 @@ final class OnlineTransportClient {
       return (currentStore as OnlineRealtimeQueryStore).readOrderedChildren(
         path,
         orderByChild: 'activeUntil',
-        startAt: startAtJoinedAtMs,
-        limitToFirst: _quickQueueReadLimit,
+        startAt: startAtActiveUntilMs,
+        limitToFirst: limit,
       );
     }
     return currentStore.read(path);
@@ -1441,6 +1728,675 @@ final class OnlineTransportClient {
       );
     }
     return current;
+  }
+
+  /// Resolves the production Quick Pop search. Unlike the original pair
+  /// handshake, this protocol creates one deterministic group record for the
+  /// first two-to-four overlapping tickets. Every client adds its own ticket
+  /// to that record, so a third or fourth player can join the same match
+  /// before the shared 30-second deadline. The group is finalized immediately
+  /// at four humans or at the deadline with the humans that arrived.
+  Future<QuickPopResolution?> _resolveQuickPopGroup(
+    QuickPopQueueTicket current,
+  ) async {
+    var now = await store.serverNowMs();
+    if (current.state == QuickPopTicketState.matched) {
+      _emitQuickPopDebug(
+        'RESOLUTION_REUSED',
+        success: true,
+        detail:
+            'kind=human ticketId=${current.ticketId} roomId=${current.roomId}',
+        path: '$_quickQueuesPath/${current.queueKey}/${current.uid}',
+      );
+      return _resolutionFor(current, now);
+    }
+    if (current.state == QuickPopTicketState.cpuFallback ||
+        current.state == QuickPopTicketState.cancelled) {
+      _emitQuickPopDebug(
+        'RESOLUTION_REUSED',
+        success: true,
+        detail:
+            'kind=${current.state.name} ticketId=${current.ticketId} roomId=${current.roomId}',
+        path: '$_quickQueuesPath/${current.queueKey}/${current.uid}',
+      );
+      return _resolutionFor(current, now);
+    }
+
+    final rememberedGroupId = _ownedQuickGroupIds[current.queueKey];
+    Map<String, Object?>? groupRaw;
+    if (rememberedGroupId != null) {
+      _emitQuickPopDebug(
+        'GROUP_REUSE',
+        detail: 'groupId=$rememberedGroupId ticketId=${current.ticketId}',
+        path: '$_quickGroupsPath/${current.queueKey}/$rememberedGroupId',
+      );
+      groupRaw = onlineMap(
+        await store.read(
+          '$_quickGroupsPath/${current.queueKey}/$rememberedGroupId',
+        ),
+      );
+    }
+
+    _QuickPopGroup? group;
+    if (groupRaw != null && groupRaw.isNotEmpty) {
+      group = _groupFromWire(groupRaw, current.queueKey);
+    } else {
+      // Firebase rules only authorize the queue enumeration while this
+      // client's own ticket is still active.  Once the shared 30-second
+      // deadline has passed, reading the parent `quickQueues/$queueKey`
+      // path is intentionally denied (the ticket itself remains readable).
+      // Do not issue that query at the deadline: there is no group to join,
+      // so finish through the owner-only CPU fallback instead.  Apart from
+      // avoiding a misleading permission-denied error, this keeps a late
+      // resolver from turning a normal no-match result into a failed search.
+      if (now >= current.deadlineAtMs) {
+        current = await _finalizeQuickPopGroupCpu(current);
+        return _resolutionFor(current, now);
+      }
+      final queuePath = '$_quickQueuesPath/${current.queueKey}';
+      late final Object? queue;
+      try {
+        queue = await _readActiveQuickQueue(
+          current.queueKey,
+          // Start at this client's join time instead of zero. This keeps
+          // historical waiting records out of the Firebase result before the
+          // local expiry filter runs, while still including every player who
+          // joined during this overlapping search window. It also matches the
+          // deployed parent-read rule, which permits the caller's own
+          // `joinedAt` lower bound.
+          startAtActiveUntilMs: current.joinedAtMs,
+          limit: 64,
+        );
+      } catch (error) {
+        // The Firebase parent query is intentionally denied once this
+        // client's own ticket expires.  There is a small race between the
+        // deadline check above and the network request crossing that exact
+        // boundary.  Treat only that known rules outcome as a normal CPU
+        // settlement; every other permission/network failure must still be
+        // surfaced to the caller.
+        final afterQueryNow = await store.serverNowMs();
+        final permissionDenied = error.toString().contains('permission-denied');
+        if (permissionDenied && afterQueryNow >= current.deadlineAtMs) {
+          _emitQuickPopDebug(
+            'QUEUE_SCAN_DEADLINE_RACE',
+            success: true,
+            detail:
+                'queueKey=${current.queueKey} now=$afterQueryNow deadline=${current.deadlineAtMs}',
+            path: queuePath,
+          );
+          current = await _finalizeQuickPopGroupCpu(current);
+          return _resolutionFor(current, afterQueryNow);
+        }
+        _emitQuickPopDebug(
+          'QUEUE_SCAN_ERROR',
+          error: true,
+          detail: 'queueKey=${current.queueKey} error=$error',
+          path: queuePath,
+        );
+        rethrow;
+      }
+      final queueMap = onlineMap(queue);
+      _emitQuickPopDebug(
+        'QUEUE_SCAN_RESULT',
+        detail: _quickPopQueueDebugSummary(current, queueMap, nowMs: now),
+        path: queuePath,
+      );
+      group = _deterministicGroupFor(current, queueMap, nowMs: now);
+      // Keep the cohort decision visible in the copyable diagnostic trace.
+      // A queue snapshot can contain old waiting records, a ticket that has
+      // just expired, or tickets whose search windows do not overlap.  The
+      // old trace only reported `waiting=4`, which made those cases look like
+      // a Firebase connection failure even though the local matcher had
+      // rejected the candidate set.  Do not include display names here: UIDs
+      // and ticket ids are sufficient to compare two devices safely.
+      _emitQuickPopDebug(
+        'GROUP_COHORT_EVALUATION',
+        success: group != null,
+        detail: _quickPopGroupCohortDebugSummary(
+          current,
+          queueMap,
+          nowMs: now,
+          group: group,
+        ),
+        path: queuePath,
+      );
+      if (group == null) {
+        if (now < current.deadlineAtMs) return null;
+        return _finalizeCpuOrLateHuman(current, now);
+      }
+    }
+
+    final groupId = _sharedQuickGroupId(group);
+    _ownedQuickGroupIds[current.queueKey] = groupId;
+    final groupPath = '$_quickGroupsPath/${current.queueKey}/$groupId';
+    _emitQuickPopDebug(
+      'GROUP_DERIVED',
+      detail:
+          'queueKey=${current.queueKey} groupId=$groupId leader=${group.leader.uid} members=${group.members.map((member) => member.uid).join(',')} count=${group.members.length}',
+      path: groupPath,
+    );
+    if (group.leader.uid == identity.uid) {
+      try {
+        final rootWrite = await _ensureQuickPopGroupRoot(group, groupId, now);
+        _emitQuickPopDebug(
+          'GROUP_ROOT_WRITE',
+          success: true,
+          detail:
+              'leader=${identity.uid} committed=${rootWrite.committed} groupId=$groupId',
+          path: groupPath,
+        );
+      } catch (error) {
+        _emitQuickPopDebug(
+          'GROUP_ROOT_WRITE',
+          error: true,
+          detail: 'leader=${identity.uid} error=$error groupId=$groupId',
+          path: groupPath,
+        );
+        rethrow;
+      }
+    }
+    try {
+      groupRaw = onlineMap(await store.read(groupPath));
+      _emitQuickPopDebug(
+        'GROUP_ROOT_READ',
+        success: groupRaw.isNotEmpty,
+        detail:
+            'groupId=$groupId exists=${groupRaw.isNotEmpty} leader=${group.leader.uid}',
+        path: groupPath,
+      );
+    } catch (error) {
+      _emitQuickPopDebug(
+        'GROUP_ROOT_READ',
+        error: true,
+        detail: 'groupId=$groupId error=$error',
+        path: groupPath,
+      );
+      rethrow;
+    }
+    if (groupRaw.isEmpty) {
+      // The deterministic leader may be offline. Do not steal its group; a
+      // waiting ticket can still safely become CPU at its own deadline.
+      if (now >= current.deadlineAtMs) {
+        return _finalizeCpuOrLateHuman(current, now);
+      }
+      return null;
+    }
+
+    try {
+      final joined = await _joinQuickPopGroup(groupPath, current);
+      _emitQuickPopDebug(
+        'GROUP_MEMBER_JOIN',
+        success: true,
+        detail:
+            'uid=${current.uid} ticketId=${current.ticketId} written=$joined groupId=$groupId',
+        path: '$groupPath/members/${current.uid}',
+      );
+      groupRaw = onlineMap(await store.read(groupPath));
+    } catch (error) {
+      _emitQuickPopDebug(
+        'GROUP_MEMBER_JOIN',
+        error: true,
+        detail: 'uid=${current.uid} groupId=$groupId error=$error',
+        path: '$groupPath/members/${current.uid}',
+      );
+      rethrow;
+    }
+    final members = _groupMembersFromWire(groupRaw, current.queueKey);
+    final memberCount = members.length;
+    _emitQuickPopDebug(
+      'GROUP_MEMBER_COUNT',
+      success: memberCount >= 2,
+      detail:
+          'groupId=$groupId members=$memberCount/${LobbySeatColor.values.length} uids=${members.map((member) => member.uid).join(',')}',
+      path: '$groupPath/members',
+    );
+    if (memberCount < 2) {
+      if (now >= current.deadlineAtMs) {
+        return _finalizeCpuOrLateHuman(current, now);
+      }
+      return null;
+    }
+
+    final groupDeadline = members
+        .map((member) => member.deadlineAtMs)
+        .reduce(min);
+    now = await store.serverNowMs();
+    final shouldResolve =
+        memberCount >= LobbySeatColor.values.length || now >= groupDeadline;
+    if (!shouldResolve) return null;
+
+    final resolutionRaw = onlineMap(groupRaw['resolution']);
+    if (resolutionRaw.isEmpty && group.leader.uid == identity.uid) {
+      final roomId = _sharedQuickGroupRoomId(members);
+      final resolution = <String, Object?>{
+        'kind': QuickPopResolutionKind.human.name,
+        'roomId': roomId,
+        'resolvedAt': now,
+        'memberUids': [for (final member in members) member.uid],
+      };
+      final resolutionWrite = await store.transaction('$groupPath/resolution', (
+        raw,
+      ) {
+        if (raw != null) return OnlineStoreTransactionDecision.abort();
+        return OnlineStoreTransactionDecision.commit(resolution);
+      });
+      _emitQuickPopDebug(
+        'GROUP_RESOLUTION_WRITE',
+        success: true,
+        detail:
+            'groupId=$groupId committed=${resolutionWrite.committed} members=$memberCount roomId=$roomId',
+        path: '$groupPath/resolution',
+      );
+    }
+
+    final resolutionPath = '$groupPath/resolution';
+    var resolved = <String, Object?>{};
+    try {
+      resolved = onlineMap(await store.read(resolutionPath));
+      _emitQuickPopDebug(
+        'GROUP_RESOLUTION_READ',
+        success: resolved.isNotEmpty,
+        detail:
+            'groupId=$groupId exists=${resolved.isNotEmpty} kind=${resolved['kind'] ?? 'none'}',
+        path: resolutionPath,
+      );
+    } catch (error) {
+      _emitQuickPopDebug(
+        'GROUP_RESOLUTION_READ',
+        error: true,
+        detail: 'groupId=$groupId error=$error',
+        path: resolutionPath,
+      );
+      rethrow;
+    }
+    if (resolved.isEmpty ||
+        resolved['kind'] != QuickPopResolutionKind.human.name) {
+      if (now >= current.deadlineAtMs) {
+        // The leader may have committed the shared human resolution while
+        // this follower was reading the group.  Waiting briefly here avoids
+        // the exact-deadline race where one client receives a human room and
+        // another receives an unrelated CPU room.  The wait is bounded so a
+        // disconnected leader still falls back cleanly.
+        resolved = await _waitForQuickPopGroupResolution(
+          resolutionPath,
+          initial: resolved,
+          groupId: groupId,
+        );
+        if (resolved.isEmpty ||
+            resolved['kind'] != QuickPopResolutionKind.human.name) {
+          final settledAt = await store.serverNowMs();
+          current = await _finalizeQuickPopGroupCpu(current);
+          return _resolutionFor(current, settledAt);
+        }
+      } else {
+        return null;
+      }
+    }
+    final resolvedMembers = _stringList(resolved['memberUids']);
+    if (!resolvedMembers.contains(identity.uid)) {
+      if (now >= current.deadlineAtMs) {
+        current = await _finalizeQuickPopGroupCpu(current);
+        return _resolutionFor(current, now);
+      }
+      return null;
+    }
+    // Keep the queue ticket in its waiting state while the group record is
+    // authoritative.  This is intentional: the queue rules only allow the
+    // owner to mutate their own ticket, while the shared group is what binds
+    // all two-to-four humans to one room.  Returning the resolution directly
+    // also prevents a third or fourth player from being rejected by the old
+    // two-player `opponentUid` contract during the 30-second search window.
+    final roomId = resolved['roomId'] is String
+        ? resolved['roomId']! as String
+        : _sharedQuickGroupRoomId(members);
+    return QuickPopResolution(
+      ticketId: current.ticketId,
+      roomId: roomId,
+      kind: QuickPopResolutionKind.human,
+      resolvedAtMs: now,
+      queueKey: current.queueKey,
+      groupId: groupId,
+      participantUids: resolvedMembers,
+      opponentUid: resolvedMembers.firstWhere(
+        (uid) => uid != identity.uid,
+        orElse: () => identity.uid,
+      ),
+    );
+  }
+
+  Future<OnlineStoreTransactionResult> _ensureQuickPopGroupRoot(
+    _QuickPopGroup group,
+    String groupId,
+    int nowMs,
+  ) async {
+    final path = '$_quickGroupsPath/${group.leader.queueKey}/$groupId';
+    final leader = group.leader;
+    final root = <String, Object?>{
+      'groupId': groupId,
+      'queueKey': leader.queueKey,
+      'leaderUid': leader.uid,
+      'createdAt': nowMs,
+      'members': <String, Object?>{
+        leader.uid: _quickPopGroupMemberJson(leader),
+      },
+    };
+    return store.transaction(path, (raw) {
+      if (raw != null) return OnlineStoreTransactionDecision.abort();
+      return OnlineStoreTransactionDecision.commit(root);
+    });
+  }
+
+  Future<bool> _joinQuickPopGroup(
+    String groupPath,
+    QuickPopQueueTicket ticket,
+  ) async {
+    final current = onlineMap(
+      await store.read('$groupPath/members/${ticket.uid}'),
+    );
+    if (current.isNotEmpty) return false;
+    await store.set(
+      '$groupPath/members/${ticket.uid}',
+      _quickPopGroupMemberJson(ticket),
+    );
+    return true;
+  }
+
+  String _quickPopQueueDebugSummary(
+    QuickPopQueueTicket current,
+    Map<String, Object?> queue, {
+    required int nowMs,
+  }) {
+    final waiting = <QuickPopQueueTicket>[];
+    var staleWaiting = 0;
+    for (final entry in queue.entries) {
+      try {
+        final ticket = QuickPopQueueTicket.fromJson(
+          entry.value,
+          uid: entry.key,
+        );
+        if (ticket.queueKey == current.queueKey &&
+            ticket.state == QuickPopTicketState.waiting) {
+          if (ticket.deadlineAtMs > nowMs) {
+            waiting.add(ticket);
+          } else {
+            staleWaiting++;
+          }
+        }
+      } on FormatException {
+        // Keep malformed records visible as a count, but do not let one bad
+        // entry prevent the other waiting players from being diagnosed.
+      }
+    }
+    waiting.sort((left, right) {
+      final joined = left.joinedAtMs.compareTo(right.joinedAtMs);
+      return joined == 0 ? left.uid.compareTo(right.uid) : joined;
+    });
+    final currentPresent = waiting.any((ticket) => ticket.uid == current.uid);
+    final peers = waiting.where((ticket) => ticket.uid != current.uid);
+    return 'queueKey=${current.queueKey} raw=${queue.length} '
+        'now=$nowMs deadline=${current.deadlineAtMs} '
+        'remainingMs=${max(0, current.deadlineAtMs - nowMs)} '
+        'waiting=${waiting.length} staleWaiting=$staleWaiting '
+        'currentPresent=$currentPresent '
+        'currentUid=${current.uid} peers=${peers.map((ticket) => ticket.uid).join(',')} '
+        'tickets=${waiting.map((ticket) => ticket.ticketId).join(',')}';
+  }
+
+  String _quickPopGroupCohortDebugSummary(
+    QuickPopQueueTicket current,
+    Map<String, Object?> queue, {
+    required int nowMs,
+    required _QuickPopGroup? group,
+  }) {
+    final active = <QuickPopQueueTicket>[];
+    var stale = 0;
+    var malformed = 0;
+    for (final entry in queue.entries) {
+      try {
+        final ticket = QuickPopQueueTicket.fromJson(
+          entry.value,
+          uid: entry.key,
+        );
+        if (ticket.queueKey != current.queueKey ||
+            ticket.state != QuickPopTicketState.waiting) {
+          continue;
+        }
+        if (ticket.deadlineAtMs > nowMs) {
+          active.add(ticket);
+        } else {
+          stale++;
+        }
+      } on FormatException {
+        malformed++;
+      }
+    }
+    if (!active.any((ticket) => ticket.uid == current.uid) &&
+        current.state == QuickPopTicketState.waiting &&
+        current.deadlineAtMs > nowMs) {
+      active.add(current);
+    }
+    active.sort((left, right) {
+      final byJoin = left.joinedAtMs.compareTo(right.joinedAtMs);
+      return byJoin == 0 ? left.uid.compareTo(right.uid) : byJoin;
+    });
+    final compatible = active
+        .where(
+          (ticket) =>
+              ticket.joinedAtMs <= current.deadlineAtMs &&
+              current.joinedAtMs <= ticket.deadlineAtMs,
+        )
+        .toList(growable: false);
+    final cohortStart = compatible.isEmpty
+        ? null
+        : compatible.map((ticket) => ticket.joinedAtMs).reduce(max);
+    final cohortEnd = compatible.isEmpty
+        ? null
+        : compatible.map((ticket) => ticket.deadlineAtMs).reduce(min);
+    final overlapping = cohortStart == null
+        ? const <QuickPopQueueTicket>[]
+        : compatible
+              .where(
+                (ticket) =>
+                    ticket.joinedAtMs <= cohortStart &&
+                    ticket.deadlineAtMs >= cohortStart,
+              )
+              .toList(growable: false);
+    final selected = group?.members ?? const <QuickPopQueueTicket>[];
+    return 'active=${active.length} stale=$stale malformed=$malformed '
+        'compatible=${compatible.length} '
+        'cohortStart=${cohortStart ?? 'none'} cohortEnd=${cohortEnd ?? 'none'} '
+        'overlap=${overlapping.map((ticket) => ticket.uid).join(',')} '
+        'current=${current.uid} currentInOverlap=${overlapping.any((ticket) => ticket.uid == current.uid)} '
+        'selected=${selected.map((ticket) => ticket.uid).join(',')}';
+  }
+
+  /// A group can be left without its deterministic leader when the first
+  /// device closes the search screen or loses its connection at the deadline.
+  /// In that narrow case no client is allowed to manufacture a human
+  /// resolution, so the remaining ticket must use the same authoritative CPU
+  /// fallback path as a solo search. Keeping this helper explicit avoids
+  /// accidentally returning a pair-style resolution for a group ticket.
+  Future<QuickPopQueueTicket> _finalizeQuickPopGroupCpu(
+    QuickPopQueueTicket expected,
+  ) => _finalizeCpuTicket(expected);
+
+  Future<Map<String, Object?>> _waitForQuickPopGroupResolution(
+    String resolutionPath, {
+    required Map<String, Object?> initial,
+    required String groupId,
+  }) async {
+    var resolved = initial;
+    final deadline = DateTime.now().add(_quickGroupResolutionGrace);
+    var reads = 0;
+    while (resolved.isEmpty && DateTime.now().isBefore(deadline)) {
+      await _delay(const Duration(milliseconds: 100));
+      reads++;
+      resolved = onlineMap(await store.read(resolutionPath));
+    }
+    _emitQuickPopDebug(
+      'GROUP_RESOLUTION_GRACE',
+      success: resolved.isNotEmpty,
+      detail:
+          'groupId=$groupId reads=$reads exists=${resolved.isNotEmpty} kind=${resolved['kind'] ?? 'none'}',
+      path: resolutionPath,
+    );
+    return resolved;
+  }
+
+  Map<String, Object?> _quickPopGroupMemberJson(QuickPopQueueTicket ticket) =>
+      <String, Object?>{
+        'uid': ticket.uid,
+        'ticketId': ticket.ticketId,
+        'displayName': ticket.displayName,
+        'joinedAt': ticket.joinedAtMs,
+        'deadlineAt': ticket.deadlineAtMs,
+      };
+
+  _QuickPopGroup? _deterministicGroupFor(
+    QuickPopQueueTicket current,
+    Map<String, Object?> queue, {
+    required int nowMs,
+  }) {
+    final tickets = <QuickPopQueueTicket>[];
+    for (final entry in queue.entries) {
+      try {
+        final ticket = QuickPopQueueTicket.fromJson(
+          entry.value,
+          uid: entry.key,
+        );
+        if (ticket.queueKey == current.queueKey &&
+            ticket.state == QuickPopTicketState.waiting &&
+            ticket.deadlineAtMs > nowMs) {
+          tickets.add(ticket);
+        }
+      } on FormatException {
+        // Invalid queue entries are ignored by deterministic matching.
+      }
+    }
+    if (!tickets.any((ticket) => ticket.uid == current.uid) &&
+        current.state == QuickPopTicketState.waiting &&
+        current.deadlineAtMs > nowMs) {
+      tickets.add(current);
+    }
+    if (tickets.length < 2) return null;
+
+    // The queue query is anchored at this ticket's joinedAt, so records whose
+    // search window ended before this player arrived are not returned. The
+    // old selector then anchored the cohort at the newest ticket in the whole
+    // snapshot. A stale record arriving late could move that anchor past every
+    // valid peer deadline and make two live devices fall back to CPU even
+    // though their windows overlapped. First keep tickets whose windows
+    // overlap this caller, then derive their common intersection. Every member
+    // of a valid cohort has that same intersection, so all clients choose the
+    // same group deterministically.
+    tickets.sort((left, right) {
+      final byTime = left.joinedAtMs.compareTo(right.joinedAtMs);
+      return byTime != 0 ? byTime : left.uid.compareTo(right.uid);
+    });
+    final compatible = tickets
+        .where(
+          (ticket) =>
+              ticket.joinedAtMs <= current.deadlineAtMs &&
+              current.joinedAtMs <= ticket.deadlineAtMs,
+        )
+        .toList();
+    if (!compatible.any((ticket) => ticket.uid == current.uid) ||
+        compatible.length < 2) {
+      return null;
+    }
+    final cohortStart = compatible
+        .map((ticket) => ticket.joinedAtMs)
+        .reduce(max);
+    final cohortEnd = compatible
+        .map((ticket) => ticket.deadlineAtMs)
+        .reduce(min);
+    final overlapping = compatible
+        .where(
+          (ticket) =>
+              ticket.joinedAtMs <= cohortStart &&
+              ticket.deadlineAtMs >= cohortStart,
+        )
+        .toList();
+    if (cohortStart > cohortEnd ||
+        !overlapping.any((ticket) => ticket.uid == current.uid) ||
+        overlapping.length < 2) {
+      return null;
+    }
+    // `overlapping` is already deterministic because `tickets` is sorted.
+    // Limit to the available seats without allowing a later client to pick a
+    // different subset on another device.
+    final selected = overlapping.take(LobbySeatColor.values.length).toList();
+    return _QuickPopGroup(members: selected);
+  }
+
+  _QuickPopGroup _groupFromWire(Map<String, Object?> raw, String queueKey) {
+    return _QuickPopGroup(members: _groupMembersFromWire(raw, queueKey));
+  }
+
+  List<QuickPopQueueTicket> _groupMembersFromWire(
+    Map<String, Object?> raw,
+    String queueKey,
+  ) {
+    final membersRaw = onlineMap(raw['members']);
+    final members = <QuickPopQueueTicket>[];
+    for (final entry in membersRaw.entries) {
+      final member = onlineMap(entry.value);
+      try {
+        members.add(
+          QuickPopQueueTicket(
+            ticketId: _requiredWireString(member, 'ticketId'),
+            uid: entry.key,
+            displayName: _requiredWireString(member, 'displayName'),
+            queueKey: queueKey,
+            joinedAtMs: _requiredWireInt(member, 'joinedAt'),
+            deadlineAtMs: _requiredWireInt(member, 'deadlineAt'),
+          ),
+        );
+      } on FormatException {
+        // Ignore malformed group members and let the group remain pending.
+      }
+    }
+    members.sort((left, right) {
+      final byTime = left.joinedAtMs.compareTo(right.joinedAtMs);
+      return byTime != 0 ? byTime : left.uid.compareTo(right.uid);
+    });
+    return members.take(LobbySeatColor.values.length).toList(growable: false);
+  }
+
+  String _requiredWireString(Map<String, Object?> map, String key) {
+    final value = map[key];
+    if (value is String && value.trim().isNotEmpty) return value.trim();
+    throw FormatException('Missing $key.');
+  }
+
+  int _requiredWireInt(Map<String, Object?> map, String key) {
+    final value = map[key];
+    if (value is num) return value.toInt();
+    throw FormatException('Missing $key.');
+  }
+
+  List<String> _stringList(Object? raw) => [
+    if (raw is List)
+      for (final value in raw)
+        if (value is String && value.trim().isNotEmpty) value.trim(),
+  ];
+
+  static String _sharedQuickGroupId(_QuickPopGroup group) {
+    // Anchor the group to the earliest ticket, rather than to the current
+    // number of members. That keeps the same group id when a third or fourth
+    // player joins after the leader has already created the root record.
+    return _stableId(
+      '${group.members.first.queueKey}|${group.members.first.ticketId}',
+      prefix: 'group_',
+    );
+  }
+
+  static String _sharedQuickGroupRoomId(List<QuickPopQueueTicket> members) {
+    final ids = [for (final member in members) member.ticketId]..sort();
+    return _stableId(
+      '${members.first.queueKey}|${ids.join('|')}',
+      prefix: 'quick_',
+    );
   }
 
   Future<QuickPopResolution> findQuickPop({
@@ -1495,6 +2451,13 @@ final class OnlineTransportClient {
     required QuickPopResolution resolution,
   }) async {
     final context = _quickPopLaunchContext(ticket, resolution);
+    if (resolution.groupId != null) {
+      return _synchronizeQuickPopGroupLaunch(
+        ticket: ticket,
+        resolution: resolution,
+        context: context,
+      );
+    }
     final claimPath =
         '$_quickClaimsPath/${context.queueKey}/${context.claimId}';
     final readyAt = await store.serverNowMs();
@@ -1573,6 +2536,81 @@ final class OnlineTransportClient {
         RoomStatus.inGame;
   }
 
+  Future<bool> _synchronizeQuickPopGroupLaunch({
+    required QuickPopQueueTicket ticket,
+    required QuickPopResolution resolution,
+    required ({String queueKey, String claimId}) context,
+  }) async {
+    final groupPath = _quickPopLaunchPath(context, resolution);
+    final readyAt = await store.serverNowMs();
+    final readyPath = '$groupPath/launchReady/${identity.uid}';
+    final ready = <String, Object?>{
+      'uid': identity.uid,
+      'ticketId': ticket.ticketId,
+      'readyAt': readyAt,
+    };
+    final readyResult = await store.transaction(readyPath, (raw) {
+      if (raw != null) return const OnlineStoreTransactionDecision.abort();
+      return OnlineStoreTransactionDecision.commit(ready);
+    });
+    if (!readyResult.committed) {
+      final existing = onlineMap(readyResult.value);
+      if (existing['uid'] != identity.uid ||
+          existing['ticketId'] != ticket.ticketId) {
+        throw const OnlineTransportException(
+          OnlineTransportErrorCode.invalidQueueTicket,
+          'The Quick Pop launch acknowledgement is inconsistent.',
+        );
+      }
+    }
+
+    final claim = onlineMap(await store.read(groupPath));
+    _validateQuickPopLaunchClaim(claim, context, resolution);
+    final members = _launchMemberUids(claim, resolution);
+    final readyMap = onlineMap(claim['launchReady']);
+    for (final uid in members) {
+      final member = onlineMap(onlineMap(claim['members'])[uid]);
+      if (!_validQuickPopLaunchReady(
+        readyMap[uid],
+        uid: uid,
+        ticketId: member['ticketId']! as String,
+      )) {
+        return false;
+      }
+    }
+
+    final room = await readRoom(resolution.roomId);
+    if (room == null) return false;
+    if (room.status == RoomStatus.closed) {
+      throw const OnlineTransportException(
+        OnlineTransportErrorCode.invalidQueueTicket,
+        'The Quick Pop room was closed before launch.',
+      );
+    }
+    if (room.status == RoomStatus.inGame) return true;
+    if (room.status != RoomStatus.starting || room.hostUid != identity.uid) {
+      return false;
+    }
+    if (members.any(
+      (uid) => room.presenceFor(uid) != LobbyPresence.connected,
+    )) {
+      return false;
+    }
+    await store.transaction('$_roomsPath/${resolution.roomId}/status', (raw) {
+      if (raw == RoomStatus.inGame.name) {
+        return const OnlineStoreTransactionDecision.abort();
+      }
+      if (raw != RoomStatus.starting.name) {
+        return const OnlineStoreTransactionDecision.abort();
+      }
+      return OnlineStoreTransactionDecision.commit(RoomStatus.inGame.name);
+    });
+    return await _readQuickPopStatus(
+          '$_roomsPath/${resolution.roomId}/status',
+        ) ==
+        RoomStatus.inGame;
+  }
+
   /// Resolves the provisional Quick Pop launch into one authoritative result.
   ///
   /// `inGame` alone is not enough to navigate: one client may observe that
@@ -1615,8 +2653,7 @@ final class OnlineTransportClient {
     required ({String queueKey, String claimId}) context,
     required Duration peerWait,
   }) async {
-    final claimPath =
-        '$_quickClaimsPath/${context.queueKey}/${context.claimId}';
+    final claimPath = _quickPopLaunchPath(context, resolution);
     var claim = onlineMap(await store.read(claimPath));
     _validateQuickPopLaunchClaim(claim, context, resolution);
     final sharedDeadline = await _quickPopSharedDeadline(claim, context);
@@ -1828,9 +2865,7 @@ final class OnlineTransportClient {
   }) async {
     final context = _quickPopLaunchContext(ticket, resolution);
     final claim = onlineMap(
-      await store.read(
-        '$_quickClaimsPath/${context.queueKey}/${context.claimId}',
-      ),
+      await store.read(_quickPopLaunchPath(context, resolution)),
     );
     _validateQuickPopLaunchClaim(claim, context, resolution);
     if (_quickPopLaunchWasAborted(claim)) return true;
@@ -1847,11 +2882,21 @@ final class OnlineTransportClient {
   }) async {
     final context = _quickPopLaunchContext(ticket, resolution);
     final claim = onlineMap(
-      await store.read(
-        '$_quickClaimsPath/${context.queueKey}/${context.claimId}',
-      ),
+      await store.read(_quickPopLaunchPath(context, resolution)),
     );
     _validateQuickPopLaunchClaim(claim, context, resolution);
+    if (resolution.groupId != null) {
+      final members = onlineMap(claim['members']);
+      final memberUids = _launchMemberUids(claim, resolution);
+      return <String, Object?>{
+        'queueKey': context.queueKey,
+        'claimId': context.claimId,
+        'groupId': context.claimId,
+        'memberUids': memberUids,
+        'members': members,
+        'sharedDeadlineAt': await _quickPopSharedDeadline(claim, context),
+      };
+    }
     return <String, Object?>{
       'queueKey': context.queueKey,
       'claimId': context.claimId,
@@ -1869,10 +2914,21 @@ final class OnlineTransportClient {
   ) {
     _validateTicketOwner(ticket);
     final queueKey = resolution.queueKey ?? ticket.queueKey;
-    final claimId = resolution.claimId ?? ticket.claimId;
+    final claimId =
+        resolution.groupId ??
+        resolution.claimId ??
+        ticket.groupId ??
+        ticket.claimId;
+    final isGroup = resolution.groupId != null;
+    final validHuman = isGroup
+        ? resolution.participantUids.length >= 2 &&
+              resolution.participantUids.length <=
+                  LobbySeatColor.values.length &&
+              resolution.participantUids.contains(ticket.uid)
+        : resolution.opponentUid != null;
     if (resolution.kind != QuickPopResolutionKind.human ||
         resolution.ticketId != ticket.ticketId ||
-        resolution.opponentUid == null ||
+        !validHuman ||
         queueKey != ticket.queueKey ||
         claimId == null ||
         claimId.isEmpty) {
@@ -1887,11 +2943,51 @@ final class OnlineTransportClient {
     );
   }
 
+  String _quickPopLaunchPath(
+    ({String queueKey, String claimId}) context,
+    QuickPopResolution resolution,
+  ) => resolution.groupId != null
+      ? '$_quickGroupsPath/${context.queueKey}/${context.claimId}'
+      : '$_quickClaimsPath/${context.queueKey}/${context.claimId}';
+
+  List<String> _launchMemberUids(
+    Map<String, Object?> claim,
+    QuickPopResolution resolution,
+  ) {
+    final fromResolution = _stringList(
+      onlineMap(claim['resolution'])['memberUids'],
+    );
+    if (fromResolution.isNotEmpty) return fromResolution;
+    final fromResult = resolution.participantUids;
+    if (fromResult.isNotEmpty) return List<String>.of(fromResult);
+    final members = onlineMap(claim['members']);
+    return members.keys.toList()..sort();
+  }
+
   void _validateQuickPopLaunchClaim(
     Map<String, Object?> claim,
     ({String queueKey, String claimId}) context,
     QuickPopResolution resolution,
   ) {
+    if (resolution.groupId != null) {
+      final groupMembers = onlineMap(claim['members']);
+      final claimResolution = onlineMap(claim['resolution']);
+      final memberUids = _launchMemberUids(claim, resolution);
+      final member = onlineMap(groupMembers[identity.uid]);
+      if (claim['groupId'] != context.claimId ||
+          claim['queueKey'] != context.queueKey ||
+          member.isEmpty ||
+          member['ticketId'] != resolution.ticketId ||
+          claimResolution['kind'] != QuickPopResolutionKind.human.name ||
+          claimResolution['roomId'] != resolution.roomId ||
+          !memberUids.contains(identity.uid)) {
+        throw const OnlineTransportException(
+          OnlineTransportErrorCode.invalidQueueTicket,
+          'The Quick Pop launch group does not match the resolved players.',
+        );
+      }
+      return;
+    }
     final firstUid = claim['firstUid'];
     final secondUid = claim['secondUid'];
     final participant = firstUid == identity.uid || secondUid == identity.uid;
@@ -1924,6 +3020,22 @@ final class OnlineTransportClient {
   }
 
   bool _bothQuickPopParticipantsSettled(Map<String, Object?> claim) {
+    final groupResolution = onlineMap(claim['resolution']);
+    final groupMembers = _stringList(groupResolution['memberUids']);
+    if (groupMembers.isNotEmpty) {
+      final settled = onlineMap(claim['launchSettled']);
+      final members = onlineMap(claim['members']);
+      return groupMembers.every((uid) {
+        final member = onlineMap(members[uid]);
+        final ticketId = member['ticketId'];
+        return ticketId is String &&
+            _validQuickPopLaunchSettled(
+              settled[uid],
+              uid: uid,
+              ticketId: ticketId,
+            );
+      });
+    }
     final firstUid = claim['firstUid'];
     final secondUid = claim['secondUid'];
     final firstTicketId = claim['firstTicketId'];
@@ -1955,8 +3067,7 @@ final class OnlineTransportClient {
     required QuickPopResolution resolution,
     required ({String queueKey, String claimId}) context,
   }) async {
-    final claimPath =
-        '$_quickClaimsPath/${context.queueKey}/${context.claimId}';
+    final claimPath = _quickPopLaunchPath(context, resolution);
     final claim = onlineMap(await store.read(claimPath));
     _validateQuickPopLaunchClaim(claim, context, resolution);
     if (_bothQuickPopParticipantsSettled(claim)) return;
@@ -1998,6 +3109,25 @@ final class OnlineTransportClient {
     Map<String, Object?> claim,
     ({String queueKey, String claimId}) context,
   ) async {
+    final groupResolution = onlineMap(claim['resolution']);
+    final groupMemberUids = _stringList(groupResolution['memberUids']);
+    if (groupMemberUids.isNotEmpty) {
+      final members = onlineMap(claim['members']);
+      final deadlines = <int>[];
+      for (final uid in groupMemberUids) {
+        final member = onlineMap(members[uid]);
+        final deadline = member['deadlineAt'];
+        if (deadline is num) {
+          deadlines.add(deadline.toInt());
+          continue;
+        }
+        final raw = await store.read(
+          '$_quickQueuesPath/${context.queueKey}/$uid',
+        );
+        deadlines.add(QuickPopQueueTicket.fromJson(raw, uid: uid).deadlineAtMs);
+      }
+      if (deadlines.isNotEmpty) return deadlines.reduce(min);
+    }
     final firstUid = claim['firstUid']! as String;
     final secondUid = claim['secondUid']! as String;
     final firstRaw = await store.read(
@@ -2035,10 +3165,19 @@ final class OnlineTransportClient {
     }
     final raw = onlineMap(await store.read('$_roomsPath/${room.id}'));
     final launch = onlineMap(raw['quickPopLaunch']);
-    if (launch['queueKey'] != context.queueKey ||
-        launch['claimId'] != context.claimId ||
-        (launch['firstUid'] != identity.uid &&
-            launch['secondUid'] != identity.uid)) {
+    final launchMembers = _stringList(launch['memberUids']);
+    final validGroupLaunch =
+        resolution.groupId != null &&
+        launch['queueKey'] == context.queueKey &&
+        launch['groupId'] == context.claimId &&
+        launchMembers.contains(identity.uid);
+    final validPairLaunch =
+        resolution.groupId == null &&
+        launch['queueKey'] == context.queueKey &&
+        launch['claimId'] == context.claimId &&
+        (launch['firstUid'] == identity.uid ||
+            launch['secondUid'] == identity.uid);
+    if (!validGroupLaunch && !validPairLaunch) {
       throw const OnlineTransportException(
         OnlineTransportErrorCode.invalidRoomStatus,
         'The Quick Pop room launch metadata is inconsistent.',
@@ -2371,9 +3510,22 @@ final class OnlineTransportClient {
       uid: identity.uid,
       connectionId: connectionId,
       path: path,
+      connectedValue: connected.toJson(),
+      disconnectedValue: disconnected.toJson(),
     );
     _presenceLeases[roomId] = lease;
     return lease;
+  }
+
+  /// Re-arms the current room's one-shot Firebase disconnect hook and marks
+  /// this still-open client connected again. Returns false when this transport
+  /// no longer owns a live lease for the room.
+  Future<bool> refreshRoomPresence(String roomId) async {
+    final cleanRoomId = _validatedSegment(roomId, 'roomId');
+    final lease = _presenceLeases[cleanRoomId];
+    if (lease == null || lease.closed) return false;
+    await lease.refresh();
+    return true;
   }
 
   Future<void> _syncPublicRoom(OnlineRoomRecord room) async {
@@ -2911,29 +4063,47 @@ final class OnlineTransportClient {
     QuickPopQueueTicket expected,
   ) async {
     final path = '$_quickQueuesPath/${expected.queueKey}/${identity.uid}';
-    final result = await store.transaction(path, (raw) {
-      if (raw == null) {
-        throw const OnlineTransportException(
-          OnlineTransportErrorCode.invalidQueueTicket,
-          'The Quick Pop ticket is no longer in its queue.',
-        );
-      }
-      final current = QuickPopQueueTicket.fromJson(raw, uid: identity.uid);
-      if (current.ticketId != expected.ticketId) {
-        throw const OnlineTransportException(
-          OnlineTransportErrorCode.invalidQueueTicket,
-          'A newer Quick Pop search replaced this ticket.',
-        );
-      }
-      if (current.resolved) return OnlineStoreTransactionDecision.abort();
-      final map = onlineMap(current.toJson())
-        ..['state'] = QuickPopTicketState.cpuFallback.name
-        ..['activeUntil'] = 0
-        ..['roomId'] = _cpuQuickRoomId(current)
-        ..remove('opponentUid');
-      return OnlineStoreTransactionDecision.commit(map);
-    });
-    return QuickPopQueueTicket.fromJson(result.value, uid: identity.uid);
+    try {
+      final result = await store.transaction(path, (raw) {
+        if (raw == null) {
+          throw const OnlineTransportException(
+            OnlineTransportErrorCode.invalidQueueTicket,
+            'The Quick Pop ticket is no longer in its queue.',
+          );
+        }
+        final current = QuickPopQueueTicket.fromJson(raw, uid: identity.uid);
+        if (current.ticketId != expected.ticketId) {
+          throw const OnlineTransportException(
+            OnlineTransportErrorCode.invalidQueueTicket,
+            'A newer Quick Pop search replaced this ticket.',
+          );
+        }
+        if (current.resolved) return OnlineStoreTransactionDecision.abort();
+        final map = onlineMap(current.toJson())
+          ..['state'] = QuickPopTicketState.cpuFallback.name
+          ..['activeUntil'] = 0
+          ..['roomId'] = _cpuQuickRoomId(current)
+          ..remove('opponentUid');
+        return OnlineStoreTransactionDecision.commit(map);
+      });
+      _emitQuickPopDebug(
+        'CPU_FALLBACK_WRITE',
+        success: true,
+        detail:
+            'uid=${identity.uid} ticketId=${expected.ticketId} committed=${result.committed} roomId=${_cpuQuickRoomId(expected)}',
+        path: path,
+      );
+      return QuickPopQueueTicket.fromJson(result.value, uid: identity.uid);
+    } catch (error) {
+      _emitQuickPopDebug(
+        'CPU_FALLBACK_WRITE',
+        error: true,
+        detail:
+            'uid=${identity.uid} ticketId=${expected.ticketId} error=$error',
+        path: path,
+      );
+      rethrow;
+    }
   }
 
   Future<QuickPopResolution?> _finalizeHumanClaimIfAvailable(
@@ -3000,9 +4170,13 @@ final class OnlineTransportClient {
         roomId: roomId,
         kind: QuickPopResolutionKind.human,
         opponentUid: ticket.opponentUid,
+        participantUids: ticket.opponentUids.isEmpty
+            ? const <String>[]
+            : <String>[ticket.uid, ...ticket.opponentUids],
         resolvedAtMs: resolvedAtMs,
         queueKey: ticket.queueKey,
         claimId: ticket.claimId,
+        groupId: ticket.groupId,
       ),
       QuickPopTicketState.cpuFallback => QuickPopResolution(
         ticketId: ticket.ticketId,
@@ -3084,6 +4258,17 @@ final class _QuickPopPair {
       'The player is not part of this deterministic Quick Pop pair.',
     );
   }
+}
+
+/// Deterministic candidate group used by the production Quick Pop queue.
+/// Members are ordered by their join timestamp (ticket id breaks ties), so
+/// every client derives the same leader and room id from the same queue view.
+final class _QuickPopGroup {
+  const _QuickPopGroup({required this.members});
+
+  final List<QuickPopQueueTicket> members;
+
+  QuickPopQueueTicket get leader => members.first;
 }
 
 final class _RoomCodeReservation {

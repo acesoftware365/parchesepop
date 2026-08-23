@@ -30,10 +30,7 @@ class DefaultFirebaseOptions {
       case TargetPlatform.macOS:
         return macos;
       case TargetPlatform.windows:
-        throw UnsupportedError(
-          'DefaultFirebaseOptions have not been configured for windows - '
-          'you can reconfigure this by running the FlutterFire CLI again.',
-        );
+        return windows;
       case TargetPlatform.linux:
         throw UnsupportedError(
           'DefaultFirebaseOptions have not been configured for linux - '
@@ -70,5 +67,22 @@ class DefaultFirebaseOptions {
     projectId: 'parchese-pop',
     storageBucket: 'parchese-pop.firebasestorage.app',
     iosBundleId: 'com.liisgo.parchesepop',
+  );
+
+  /// Firebase does not provide a first-party Windows app registration through
+  /// the FlutterFire CLI. The Windows Firebase C++ plugins accept the web app
+  /// credentials for the same project, which keeps anonymous Auth and
+  /// Realtime Database on the exact same backend as Android, iOS and macOS.
+  /// The database URL is explicit because desktop builds do not read a native
+  /// Google services file.
+  static const FirebaseOptions windows = FirebaseOptions(
+    apiKey: 'AIzaSyBmAHegM43lv-1AMUCWzBvI6HyWqMgVev4',
+    appId: '1:895089276635:web:5420d300a8d1b36bcabefe',
+    messagingSenderId: '895089276635',
+    projectId: 'parchese-pop',
+    databaseURL: 'https://parchese-pop-default-rtdb.firebaseio.com',
+    storageBucket: 'parchese-pop.firebasestorage.app',
+    authDomain: 'parchese-pop.firebaseapp.com',
+    measurementId: 'G-4RZWS75J32',
   );
 }

@@ -1,5 +1,6 @@
 import 'dart:math';
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:parchesepop/game_engine.dart';
@@ -115,6 +116,9 @@ void main() {
   tearDown(binding.platformDispatcher.clearLocaleTestValue);
 
   testWidgets('guest home keeps one compact profile entry', (tester) async {
+    binding.platformDispatcher.accessibilityFeaturesTestValue =
+        const FakeAccessibilityFeatures(disableAnimations: true);
+    addTearDown(binding.platformDispatcher.clearAccessibilityFeaturesTestValue);
     SharedPreferences.setMockInitialValues({});
 
     await tester.pumpWidget(const ParchesePopApp());
@@ -241,6 +245,11 @@ void main() {
     'desktop window': const Size(1180, 820),
   }.entries) {
     testWidgets('home adapts to ${size.key}', (tester) async {
+      binding.platformDispatcher.accessibilityFeaturesTestValue =
+          const FakeAccessibilityFeatures(disableAnimations: true);
+      addTearDown(
+        binding.platformDispatcher.clearAccessibilityFeaturesTestValue,
+      );
       SharedPreferences.setMockInitialValues({
         'profile_name': 'JuanPop',
         'profile_email': 'juan@example.com',
@@ -356,6 +365,9 @@ void main() {
   });
 
   testWidgets('CPU setup offers traditional and chaos modes', (tester) async {
+    binding.platformDispatcher.accessibilityFeaturesTestValue =
+        const FakeAccessibilityFeatures(disableAnimations: true);
+    addTearDown(binding.platformDispatcher.clearAccessibilityFeaturesTestValue);
     SharedPreferences.setMockInitialValues({
       'profile_name': 'JuanPop',
       'profile_email': 'juan@example.com',
@@ -2213,6 +2225,59 @@ void main() {
     await tester.pumpWidget(const SizedBox.shrink());
     await tester.binding.setSurfaceSize(null);
     engine.dispose();
+  });
+
+  testWidgets('desktop quick messages dialog fits macOS and Windows windows', (
+    tester,
+  ) async {
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    const viewport = Size(1180, 820);
+
+    for (final platform in const [
+      TargetPlatform.macOS,
+      TargetPlatform.windows,
+    ]) {
+      debugDefaultTargetPlatformOverride = platform;
+      final engine = GameEngine(mode: GameMode.chaos);
+      await tester.binding.setSurfaceSize(viewport);
+      await tester.pumpWidget(
+        MaterialApp(
+          home: GameScreen(
+            opponent: 'Online',
+            gameEngine: engine,
+            onlineSession: onlineTestSession(),
+          ),
+        ),
+      );
+      await tester.pump(const Duration(milliseconds: 100));
+
+      await tester.tap(find.byKey(const ValueKey('game-safe-chat-button')));
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 400));
+
+      final sheet = find.byKey(const ValueKey('safe-chat-sheet'));
+      final sheetRect = tester.getRect(sheet);
+      expect(sheet, findsOneWidget);
+      expect(sheetRect.width, greaterThanOrEqualTo(640));
+      expect(sheetRect.width, lessThanOrEqualTo(760));
+      expect(sheetRect.left, greaterThanOrEqualTo(0));
+      expect(sheetRect.right, lessThanOrEqualTo(viewport.width));
+      expect(sheetRect.top, greaterThan(0));
+      expect(sheetRect.bottom, lessThanOrEqualTo(viewport.height));
+      expect(sheetRect.center.dx, closeTo(viewport.width / 2, 1));
+      expect(sheetRect.center.dy, closeTo(viewport.height / 2, 12));
+      expect(find.byType(BottomSheet), findsNothing);
+      final scrollable = tester.state<ScrollableState>(
+        find.descendant(of: sheet, matching: find.byType(Scrollable)),
+      );
+      expect(scrollable.position.maxScrollExtent, 0);
+      expect(tester.takeException(), isNull);
+
+      await tester.pumpWidget(const SizedBox.shrink());
+      await tester.pump();
+      engine.dispose();
+    }
+    debugDefaultTargetPlatformOverride = null;
   });
 
   testWidgets('the victory home button returns to the first route', (

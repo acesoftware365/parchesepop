@@ -3,6 +3,7 @@ import 'dart:math';
 import 'game_engine.dart';
 import 'online_game_sync.dart';
 import 'online_lobby.dart';
+import 'online_mode_services.dart';
 import 'online_match.dart';
 import 'online_room_ui.dart';
 import 'online_transport.dart';
@@ -83,6 +84,7 @@ PreparedOnlineQuickTableMatch prepareOnlineQuickTableMatchFromSnapshot({
     room: room,
     roomMode: roomMode,
   );
+  OnlineQuickTableService(transport).assertRoom(room);
 
   final opening = lobby.openingRoll!;
   final winnerId = opening.winnerParticipantId!;

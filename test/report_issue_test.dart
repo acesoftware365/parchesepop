@@ -6,7 +6,7 @@ import 'package:parchesepop/report_issue.dart';
 
 void main() {
   const device = PlayerReportDeviceContext(
-    appVersion: '2.2.1+16',
+    appVersion: '2.2.1+24',
     operatingSystem: 'iOS 18.6',
     device: 'iPhone 13',
   );
@@ -25,7 +25,7 @@ void main() {
     expect(uri.queryParameters['subject'], contains('alteración'));
     final body = uri.queryParameters['body']!;
     expect(body, contains('Jugador reportado: Player One'));
-    expect(body, contains('Versión de la app: 2.2.1+16'));
+    expect(body, contains('Versión de la app: 2.2.1+24'));
     expect(body, contains('Sistema operativo: iOS 18.6'));
     expect(body, contains('Dispositivo: iPhone 13'));
     expect(body, contains('Modo: Quick Table'));

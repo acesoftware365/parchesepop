@@ -6,5 +6,10 @@
 	<true/>
 	<key>com.apple.security.network.client</key>
 	<true/>
+	<!-- Firebase Auth persists the anonymous session in the macOS keychain. -->
+	<key>keychain-access-groups</key>
+	<array>
+		<string>3M9854JZ4Y.com.liisgo.parchesepop</string>
+	</array>
 </dict>
 </plist>

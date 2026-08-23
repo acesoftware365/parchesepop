@@ -17,10 +17,13 @@ void main() {
     expect(source, contains('stopwatch: Stopwatch()..start()'));
     expect(screen, contains('QuickPopDeadlineSearch<'));
     expect(screen, contains('window: quickPopSearchWindow'));
+    // Quick Pop keeps the full advertised search window on every platform so
+    // a human can join before the explicit CPU confirmation appears.
+    expect(screen, contains('deferFallbackUntilDeadline: true'));
     expect(screen, contains('elapsed: () => widget.searchStopwatch.elapsed'));
     expect(screen, contains('OnlineFlowStage.connectionFailed'));
     expect(screen, contains('stage: OnlineFlowStage.cpuFallback'));
-    expect(screen, contains('settleQuickPopLaunch('));
+    expect(screen, contains('.settle('));
     expect(screen, contains('QuickPopDeadlineSettlement.human'));
     expect(screen, contains('onUnavailable: _handleSettlementUnavailable'));
     expect(

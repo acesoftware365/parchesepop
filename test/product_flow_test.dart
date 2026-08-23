@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:parchesepop/cosmetic_visuals.dart';
 import 'package:parchesepop/game_engine.dart';
@@ -22,6 +23,8 @@ void main() {
   final binding = TestWidgetsFlutterBinding.ensureInitialized();
   setUp(() {
     binding.platformDispatcher.localeTestValue = const Locale('es');
+    binding.platformDispatcher.accessibilityFeaturesTestValue =
+        const FakeAccessibilityFeatures(disableAnimations: true);
     PackageInfo.setMockInitialValues(
       appName: 'Parchese Pop',
       packageName: 'com.example.parchesepop',
@@ -30,7 +33,10 @@ void main() {
       buildSignature: '',
     );
   });
-  tearDown(binding.platformDispatcher.clearLocaleTestValue);
+  tearDown(() {
+    binding.platformDispatcher.clearLocaleTestValue();
+    binding.platformDispatcher.clearAccessibilityFeaturesTestValue();
+  });
 
   testWidgets('main menu keeps the complete how-to-play guide', (tester) async {
     SharedPreferences.setMockInitialValues({});
@@ -39,7 +45,6 @@ void main() {
     await tester.pumpWidget(const ParchesePopApp());
     await tester.pumpAndSettle();
     expect(find.byKey(const ValueKey('home-how-to-play')), findsOneWidget);
-    expect(find.byKey(const ValueKey('home-traps')), findsOneWidget);
     await tester.ensureVisible(find.byKey(const ValueKey('home-how-to-play')));
     await tester.pumpAndSettle();
     await tester.tap(find.byKey(const ValueKey('home-how-to-play')));
@@ -49,49 +54,6 @@ void main() {
     expect(find.byType(TrapPowerLabScreen), findsNothing);
     expect(find.text('CÓMO JUGAR'), findsOneWidget);
     expect(find.byKey(const ValueKey('show-power-lab')), findsOneWidget);
-    expect(tester.takeException(), isNull);
-  });
-
-  testWidgets('Trampas opens only the four trap animations', (tester) async {
-    SharedPreferences.setMockInitialValues({});
-    useViewport(tester, const Size(390, 844));
-
-    await tester.pumpWidget(const ParchesePopApp());
-    await tester.pumpAndSettle();
-    await tester.ensureVisible(find.byKey(const ValueKey('home-traps')));
-    await tester.pumpAndSettle();
-    await tester.tap(find.byKey(const ValueKey('home-traps')));
-    await tester.pumpAndSettle();
-
-    expect(find.byType(TrapPowerLabScreen), findsOneWidget);
-    expect(find.byType(GameGuideScreen), findsNothing);
-    expect(find.byKey(const ValueKey('trap-power-lab-screen')), findsOneWidget);
-    expect(find.text('TRAMPAS Y ANIMACIONES'), findsOneWidget);
-    expect(find.text('Laboratorio de trampas'), findsOneWidget);
-    expect(find.byKey(const ValueKey('trap-lab-back')), findsOneWidget);
-    for (final trap in const ['glue', 'setback', 'prison', 'bomb']) {
-      expect(find.byKey(ValueKey('guide-effect-$trap')), findsOneWidget);
-    }
-    expect(find.byKey(const ValueKey('guide-effect-shield')), findsNothing);
-    expect(find.byKey(const ValueKey('guide-effect-turbo')), findsNothing);
-    expect(find.text('CÓMO JUGAR'), findsNothing);
-    expect(find.byKey(const ValueKey('guide-mode-traditional')), findsNothing);
-    expect(find.byKey(const ValueKey('guide-mode-chaos')), findsNothing);
-    expect(find.text('Salir con un 5'), findsNothing);
-    expect(find.text('CHULETA RÁPIDA'), findsNothing);
-
-    final bomb = find.byKey(const ValueKey('guide-effect-bomb'));
-    await tester.ensureVisible(bomb);
-    await tester.pumpAndSettle();
-    await tester.tap(bomb);
-    await tester.pump(const Duration(milliseconds: 250));
-    expect(find.text('¡BUM! A LA CÁRCEL'), findsOneWidget);
-    expect(find.text('Demostración: Bomba'), findsOneWidget);
-
-    tester.state<NavigatorState>(find.byType(Navigator).first).pop();
-    await tester.pumpAndSettle();
-    expect(find.byType(TrapPowerLabScreen), findsNothing);
-    expect(find.byKey(const ValueKey('home-traps')), findsOneWidget);
     expect(tester.takeException(), isNull);
   });
 
@@ -691,6 +653,102 @@ void main() {
     );
     expect(guideSwitch.value, isTrue);
     expect(handSelector.selected, {DiceHandPreference.right});
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('tablet defaults hide minimap and hand effect', (tester) async {
+    SharedPreferences.setMockInitialValues({});
+    try {
+      debugDefaultTargetPlatformOverride = TargetPlatform.iOS;
+      useViewport(tester, const Size(1024, 1366));
+
+      await tester.pumpWidget(const MaterialApp(home: SettingsScreen()));
+      await tester.pumpAndSettle();
+
+      final minimap = tester.widget<SwitchListTile>(
+        find.byKey(const ValueKey('settings-minimap')),
+      );
+      final handEffect = tester.widget<SwitchListTile>(
+        find.byKey(const ValueKey('settings-dice-hand-effect')),
+      );
+      expect(minimap.value, isFalse);
+      expect(handEffect.value, isFalse);
+
+      await tester.ensureVisible(
+        find.byKey(const ValueKey('settings-minimap')),
+      );
+      await tester.tap(find.byKey(const ValueKey('settings-minimap')));
+      await tester.ensureVisible(
+        find.byKey(const ValueKey('settings-dice-hand-effect')),
+      );
+      await tester.tap(find.byKey(const ValueKey('settings-dice-hand-effect')));
+      await tester.pumpAndSettle();
+
+      final store = await SharedPreferences.getInstance();
+      expect(store.getBool(settingsMinimapKey), isTrue);
+      expect(store.getBool(settingsDiceHandEffectKey), isTrue);
+      await store.remove(settingsMinimapKey);
+      await store.remove(settingsDiceHandEffectKey);
+      expect(tester.takeException(), isNull);
+    } finally {
+      debugDefaultTargetPlatformOverride = null;
+    }
+  });
+
+  testWidgets('movement callout preference persists', (tester) async {
+    SharedPreferences.setMockInitialValues({settingsMoveCalloutsKey: true});
+    useViewport(tester, const Size(390, 844));
+
+    await tester.pumpWidget(const MaterialApp(home: SettingsScreen()));
+    await tester.pumpAndSettle();
+
+    var calloutSwitch = tester.widget<SwitchListTile>(
+      find.byKey(const ValueKey('settings-move-callouts')),
+    );
+    expect(calloutSwitch.value, isTrue);
+
+    await tester.ensureVisible(
+      find.byKey(const ValueKey('settings-move-callouts')),
+    );
+    await tester.tap(find.byKey(const ValueKey('settings-move-callouts')));
+    await tester.pumpAndSettle();
+
+    final store = await SharedPreferences.getInstance();
+    expect(store.getBool(settingsMoveCalloutsKey), isFalse);
+
+    await tester.pumpWidget(const SizedBox.shrink());
+    await tester.pumpWidget(const MaterialApp(home: SettingsScreen()));
+    await tester.pumpAndSettle();
+    calloutSwitch = tester.widget<SwitchListTile>(
+      find.byKey(const ValueKey('settings-move-callouts')),
+    );
+    expect(calloutSwitch.value, isFalse);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('step selection panel preference persists', (tester) async {
+    SharedPreferences.setMockInitialValues({settingsMoveChoicePanelKey: true});
+    useViewport(tester, const Size(390, 844));
+
+    await tester.pumpWidget(const MaterialApp(home: SettingsScreen()));
+    await tester.pumpAndSettle();
+
+    final panelSwitch = find.byKey(
+      const ValueKey('settings-move-choice-panel'),
+    );
+    await tester.ensureVisible(panelSwitch);
+    expect(tester.widget<SwitchListTile>(panelSwitch).value, isTrue);
+
+    await tester.tap(panelSwitch);
+    await tester.pumpAndSettle();
+
+    final store = await SharedPreferences.getInstance();
+    expect(store.getBool(settingsMoveChoicePanelKey), isFalse);
+
+    await tester.pumpWidget(const SizedBox.shrink());
+    await tester.pumpWidget(const MaterialApp(home: SettingsScreen()));
+    await tester.pumpAndSettle();
+    expect(tester.widget<SwitchListTile>(panelSwitch).value, isFalse);
     expect(tester.takeException(), isNull);
   });
 

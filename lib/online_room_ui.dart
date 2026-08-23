@@ -10,6 +10,7 @@ import 'game_analytics.dart';
 import 'online_invite.dart';
 import 'online_lobby.dart';
 import 'online_transport.dart';
+import 'pop_dialog.dart';
 
 enum OnlineRoomGameMode { classic, chaos }
 
@@ -96,7 +97,7 @@ class QuickTableHubScreen extends StatelessWidget {
     this.shareService,
     this.analytics = const NoopGameAnalytics(),
     this.launchSource = MatchLaunchSource.home,
-    this.createTimeout = const Duration(seconds: 15),
+    this.createTimeout = const Duration(seconds: 30),
   }) : assert(createTimeout > Duration.zero);
 
   final OnlineRoomController controller;
@@ -112,112 +113,115 @@ class QuickTableHubScreen extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) => Scaffold(
-    backgroundColor: _RoomColors.cloud,
+    backgroundColor: _RoomColors.navy,
     appBar: AppBar(
       backgroundColor: _RoomColors.navy,
       foregroundColor: Colors.white,
       surfaceTintColor: Colors.transparent,
+      leading: const _RoomBackButton(key: ValueKey('quick-table-back')),
       title: const PopText(
         'MESA RÁPIDA',
         style: TextStyle(fontWeight: FontWeight.w900),
       ),
     ),
     body: SafeArea(
-      child: LayoutBuilder(
-        builder: (context, constraints) {
-          final compact = constraints.maxHeight < 680;
-          return Padding(
-            padding: EdgeInsets.fromLTRB(16, compact ? 10 : 18, 16, 14),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [
-                PopText(
-                  'JUEGA CON AMIGOS',
-                  textAlign: TextAlign.center,
-                  style: TextStyle(
-                    color: _RoomColors.navy,
-                    fontSize: compact ? 20 : 24,
-                    fontWeight: FontWeight.w900,
+      child: _RoomScreenBackdrop(
+        child: LayoutBuilder(
+          builder: (context, constraints) {
+            final compact = constraints.maxHeight < 680;
+            return Padding(
+              padding: EdgeInsets.fromLTRB(16, compact ? 10 : 18, 16, 14),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  PopText(
+                    'JUEGA CON AMIGOS',
+                    textAlign: TextAlign.center,
+                    style: TextStyle(
+                      color: _RoomColors.navy,
+                      fontSize: compact ? 20 : 24,
+                      fontWeight: FontWeight.w900,
+                    ),
                   ),
-                ),
-                const SizedBox(height: 4),
-                const PopText(
-                  'Crea una sala, entra con código o busca una mesa pública.',
-                  textAlign: TextAlign.center,
-                  maxLines: 2,
-                  style: TextStyle(
-                    color: Color(0xFF667085),
-                    fontWeight: FontWeight.w600,
+                  const SizedBox(height: 4),
+                  const PopText(
+                    'Crea una sala, entra con código o busca una mesa pública.',
+                    textAlign: TextAlign.center,
+                    maxLines: 2,
+                    style: TextStyle(
+                      color: Color(0xFF667085),
+                      fontWeight: FontWeight.w600,
+                    ),
                   ),
-                ),
-                SizedBox(height: compact ? 10 : 18),
-                Expanded(
-                  child: Column(
-                    children: [
-                      Expanded(
-                        child: _HubAction(
-                          key: const ValueKey('quick-table-create-room'),
-                          color: _RoomColors.blue,
-                          icon: Icons.add_home_work_rounded,
-                          title: 'CREAR SALA',
-                          subtitle: 'Pública o privada · 2–4 jugadores',
-                          onTap: () => _open(
-                            context,
-                            CreateRoomScreen(
-                              controller: controller,
-                              shareService: shareService,
-                              analytics: analytics,
-                              launchSource: launchSource,
-                              createTimeout: createTimeout,
+                  SizedBox(height: compact ? 10 : 18),
+                  Expanded(
+                    child: Column(
+                      children: [
+                        Expanded(
+                          child: _HubAction(
+                            key: const ValueKey('quick-table-create-room'),
+                            color: _RoomColors.blue,
+                            icon: Icons.add_home_work_rounded,
+                            title: 'CREAR SALA',
+                            subtitle: 'Pública o privada · 2–4 jugadores',
+                            onTap: () => _open(
+                              context,
+                              CreateRoomScreen(
+                                controller: controller,
+                                shareService: shareService,
+                                analytics: analytics,
+                                launchSource: launchSource,
+                                createTimeout: createTimeout,
+                              ),
                             ),
                           ),
                         ),
-                      ),
-                      const SizedBox(height: 10),
-                      Expanded(
-                        child: _HubAction(
-                          key: const ValueKey('quick-table-join-code'),
-                          color: _RoomColors.purple,
-                          icon: Icons.password_rounded,
-                          title: 'ENTRAR CON CÓDIGO',
-                          subtitle: 'Usa el código de seis caracteres',
-                          onTap: () => _open(
-                            context,
-                            JoinRoomCodeScreen(
-                              controller: controller,
-                              shareService: shareService,
-                              analytics: analytics,
-                              launchSource: launchSource,
+                        const SizedBox(height: 10),
+                        Expanded(
+                          child: _HubAction(
+                            key: const ValueKey('quick-table-join-code'),
+                            color: _RoomColors.purple,
+                            icon: Icons.password_rounded,
+                            title: 'ENTRAR CON CÓDIGO',
+                            subtitle: 'Usa el código de seis caracteres',
+                            onTap: () => _open(
+                              context,
+                              JoinRoomCodeScreen(
+                                controller: controller,
+                                shareService: shareService,
+                                analytics: analytics,
+                                launchSource: launchSource,
+                              ),
                             ),
                           ),
                         ),
-                      ),
-                      const SizedBox(height: 10),
-                      Expanded(
-                        child: _HubAction(
-                          key: const ValueKey('quick-table-public-rooms'),
-                          color: _RoomColors.green,
-                          icon: Icons.public_rounded,
-                          title: 'SALAS PÚBLICAS',
-                          subtitle: 'Encuentra una mesa disponible',
-                          onTap: () => _open(
-                            context,
-                            PublicRoomsScreen(
-                              controller: controller,
-                              shareService: shareService,
-                              analytics: analytics,
-                              launchSource: launchSource,
+                        const SizedBox(height: 10),
+                        Expanded(
+                          child: _HubAction(
+                            key: const ValueKey('quick-table-public-rooms'),
+                            color: _RoomColors.green,
+                            icon: Icons.public_rounded,
+                            title: 'SALAS PÚBLICAS',
+                            subtitle: 'Encuentra una mesa disponible',
+                            onTap: () => _open(
+                              context,
+                              PublicRoomsScreen(
+                                controller: controller,
+                                shareService: shareService,
+                                analytics: analytics,
+                                launchSource: launchSource,
+                              ),
                             ),
                           ),
                         ),
-                      ),
-                    ],
+                      ],
+                    ),
                   ),
-                ),
-              ],
-            ),
-          );
-        },
+                ],
+              ),
+            );
+          },
+        ),
       ),
     ),
   );
@@ -234,7 +238,7 @@ class CreateRoomScreen extends StatefulWidget {
     this.shareService,
     this.analytics = const NoopGameAnalytics(),
     this.launchSource = MatchLaunchSource.home,
-    this.createTimeout = const Duration(seconds: 15),
+    this.createTimeout = const Duration(seconds: 30),
   }) : assert(createTimeout > Duration.zero);
 
   final OnlineRoomController controller;
@@ -296,138 +300,141 @@ class _CreateRoomScreenState extends State<CreateRoomScreen> {
       if (!didPop && submitting) unawaited(_cancelCreateAndLeave());
     },
     child: Scaffold(
-      backgroundColor: _RoomColors.cloud,
+      backgroundColor: _RoomColors.navy,
       appBar: AppBar(
         backgroundColor: _RoomColors.navy,
         foregroundColor: Colors.white,
         surfaceTintColor: Colors.transparent,
+        leading: const _RoomBackButton(key: ValueKey('create-room-back')),
         title: const PopText('CREAR SALA'),
       ),
       body: SafeArea(
-        child: Padding(
-          padding: const EdgeInsets.fromLTRB(18, 18, 18, 14),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              const _SectionLabel(
-                icon: Icons.sports_esports_rounded,
-                label: 'MODO DE JUEGO',
-              ),
-              const SizedBox(height: 10),
-              SegmentedButton<OnlineRoomGameMode>(
-                key: const ValueKey('create-room-mode'),
-                segments: const [
-                  ButtonSegment(
-                    value: OnlineRoomGameMode.classic,
-                    icon: Icon(Icons.emoji_events_rounded),
-                    label: PopText('CLÁSICO'),
-                  ),
-                  ButtonSegment(
-                    value: OnlineRoomGameMode.chaos,
-                    icon: Icon(Icons.bolt_rounded),
-                    label: PopText('CAOS'),
-                  ),
-                ],
-                selected: {mode},
-                onSelectionChanged: submitting
-                    ? null
-                    : (selection) => setState(() => mode = selection.single),
-                showSelectedIcon: false,
-                style: const ButtonStyle(
-                  visualDensity: VisualDensity(vertical: 2),
+        child: _RoomScreenBackdrop(
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(18, 18, 18, 14),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                const _SectionLabel(
+                  icon: Icons.edit_rounded,
+                  label: 'NOMBRE DE LA SALA',
                 ),
-              ),
-              const SizedBox(height: 18),
-              const _SectionLabel(
-                icon: Icons.edit_rounded,
-                label: 'NOMBRE DE LA SALA',
-              ),
-              const SizedBox(height: 8),
-              TextField(
-                key: const ValueKey('create-room-name-field'),
-                controller: roomNameController,
-                enabled: !submitting,
-                maxLength: 28,
-                textCapitalization: TextCapitalization.sentences,
-                decoration: InputDecoration(
-                  hintText: 'Ej. Noche de amigos',
-                  helperText: 'Opcional · visible en salas públicas',
-                  filled: true,
-                  fillColor: Colors.white,
-                  prefixIcon: const Icon(Icons.label_outline_rounded),
-                  border: OutlineInputBorder(
-                    borderRadius: BorderRadius.circular(16),
-                    borderSide: BorderSide.none,
-                  ),
-                ),
-              ),
-              const SizedBox(height: 24),
-              const _SectionLabel(
-                icon: Icons.visibility_rounded,
-                label: 'QUIÉN PUEDE ENTRAR',
-              ),
-              const SizedBox(height: 10),
-              SegmentedButton<RoomVisibility>(
-                key: const ValueKey('create-room-visibility'),
-                segments: const [
-                  ButtonSegment(
-                    value: RoomVisibility.private,
-                    icon: Icon(Icons.lock_rounded),
-                    label: PopText('PRIVADA'),
-                  ),
-                  ButtonSegment(
-                    value: RoomVisibility.public,
-                    icon: Icon(Icons.public_rounded),
-                    label: PopText('PÚBLICA'),
-                  ),
-                ],
-                selected: {visibility},
-                onSelectionChanged: submitting
-                    ? null
-                    : (selection) =>
-                          setState(() => visibility = selection.single),
-                showSelectedIcon: false,
-                style: const ButtonStyle(
-                  visualDensity: VisualDensity(vertical: 2),
-                ),
-              ),
-              const SizedBox(height: 16),
-              _InfoPanel(
-                icon: visibility == RoomVisibility.private
-                    ? Icons.key_rounded
-                    : Icons.travel_explore_rounded,
-                text: visibility == RoomVisibility.private
-                    ? 'Solo entran quienes tengan tu código o invitación.'
-                    : 'Tu sala aparecerá en la lista pública hasta llenarse.',
-              ),
-              const Spacer(),
-              FilledButton.icon(
-                key: const ValueKey('create-room-submit'),
-                onPressed: submitting ? null : _createRoom,
-                icon: submitting
-                    ? const SizedBox.square(
-                        dimension: 20,
-                        child: CircularProgressIndicator(
-                          strokeWidth: 2.5,
-                          color: Colors.white,
-                        ),
-                      )
-                    : const Icon(Icons.add_rounded),
-                label: PopText(submitting ? 'CREANDO…' : 'CREAR SALA'),
-                style: _RoomStyles.primaryButton(_RoomColors.blue),
-              ),
-              if (submitting) ...[
                 const SizedBox(height: 8),
-                TextButton.icon(
-                  key: const ValueKey('create-room-cancel'),
-                  onPressed: cancellationInProgress
-                      ? null
-                      : _cancelCreateAndLeave,
-                  icon: const Icon(Icons.close_rounded),
-                  label: const PopText('CANCELAR'),
+                TextField(
+                  key: const ValueKey('create-room-name-field'),
+                  controller: roomNameController,
+                  enabled: !submitting,
+                  maxLength: 28,
+                  textCapitalization: TextCapitalization.sentences,
+                  decoration: InputDecoration(
+                    hintText: 'Ej. Noche de amigos',
+                    helperText: 'Opcional · visible en salas públicas',
+                    filled: true,
+                    fillColor: Colors.white,
+                    prefixIcon: const Icon(Icons.label_outline_rounded),
+                    border: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(16),
+                      borderSide: BorderSide.none,
+                    ),
+                  ),
                 ),
+                const SizedBox(height: 24),
+                const _SectionLabel(
+                  icon: Icons.sports_esports_rounded,
+                  label: 'MODO DE JUEGO',
+                ),
+                const SizedBox(height: 10),
+                SegmentedButton<OnlineRoomGameMode>(
+                  key: const ValueKey('create-room-mode'),
+                  segments: const [
+                    ButtonSegment(
+                      value: OnlineRoomGameMode.classic,
+                      icon: Icon(Icons.emoji_events_rounded),
+                      label: PopText('CLÁSICO'),
+                    ),
+                    ButtonSegment(
+                      value: OnlineRoomGameMode.chaos,
+                      icon: Icon(Icons.bolt_rounded),
+                      label: PopText('CAOS'),
+                    ),
+                  ],
+                  selected: {mode},
+                  onSelectionChanged: submitting
+                      ? null
+                      : (selection) => setState(() => mode = selection.single),
+                  showSelectedIcon: false,
+                  style: const ButtonStyle(
+                    visualDensity: VisualDensity(vertical: 2),
+                  ),
+                ),
+                const SizedBox(height: 24),
+                const _SectionLabel(
+                  icon: Icons.visibility_rounded,
+                  label: 'QUIÉN PUEDE ENTRAR',
+                ),
+                const SizedBox(height: 10),
+                SegmentedButton<RoomVisibility>(
+                  key: const ValueKey('create-room-visibility'),
+                  segments: const [
+                    ButtonSegment(
+                      value: RoomVisibility.private,
+                      icon: Icon(Icons.lock_rounded),
+                      label: PopText('PRIVADA'),
+                    ),
+                    ButtonSegment(
+                      value: RoomVisibility.public,
+                      icon: Icon(Icons.public_rounded),
+                      label: PopText('PÚBLICA'),
+                    ),
+                  ],
+                  selected: {visibility},
+                  onSelectionChanged: submitting
+                      ? null
+                      : (selection) =>
+                            setState(() => visibility = selection.single),
+                  showSelectedIcon: false,
+                  style: const ButtonStyle(
+                    visualDensity: VisualDensity(vertical: 2),
+                  ),
+                ),
+                const SizedBox(height: 16),
+                _InfoPanel(
+                  icon: visibility == RoomVisibility.private
+                      ? Icons.key_rounded
+                      : Icons.travel_explore_rounded,
+                  text: visibility == RoomVisibility.private
+                      ? 'Solo entran quienes tengan tu código o invitación.'
+                      : 'Tu sala aparecerá en la lista pública hasta llenarse.',
+                ),
+                const Spacer(),
+                FilledButton.icon(
+                  key: const ValueKey('create-room-submit'),
+                  onPressed: submitting ? null : _createRoom,
+                  icon: submitting
+                      ? const SizedBox.square(
+                          dimension: 20,
+                          child: CircularProgressIndicator(
+                            strokeWidth: 2.5,
+                            color: Colors.white,
+                          ),
+                        )
+                      : const Icon(Icons.add_rounded),
+                  label: PopText(submitting ? 'CREANDO…' : 'CREAR SALA'),
+                  style: _RoomStyles.primaryButton(_RoomColors.blue),
+                ),
+                if (submitting) ...[
+                  const SizedBox(height: 8),
+                  TextButton.icon(
+                    key: const ValueKey('create-room-cancel'),
+                    onPressed: cancellationInProgress
+                        ? null
+                        : _cancelCreateAndLeave,
+                    icon: const Icon(Icons.close_rounded),
+                    label: const PopText('CANCELAR'),
+                  ),
+                ],
               ],
-            ],
+            ),
           ),
         ),
       ),
@@ -596,96 +603,99 @@ class _JoinRoomCodeScreenState extends State<JoinRoomCodeScreen> {
 
   @override
   Widget build(BuildContext context) => Scaffold(
-    backgroundColor: _RoomColors.cloud,
+    backgroundColor: _RoomColors.navy,
     appBar: AppBar(
       backgroundColor: _RoomColors.navy,
       foregroundColor: Colors.white,
       surfaceTintColor: Colors.transparent,
+      leading: const _RoomBackButton(key: ValueKey('join-room-back')),
       title: const PopText('ENTRAR CON CÓDIGO'),
     ),
     body: SafeArea(
-      child: Padding(
-        padding: const EdgeInsets.fromLTRB(20, 22, 20, 14),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            const Icon(
-              Icons.password_rounded,
-              color: _RoomColors.purple,
-              size: 58,
-            ),
-            const SizedBox(height: 12),
-            const PopText(
-              'ESCRIBE EL CÓDIGO DE LA SALA',
-              textAlign: TextAlign.center,
-              style: TextStyle(
-                color: _RoomColors.navy,
-                fontSize: 20,
-                fontWeight: FontWeight.w900,
+      child: _RoomScreenBackdrop(
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(20, 22, 20, 14),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              const Icon(
+                Icons.password_rounded,
+                color: _RoomColors.purple,
+                size: 58,
               ),
-            ),
-            const SizedBox(height: 8),
-            const PopText(
-              'Lo encontrarás en la invitación de tu amigo.',
-              textAlign: TextAlign.center,
-              style: TextStyle(color: Color(0xFF667085)),
-            ),
-            const SizedBox(height: 24),
-            TextField(
-              key: const ValueKey('join-room-code-field'),
-              controller: textController,
-              enabled: !submitting,
-              autofocus: true,
-              maxLength: RoomCode.length,
-              textAlign: TextAlign.center,
-              textCapitalization: TextCapitalization.characters,
-              keyboardType: TextInputType.visiblePassword,
-              inputFormatters: [const RoomCodeInputFormatter()],
-              onChanged: (_) => setState(() {}),
-              onSubmitted: (_) {
-                if (valid && !submitting) _joinRoom();
-              },
-              style: const TextStyle(
-                color: _RoomColors.navy,
-                fontSize: 30,
-                fontWeight: FontWeight.w900,
-                letterSpacing: 7,
-              ),
-              decoration: InputDecoration(
-                hintText: 'ABC234',
-                counterText: '${textController.text.length}/6',
-                errorText:
-                    textController.text.length == RoomCode.length && !valid
-                    ? appTranslate(
-                        context,
-                        'Usa letras y números sin I, O, 0 ni 1.',
-                      )
-                    : null,
-                filled: true,
-                fillColor: Colors.white,
-                border: OutlineInputBorder(
-                  borderRadius: BorderRadius.circular(20),
-                  borderSide: BorderSide.none,
+              const SizedBox(height: 12),
+              const PopText(
+                'ESCRIBE EL CÓDIGO DE LA SALA',
+                textAlign: TextAlign.center,
+                style: TextStyle(
+                  color: _RoomColors.navy,
+                  fontSize: 20,
+                  fontWeight: FontWeight.w900,
                 ),
               ),
-            ),
-            const Spacer(),
-            FilledButton.icon(
-              key: const ValueKey('join-room-code-submit'),
-              onPressed: valid && !submitting ? _joinRoom : null,
-              icon: submitting
-                  ? const SizedBox.square(
-                      dimension: 20,
-                      child: CircularProgressIndicator(
-                        strokeWidth: 2.5,
-                        color: Colors.white,
-                      ),
-                    )
-                  : const Icon(Icons.login_rounded),
-              label: PopText(submitting ? 'ENTRANDO…' : 'ENTRAR A LA SALA'),
-              style: _RoomStyles.primaryButton(_RoomColors.purple),
-            ),
-          ],
+              const SizedBox(height: 8),
+              const PopText(
+                'Lo encontrarás en la invitación de tu amigo.',
+                textAlign: TextAlign.center,
+                style: TextStyle(color: Color(0xFF667085)),
+              ),
+              const SizedBox(height: 24),
+              TextField(
+                key: const ValueKey('join-room-code-field'),
+                controller: textController,
+                enabled: !submitting,
+                autofocus: true,
+                maxLength: RoomCode.length,
+                textAlign: TextAlign.center,
+                textCapitalization: TextCapitalization.characters,
+                keyboardType: TextInputType.visiblePassword,
+                inputFormatters: [const RoomCodeInputFormatter()],
+                onChanged: (_) => setState(() {}),
+                onSubmitted: (_) {
+                  if (valid && !submitting) _joinRoom();
+                },
+                style: const TextStyle(
+                  color: _RoomColors.navy,
+                  fontSize: 30,
+                  fontWeight: FontWeight.w900,
+                  letterSpacing: 7,
+                ),
+                decoration: InputDecoration(
+                  hintText: 'ABC234',
+                  counterText: '${textController.text.length}/6',
+                  errorText:
+                      textController.text.length == RoomCode.length && !valid
+                      ? appTranslate(
+                          context,
+                          'Usa letras y números sin I, O, 0 ni 1.',
+                        )
+                      : null,
+                  filled: true,
+                  fillColor: Colors.white,
+                  border: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(20),
+                    borderSide: BorderSide.none,
+                  ),
+                ),
+              ),
+              const Spacer(),
+              FilledButton.icon(
+                key: const ValueKey('join-room-code-submit'),
+                onPressed: valid && !submitting ? _joinRoom : null,
+                icon: submitting
+                    ? const SizedBox.square(
+                        dimension: 20,
+                        child: CircularProgressIndicator(
+                          strokeWidth: 2.5,
+                          color: Colors.white,
+                        ),
+                      )
+                    : const Icon(Icons.login_rounded),
+                label: PopText(submitting ? 'ENTRANDO…' : 'ENTRAR A LA SALA'),
+                style: _RoomStyles.primaryButton(_RoomColors.purple),
+              ),
+            ],
+          ),
         ),
       ),
     ),
@@ -919,11 +929,12 @@ class _PublicRoomsScreenState extends State<PublicRoomsScreen> {
 
   @override
   Widget build(BuildContext context) => Scaffold(
-    backgroundColor: _RoomColors.cloud,
+    backgroundColor: _RoomColors.navy,
     appBar: AppBar(
       backgroundColor: _RoomColors.navy,
       foregroundColor: Colors.white,
       surfaceTintColor: Colors.transparent,
+      leading: const _RoomBackButton(key: ValueKey('public-rooms-back')),
       title: const PopText('SALAS PÚBLICAS'),
       actions: [
         IconButton(
@@ -937,50 +948,52 @@ class _PublicRoomsScreenState extends State<PublicRoomsScreen> {
       ],
     ),
     body: SafeArea(
-      child: AnimatedBuilder(
-        animation: widget.controller,
-        builder: (context, _) {
-          if (widget.controller.loadingPublicRooms &&
-              widget.controller.publicRooms.isEmpty) {
-            return const Center(child: CircularProgressIndicator());
-          }
-          final error = widget.controller.publicRoomsError;
-          if (error != null && widget.controller.publicRooms.isEmpty) {
-            return _PublicRoomsEmpty(
-              icon: Icons.cloud_off_rounded,
-              title: 'NO PUDIMOS CARGAR LAS SALAS',
-              message:
-                  'No pudimos conectar con el servidor. Revisa tu internet e inténtalo otra vez.',
-              onRetry: _refreshRooms,
+      child: _RoomScreenBackdrop(
+        child: AnimatedBuilder(
+          animation: widget.controller,
+          builder: (context, _) {
+            if (widget.controller.loadingPublicRooms &&
+                widget.controller.publicRooms.isEmpty) {
+              return const Center(child: CircularProgressIndicator());
+            }
+            final error = widget.controller.publicRoomsError;
+            if (error != null && widget.controller.publicRooms.isEmpty) {
+              return _PublicRoomsEmpty(
+                icon: Icons.cloud_off_rounded,
+                title: 'NO PUDIMOS CARGAR LAS SALAS',
+                message:
+                    'No pudimos conectar con el servidor. Revisa tu internet e inténtalo otra vez.',
+                onRetry: _refreshRooms,
+              );
+            }
+            if (widget.controller.publicRooms.isEmpty) {
+              return _PublicRoomsEmpty(
+                icon: Icons.weekend_rounded,
+                title: 'NO HAY SALAS ABIERTAS',
+                message: 'Crea una sala pública o vuelve a intentarlo.',
+                onRetry: _refreshRooms,
+              );
+            }
+            return RefreshIndicator(
+              onRefresh: _refreshRooms,
+              child: ListView.separated(
+                key: const ValueKey('public-rooms-list'),
+                padding: const EdgeInsets.fromLTRB(14, 14, 14, 18),
+                itemCount: widget.controller.publicRooms.length,
+                separatorBuilder: (_, _) => const SizedBox(height: 10),
+                itemBuilder: (context, index) {
+                  final room = widget.controller.publicRooms[index];
+                  return _PublicRoomCard(
+                    room: room,
+                    joining: joiningRoomId == room.roomId,
+                    onJoin: joiningRoomId == null ? () => _join(room) : null,
+                    onReport: () => _report(room),
+                  );
+                },
+              ),
             );
-          }
-          if (widget.controller.publicRooms.isEmpty) {
-            return _PublicRoomsEmpty(
-              icon: Icons.weekend_rounded,
-              title: 'NO HAY SALAS ABIERTAS',
-              message: 'Crea una sala pública o vuelve a intentarlo.',
-              onRetry: _refreshRooms,
-            );
-          }
-          return RefreshIndicator(
-            onRefresh: _refreshRooms,
-            child: ListView.separated(
-              key: const ValueKey('public-rooms-list'),
-              padding: const EdgeInsets.fromLTRB(14, 14, 14, 18),
-              itemCount: widget.controller.publicRooms.length,
-              separatorBuilder: (_, _) => const SizedBox(height: 10),
-              itemBuilder: (context, index) {
-                final room = widget.controller.publicRooms[index];
-                return _PublicRoomCard(
-                  room: room,
-                  joining: joiningRoomId == room.roomId,
-                  onJoin: joiningRoomId == null ? () => _join(room) : null,
-                  onReport: () => _report(room),
-                );
-              },
-            ),
-          );
-        },
+          },
+        ),
       ),
     ),
   );
@@ -1097,6 +1110,7 @@ class RoomLobbyScreen extends StatefulWidget {
 
 class _RoomLobbyScreenState extends State<RoomLobbyScreen> {
   String? action;
+  Timer? roomRepaintTimer;
   bool allowPop = false;
   bool handledClosedRoom = false;
   bool handledUnavailableRoom = false;
@@ -1110,6 +1124,13 @@ class _RoomLobbyScreenState extends State<RoomLobbyScreen> {
     super.initState();
     hadLobby = widget.controller.lobby != null;
     widget.controller.addListener(_handleControllerUpdate);
+    // Keep this route reactive even when a platform drops a native
+    // Listenable notification during a Firebase reconnect. The controller
+    // independently reconciles the authoritative room every second; this
+    // inexpensive repaint makes that recovered state visible on every client.
+    roomRepaintTimer = Timer.periodic(const Duration(seconds: 1), (_) {
+      if (mounted) setState(() {});
+    });
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (mounted) _handleControllerUpdate();
     });
@@ -1132,6 +1153,7 @@ class _RoomLobbyScreenState extends State<RoomLobbyScreen> {
 
   @override
   void dispose() {
+    roomRepaintTimer?.cancel();
     widget.controller.removeListener(_handleControllerUpdate);
     super.dispose();
   }
@@ -1222,7 +1244,7 @@ class _RoomLobbyScreenState extends State<RoomLobbyScreen> {
       unawaited(isHost ? _confirmClose() : _confirmLeave());
     },
     child: Scaffold(
-      backgroundColor: _RoomColors.cloud,
+      backgroundColor: _RoomColors.navy,
       appBar: AppBar(
         backgroundColor: _RoomColors.navy,
         foregroundColor: Colors.white,
@@ -1231,104 +1253,108 @@ class _RoomLobbyScreenState extends State<RoomLobbyScreen> {
         automaticallyImplyLeading: false,
       ),
       body: SafeArea(
-        child: AnimatedBuilder(
-          animation: widget.controller,
-          builder: (context, _) {
-            final lobby = widget.controller.lobby;
-            if (lobby == null) {
-              return const Center(
-                child: PopText('La sala ya no está disponible.'),
+        child: _RoomScreenBackdrop(
+          child: AnimatedBuilder(
+            animation: widget.controller,
+            builder: (context, _) {
+              final lobby = widget.controller.lobby;
+              if (lobby == null) {
+                return const Center(
+                  child: PopText('La sala ya no está disponible.'),
+                );
+              }
+              final local = lobby.participantById(
+                widget.controller.localParticipantId,
               );
-            }
-            final local = lobby.participantById(
-              widget.controller.localParticipantId,
-            );
-            final isHost = local.participantId == lobby.hostParticipantId;
-            return LayoutBuilder(
-              builder: (context, constraints) {
-                final compact = constraints.maxHeight < 700;
-                return Padding(
-                  padding: EdgeInsets.fromLTRB(10, compact ? 7 : 10, 10, 10),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.stretch,
-                    children: [
-                      _LobbyHeader(
-                        lobby: lobby,
-                        mode: widget.controller.roomMode,
-                        isHost: isHost,
-                        busy: busy,
-                        onShare: _shareInvite,
-                        onCopy: () => _copyCode(lobby.roomCode),
-                        onExit: isHost ? _confirmClose : _confirmLeave,
-                        exitClosesRoom: isHost,
-                      ),
-                      SizedBox(height: compact ? 6 : 9),
-                      _VisibilityControl(
-                        visibility: lobby.visibility,
-                        hostEnabled:
-                            isHost &&
-                            !busy &&
-                            lobby.status == RoomStatus.waiting,
-                        onChanged: (value) => _run(
-                          'visibility',
-                          () => widget.controller.changeVisibility(value),
-                        ),
-                      ),
-                      SizedBox(height: compact ? 6 : 9),
-                      Expanded(
-                        flex: lobby.status == RoomStatus.waiting ? 5 : 4,
-                        child: _SeatGrid(
+              final isHost = local.participantId == lobby.hostParticipantId;
+              return LayoutBuilder(
+                builder: (context, constraints) {
+                  final compact = constraints.maxHeight < 700;
+                  return Padding(
+                    padding: EdgeInsets.fromLTRB(10, compact ? 7 : 10, 10, 10),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.stretch,
+                      children: [
+                        _LobbyHeader(
                           lobby: lobby,
-                          localParticipantId:
-                              widget.controller.localParticipantId,
-                          canKick:
+                          mode: widget.controller.roomMode,
+                          isHost: isHost,
+                          busy: busy,
+                          onShare: _shareInvite,
+                          onCopy: () => _copyCode(lobby.roomCode),
+                          onExit: isHost ? _confirmClose : _confirmLeave,
+                          exitClosesRoom: isHost,
+                        ),
+                        SizedBox(height: compact ? 6 : 9),
+                        _VisibilityControl(
+                          visibility: lobby.visibility,
+                          hostEnabled:
                               isHost &&
                               !busy &&
                               lobby.status == RoomStatus.waiting,
-                          onKick: _confirmKick,
+                          onChanged: (value) => _run(
+                            'visibility',
+                            () => widget.controller.changeVisibility(value),
+                          ),
                         ),
-                      ),
-                      if (lobby.status != RoomStatus.waiting) ...[
-                        SizedBox(height: compact ? 6 : 8),
+                        SizedBox(height: compact ? 6 : 9),
                         Expanded(
-                          flex: 3,
-                          child: _OpeningRollPanel(
+                          flex: lobby.status == RoomStatus.waiting ? 5 : 4,
+                          child: _SeatGrid(
                             lobby: lobby,
                             localParticipantId:
                                 widget.controller.localParticipantId,
-                            isHost: isHost,
-                            busy: busy,
-                            onRoll: () =>
-                                _run('roll', widget.controller.rollOpeningDie),
-                            onStartGame: () => _run(
-                              'game-start',
-                              widget.controller.markGameStarted,
+                            canKick:
+                                isHost &&
+                                !busy &&
+                                lobby.status == RoomStatus.waiting,
+                            onKick: _confirmKick,
+                          ),
+                        ),
+                        if (lobby.status != RoomStatus.waiting) ...[
+                          SizedBox(height: compact ? 6 : 8),
+                          Expanded(
+                            flex: 3,
+                            child: _OpeningRollPanel(
+                              lobby: lobby,
+                              localParticipantId:
+                                  widget.controller.localParticipantId,
+                              isHost: isHost,
+                              busy: busy,
+                              onRoll: () => _run(
+                                'roll',
+                                widget.controller.rollOpeningDie,
+                              ),
+                              onStartGame: () => _run(
+                                'game-start',
+                                widget.controller.markGameStarted,
+                              ),
                             ),
                           ),
-                        ),
+                        ],
+                        SizedBox(height: compact ? 6 : 9),
+                        if (lobby.status == RoomStatus.waiting)
+                          _WaitingRoomActions(
+                            lobby: lobby,
+                            local: local,
+                            isHost: isHost,
+                            busy: busy,
+                            onReady: () => _run(
+                              'ready',
+                              () => widget.controller.setReady(!local.ready),
+                            ),
+                            onStart: () => _run(
+                              'opening-roll',
+                              widget.controller.startOpeningRoll,
+                            ),
+                          ),
                       ],
-                      SizedBox(height: compact ? 6 : 9),
-                      if (lobby.status == RoomStatus.waiting)
-                        _WaitingRoomActions(
-                          lobby: lobby,
-                          local: local,
-                          isHost: isHost,
-                          busy: busy,
-                          onReady: () => _run(
-                            'ready',
-                            () => widget.controller.setReady(!local.ready),
-                          ),
-                          onStart: () => _run(
-                            'opening-roll',
-                            widget.controller.startOpeningRoll,
-                          ),
-                        ),
-                    ],
-                  ),
-                );
-              },
-            );
-          },
+                    ),
+                  );
+                },
+              );
+            },
+          ),
         ),
       ),
     ),
@@ -1401,7 +1427,7 @@ class _RoomLobbyScreenState extends State<RoomLobbyScreen> {
   Future<void> _confirmKick(LobbyParticipant participant) async {
     final confirmed = await showDialog<bool>(
       context: context,
-      builder: (dialogContext) => AlertDialog(
+      builder: (dialogContext) => PopAlertDialog(
         title: const PopText('¿EXPULSAR JUGADOR?'),
         content: PopText('${participant.displayName} saldrá de la sala.'),
         actions: [
@@ -1428,7 +1454,7 @@ class _RoomLobbyScreenState extends State<RoomLobbyScreen> {
   Future<void> _confirmClose() async {
     final confirmed = await showDialog<bool>(
       context: context,
-      builder: (dialogContext) => AlertDialog(
+      builder: (dialogContext) => PopAlertDialog(
         title: const PopText('¿CERRAR SALA?'),
         content: const PopText('Todos los jugadores volverán al inicio.'),
         actions: [
@@ -1451,7 +1477,7 @@ class _RoomLobbyScreenState extends State<RoomLobbyScreen> {
   Future<void> _confirmLeave() async {
     final confirmed = await showDialog<bool>(
       context: context,
-      builder: (dialogContext) => AlertDialog(
+      builder: (dialogContext) => PopAlertDialog(
         title: const PopText('¿SALIR DE LA SALA?'),
         content: const PopText('Podrás volver a entrar mientras siga abierta.'),
         actions: [
@@ -1747,7 +1773,7 @@ Future<String?> _askReportReason(BuildContext context) async {
   ];
   return showDialog<String>(
     context: context,
-    builder: (dialogContext) => AlertDialog(
+    builder: (dialogContext) => PopAlertDialog(
       title: const PopText('REPORTAR SALA'),
       content: Column(
         mainAxisSize: MainAxisSize.min,
@@ -2566,6 +2592,93 @@ abstract final class _RoomColors {
     LobbySeatColor.yellow => yellow,
     LobbySeatColor.blue => blue,
   };
+}
+
+/// Shared Parchís Pop surface for the Quick Table flow. The light inset keeps
+/// existing form controls readable while the navy/purple grid makes these
+/// screens feel like part of the game instead of a separate system form.
+class _RoomScreenBackdrop extends StatelessWidget {
+  const _RoomScreenBackdrop({required this.child});
+
+  final Widget child;
+
+  @override
+  Widget build(BuildContext context) => DecoratedBox(
+    decoration: const BoxDecoration(
+      gradient: LinearGradient(
+        begin: Alignment.topLeft,
+        end: Alignment.bottomRight,
+        colors: [Color(0xFF0D2A5A), Color(0xFF1D3973), Color(0xFF3D2A78)],
+      ),
+    ),
+    child: Stack(
+      fit: StackFit.expand,
+      children: [
+        const Positioned.fill(
+          child: IgnorePointer(child: CustomPaint(painter: _RoomGrid())),
+        ),
+        Padding(
+          padding: const EdgeInsets.all(10),
+          child: DecoratedBox(
+            decoration: BoxDecoration(
+              color: _RoomColors.cloud.withValues(alpha: .97),
+              borderRadius: BorderRadius.circular(24),
+              border: Border.all(color: Colors.white, width: 2),
+            ),
+            child: child,
+          ),
+        ),
+      ],
+    ),
+  );
+}
+
+class _RoomGrid extends CustomPainter {
+  const _RoomGrid();
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final paint = Paint()
+      ..color = Colors.white.withValues(alpha: .075)
+      ..strokeWidth = 1;
+    const step = 38.0;
+    for (var x = -size.height; x < size.width + size.height; x += step) {
+      canvas.drawLine(
+        Offset(x, 0),
+        Offset(x + size.height, size.height),
+        paint,
+      );
+      canvas.drawLine(
+        Offset(x, size.height),
+        Offset(x + size.height, 0),
+        paint,
+      );
+    }
+  }
+
+  @override
+  bool shouldRepaint(covariant _RoomGrid oldDelegate) => false;
+}
+
+class _RoomBackButton extends StatelessWidget {
+  const _RoomBackButton({super.key});
+
+  @override
+  Widget build(BuildContext context) => IconButton(
+    tooltip: appTranslate(context, 'Volver'),
+    onPressed: () {
+      final navigator = Navigator.of(context);
+      if (navigator.canPop()) {
+        navigator.pop();
+      } else {
+        // Desktop can open Quick Table as its first visible route. In that
+        // case there is no page to pop, so the same button still returns to
+        // the app home instead of appearing inert.
+        navigator.pushNamedAndRemoveUntil('/home', (route) => false);
+      }
+    },
+    icon: const Icon(Icons.arrow_back_rounded),
+  );
 }
 
 abstract final class _RoomStyles {
