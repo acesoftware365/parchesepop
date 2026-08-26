@@ -18,6 +18,8 @@ void main() {
   };
   const expectedThemeIds = {
     'theme_default',
+    'theme_shared_table_prism',
+    'theme_shared_table_aurora',
     'theme_neon_rush',
     'theme_golden_night',
     'theme_tropical_splash',

@@ -1690,17 +1690,19 @@ void main() {
     );
 
     test(
-      'host loss becomes explicit and the same host can recover the match',
+      'host loss hands authority to a guest and the original host can return',
       () async {
         final store = InMemoryOnlineRealtimeStore(initialNowMs: 11000);
         final hostSession = _sessionFor(PlayerColor.red);
         final firstHostEngine = _engine(
           localColor: PlayerColor.red,
           random: Random(111),
+          initialPlayer: PlayerColor.red,
         );
         final guestEngine = _engine(
           localColor: PlayerColor.green,
           random: Random(112),
+          initialPlayer: PlayerColor.red,
         );
         final firstHost = OnlineGameSyncClient(
           transport: _transport(store, uid: 'host_red'),
@@ -1727,22 +1729,20 @@ void main() {
         firstHost.dispose();
 
         await _eventually(
-          () => guest.hostAvailability == OnlineHostAvailability.reconnecting,
+          () => guest.hostAvailability != OnlineHostAvailability.available,
         );
-        expect(guest.connectionState, OnlineGameConnectionState.reconnecting);
-        expect(guest.hostReconnectDeadline, isNotNull);
-        await expectLater(
-          guest.submitRoll(actionId: 'roll_without_host_001'),
-          throwsA(isA<OnlineGameSyncException>()),
-        );
+        await _eventually(() => guest.hasAuthority);
+        expect(guest.activeHostUid, 'guest_green');
+        expect(guest.connectionState, OnlineGameConnectionState.connected);
+        expect(guest.requiresHostRecovery, isFalse);
 
-        await _eventually(
-          () => guest.hostAvailability == OnlineHostAvailability.unavailable,
+        // The replacement authority immediately drives the disconnected
+        // red seat's CPU turn from the durable checkpoint.
+        final takeoverRoll = await guest.submitRollFor(
+          'host_red',
+          actionId: 'roll_without_host_001',
         );
-        expect(guest.requiresHostRecovery, isTrue);
-        expect(guest.connectionState, OnlineGameConnectionState.failed);
-        expect(guest.lastError, isA<OnlineHostUnavailableException>());
-        expect(await guest.retryHostRecovery(), isFalse);
+        expect(takeoverRoll.status, OnlineCommandStatus.accepted);
 
         final replacementEngine = _engine(
           localColor: PlayerColor.red,
@@ -1766,71 +1766,74 @@ void main() {
 
         await replacementHost.start();
         await _eventually(
-          () => guest.hostAvailability == OnlineHostAvailability.available,
+          () =>
+              replacementHost.connectionState ==
+              OnlineGameConnectionState.connected,
         );
-        expect(guest.requiresHostRecovery, isFalse);
-        expect(guest.connectionState, OnlineGameConnectionState.connected);
-        expect(guest.lastError, isNull);
-        expect(guestNotifications, greaterThanOrEqualTo(3));
-        expect(await guest.retryHostRecovery(), isTrue);
-
-        final roll = await guest.submitRoll(
-          actionId: 'roll_after_host_recovery_001',
+        expect(replacementHost.hasAuthority, isFalse);
+        expect(replacementHost.activeHostUid, 'guest_green');
+        // The host returned during the red seat's active dice turn.  Keep the
+        // CPU in control until that turn reaches a safe boundary, then release
+        // the seat to the returning player.
+        await _eventually(
+          () => replacementHost.localParticipantAwaitingNextTurn,
         );
-        expect(roll.status, OnlineCommandStatus.accepted);
-        await _eventually(() => guest.revision == 1);
-        expect(_checkpoint(guest.engine), _checkpoint(replacementHost.engine));
+        expect(guest.canHostDriveParticipant('host_red'), isTrue);
+        guest.engine.endTurn();
+        await _eventually(() => !guest.canHostDriveParticipant('host_red'));
+        await _eventually(
+          () => !replacementHost.localParticipantAwaitingNextTurn,
+        );
+        expect(guest.hostAvailability, OnlineHostAvailability.available);
+        expect(guestNotifications, greaterThanOrEqualTo(2));
       },
     );
 
-    test('a guest cannot promote itself into activeHostV1 authority', () async {
-      final store = InMemoryOnlineRealtimeStore(initialNowMs: 12000);
-      final hostSession = _sessionFor(PlayerColor.red);
-      final hostEngine = _engine(
-        localColor: PlayerColor.red,
-        random: Random(121),
-      );
-      final host = OnlineGameSyncClient(
-        transport: _transport(store, uid: 'host_red'),
-        roomId: 'room_sync_001',
-        session: hostSession,
-        engine: hostEngine,
-        isHost: true,
-      );
-      final promotedEngine = _engine(
-        localColor: PlayerColor.green,
-        random: Random(122),
-      );
-      final attemptedPromotion = OnlineGameSyncClient(
-        transport: _transport(store, uid: 'guest_green'),
-        roomId: 'room_sync_001',
-        session: _sessionFor(PlayerColor.green),
-        engine: promotedEngine,
-        isHost: true,
-      );
-      addTearDown(() {
-        attemptedPromotion.dispose();
-        host.dispose();
-        promotedEngine.dispose();
-        hostEngine.dispose();
-      });
+    test(
+      'a connected lease owner cannot be replaced by another player',
+      () async {
+        final store = InMemoryOnlineRealtimeStore(initialNowMs: 12000);
+        final hostSession = _sessionFor(PlayerColor.red);
+        final hostEngine = _engine(
+          localColor: PlayerColor.red,
+          random: Random(121),
+        );
+        final host = OnlineGameSyncClient(
+          transport: _transport(store, uid: 'host_red'),
+          roomId: 'room_sync_001',
+          session: hostSession,
+          engine: hostEngine,
+          isHost: true,
+        );
+        final promotedTransport = _transport(store, uid: 'guest_green');
+        final promotedEngine = _engine(
+          localColor: PlayerColor.green,
+          random: Random(122),
+        );
+        final attemptedPromotion = OnlineGameSyncClient(
+          transport: promotedTransport,
+          roomId: 'room_sync_001',
+          session: _sessionFor(PlayerColor.green),
+          engine: promotedEngine,
+          isHost: false,
+        );
+        addTearDown(() {
+          attemptedPromotion.dispose();
+          host.dispose();
+          promotedEngine.dispose();
+          hostEngine.dispose();
+        });
 
-      await _seedInGameRoom(store, hostSession);
-      await host.start();
-      await expectLater(
-        attemptedPromotion.start(),
-        throwsA(
-          isA<OnlineGameSyncException>().having(
-            (error) => error.message,
-            'message',
-            contains('recorded room host'),
-          ),
-        ),
-      );
-      expect(
-        attemptedPromotion.connectionState,
-        OnlineGameConnectionState.failed,
-      );
-    });
+        await _seedInGameRoom(store, hostSession);
+        await host.start();
+        await attemptedPromotion.start();
+        expect(attemptedPromotion.hasAuthority, isFalse);
+        final claimed = await promotedTransport.acquireMatchHostLease(
+          'room_sync_001',
+        );
+        expect(claimed, isNotNull);
+        expect(claimed!.uid, 'host_red');
+      },
+    );
   });
 }

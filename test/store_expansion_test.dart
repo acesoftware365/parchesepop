@@ -55,8 +55,8 @@ void main() {
       final featured = shopCatalog
           .where((product) => product.featured)
           .toList(growable: false);
-      expect(walletCatalog, hasLength(37));
-      expect(shopCatalog, hasLength(32));
+      expect(walletCatalog, hasLength(39));
+      expect(shopCatalog, hasLength(34));
       expect(featured, hasLength(9));
       expect(find.byType(Card), findsNWidgets(featured.length));
       for (final product in featured) {
@@ -78,7 +78,11 @@ void main() {
       for (final entry in filters.entries) {
         await _selectShopFilter(tester, entry.value);
         final products = shopCatalog
-            .where((product) => product.category == entry.key)
+            .where(
+              (product) =>
+                  product.category == entry.key &&
+                  !product.sharedTableExclusive,
+            )
             .toList(growable: false);
 
         expect(find.byType(Card), findsNWidgets(products.length));
@@ -98,9 +102,51 @@ void main() {
         );
       }
 
-      expect(seenProductIds, shopCatalog.map((product) => product.id).toSet());
+      expect(
+        seenProductIds,
+        shopCatalog
+            .where((product) => !product.sharedTableExclusive)
+            .map((product) => product.id)
+            .toSet(),
+      );
     },
   );
+
+  testWidgets('shared table shop section curates Pass & Play cosmetics', (
+    tester,
+  ) async {
+    final wallet = await _pumpShop(tester);
+    addTearDown(wallet.dispose);
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+
+    await _selectShopFilter(tester, 'MESA COMPARTIDA');
+
+    expect(
+      find.byKey(const ValueKey('shop-shared-table-banner')),
+      findsOneWidget,
+    );
+    expect(
+      find.text('Diseños para jugar hasta 4 en un dispositivo.'),
+      findsOneWidget,
+    );
+
+    final sharedTableProducts = shopCatalog
+        .where(
+          (product) =>
+              product.category == CosmeticCategory.theme ||
+              product.category == CosmeticCategory.dice ||
+              product.category == CosmeticCategory.tokens,
+        )
+        .toList(growable: false);
+    expect(find.byType(Card), findsNWidgets(sharedTableProducts.length));
+    for (final product in sharedTableProducts) {
+      expect(
+        find.byKey(ValueKey('shop-preview-${product.id}')),
+        findsOneWidget,
+      );
+    }
+    expect(tester.takeException(), isNull);
+  });
 
   testWidgets('every product card CTA is at least 44 points tall', (
     tester,
@@ -119,7 +165,8 @@ void main() {
         _ => CosmeticCategory.avatar,
       };
       final products = shopCatalog.where(
-        (product) => product.category == category,
+        (product) =>
+            product.category == category && !product.sharedTableExclusive,
       );
 
       for (final product in products) {

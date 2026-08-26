@@ -10,7 +10,7 @@ void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
 
   test(
-    'Android effects mix with music instead of stealing its focus',
+    'Android effects use transient ducking focus so they remain audible',
     () async {
       final music = _FakeAudioPlayer();
       final effects = _FakeAudioPlayer();
@@ -27,7 +27,10 @@ void main() {
         AndroidContentType.sonification,
       );
       expect(effects.context?.android.usageType, AndroidUsageType.game);
-      expect(effects.context?.android.audioFocus, AndroidAudioFocus.none);
+      expect(
+        effects.context?.android.audioFocus,
+        AndroidAudioFocus.gainTransientMayDuck,
+      );
 
       music.calls.clear();
       effects.calls.clear();
@@ -202,33 +205,30 @@ void main() {
     });
   }
 
-  test(
-    'the global lifecycle stops music even when no match is open',
-    () async {
-      final music = _FakeAudioPlayer();
-      final effects = _FakeAudioPlayer();
-      final controller = _controller(music: music, effects: effects);
-      await controller.initialize();
-      addTearDown(controller.dispose);
-      music.calls.clear();
-      effects.calls.clear();
+  test('the global lifecycle stops music even when no match is open', () async {
+    final music = _FakeAudioPlayer();
+    final effects = _FakeAudioPlayer();
+    final controller = _controller(music: music, effects: effects);
+    await controller.initialize();
+    addTearDown(controller.dispose);
+    music.calls.clear();
+    effects.calls.clear();
 
-      await controller.handleAppLifecycleState(AppLifecycleState.inactive);
-      await controller.handleAppLifecycleState(AppLifecycleState.hidden);
-      await controller.handleAppLifecycleState(AppLifecycleState.paused);
+    await controller.handleAppLifecycleState(AppLifecycleState.inactive);
+    await controller.handleAppLifecycleState(AppLifecycleState.hidden);
+    await controller.handleAppLifecycleState(AppLifecycleState.paused);
 
-      expect(music.calls.where((call) => call == 'stop').length, 1);
-      expect(effects.calls.where((call) => call == 'stop').length, 1);
+    expect(music.calls.where((call) => call == 'stop').length, 1);
+    expect(effects.calls.where((call) => call == 'stop').length, 1);
 
-      await controller.handleAppLifecycleState(AppLifecycleState.resumed);
-      expect(
-        music.calls
-            .where((call) => call == 'play:audio/music_background.wav:0.12')
-            .length,
-        1,
-      );
-    },
-  );
+    await controller.handleAppLifecycleState(AppLifecycleState.resumed);
+    expect(
+      music.calls
+          .where((call) => call == 'play:audio/music_background.wav:0.12')
+          .length,
+      1,
+    );
+  });
 }
 
 GameAudioController _controller({

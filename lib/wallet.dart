@@ -17,6 +17,7 @@ class WalletProduct {
     this.featured = false,
     this.rarity = CosmeticRarity.common,
     this.availableInShop = true,
+    this.sharedTableExclusive = false,
   });
 
   final String id;
@@ -27,6 +28,7 @@ class WalletProduct {
   final bool featured;
   final CosmeticRarity rarity;
   final bool availableInShop;
+  final bool sharedTableExclusive;
 }
 
 const List<WalletProduct> walletCatalog = [
@@ -37,6 +39,24 @@ const List<WalletProduct> walletCatalog = [
     price: 0,
     category: CosmeticCategory.theme,
     rarity: CosmeticRarity.basic,
+  ),
+  WalletProduct(
+    id: 'theme_shared_table_prism',
+    name: 'Prisma de Equipos',
+    description: 'Tablero completo con neón, color y rutas de celebración',
+    price: 250,
+    category: CosmeticCategory.theme,
+    rarity: CosmeticRarity.rare,
+    sharedTableExclusive: true,
+  ),
+  WalletProduct(
+    id: 'theme_shared_table_aurora',
+    name: 'Aurora de Equipos',
+    description: 'Tablero completo con luces polares y brillo de equipo',
+    price: 500,
+    category: CosmeticCategory.theme,
+    rarity: CosmeticRarity.epic,
+    sharedTableExclusive: true,
   ),
   WalletProduct(
     id: 'dice_default',
@@ -534,18 +554,18 @@ class WalletController extends ChangeNotifier {
     required String transactionId,
     required int amount,
   }) => _enqueueMutation<ApplyCreditResult>(() async {
-        await _ensureInitialized();
-        if (amount <= 0 || !_isSafeCreditId(transactionId)) {
-          return ApplyCreditResult.invalid;
-        }
-        if (!_appliedCreditIds.add(transactionId)) {
-          return ApplyCreditResult.alreadyApplied;
-        }
-        _balance += amount;
-        await _persistCreditEnvelope();
-        notifyListeners();
-        return ApplyCreditResult.applied;
-      });
+    await _ensureInitialized();
+    if (amount <= 0 || !_isSafeCreditId(transactionId)) {
+      return ApplyCreditResult.invalid;
+    }
+    if (!_appliedCreditIds.add(transactionId)) {
+      return ApplyCreditResult.alreadyApplied;
+    }
+    _balance += amount;
+    await _persistCreditEnvelope();
+    notifyListeners();
+    return ApplyCreditResult.applied;
+  });
 
   Future<PurchaseResult> purchase(String productId) =>
       _enqueueMutation<PurchaseResult>(() async {

@@ -198,6 +198,50 @@ void main() {
 
     expect(progression.dailyMissions.cellsMoved, 2);
   });
+
+  testWidgets('Pass & Play counts turns from every human seat', (tester) async {
+    await tester.binding.setSurfaceSize(const Size(1024, 768));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+
+    final engine = GameEngine(humanPlayerColors: PlayerColor.values.toSet());
+    final wallet = await WalletController.create();
+    final progression = await PlayerProgressionController.create();
+    addTearDown(engine.dispose);
+    addTearDown(wallet.dispose);
+    addTearDown(progression.dispose);
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: GameScreen(
+          opponent: 'PASS & PLAY',
+          gameEngine: engine,
+          passAndPlay: true,
+          wallet: wallet,
+          progression: progression,
+        ),
+      ),
+    );
+    await tester.pump();
+
+    for (
+      var turn = 0;
+      turn < progression.policy.sharedTableTurnsTarget;
+      turn++
+    ) {
+      engine.endTurn();
+      await tester.pump();
+    }
+    await tester.pump(const Duration(milliseconds: 160));
+
+    expect(
+      progression.sharedTableMissions.turnsPlayed,
+      progression.policy.sharedTableTurnsTarget,
+    );
+    expect(progression.sharedTableMissions.turnRewardClaimed, isTrue);
+    expect(wallet.balance, 250 + progression.policy.sharedTableTurnsCoins);
+
+    await tester.pumpWidget(const SizedBox.shrink());
+  });
 }
 
 GameEngine _oneMoveFromFirstPlace() {

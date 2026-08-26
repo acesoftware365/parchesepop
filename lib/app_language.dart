@@ -126,6 +126,13 @@ String _translateDynamic(String source) {
       (match) => 'Joining room ${match.group(1)}…',
     ),
     (
+      RegExp(
+        r'^Sala de espera · (\d+) s\nEsperando jugadores para abrir la misma sala…$',
+      ),
+      (match) =>
+          'Room lobby · ${match.group(1)} s\nWaiting for players to open the same room…',
+    ),
+    (
       RegExp(r'^(.+) saldrá de la sala\.$'),
       (match) => '${match.group(1)} will be removed from the room.',
     ),
@@ -712,7 +719,9 @@ const _english = <String, String>{
   // Version 2: Quick Pop, contextual tutorial, and progression.
   'Partida rápida online': 'Quick casual online play',
   'Amigos online · crea una sala': 'Play online with friends · create a room',
+  'Hasta 4 en un dispositivo': 'Up to 4 on one device',
   'Pasa el teléfono · 2–4 jugadores': 'Pass the phone · 2–4 players',
+  '1–4 JUGADORES': '1–4 PLAYERS',
   'MODOS DE PARTIDA': 'GAME MODES',
   'Elige si quieres jugar online o localmente y sigue los pasos de tu modo.':
       'Choose online or local play and follow the steps for your mode.',
@@ -740,7 +749,16 @@ const _english = <String, String>{
       'Each person rolls, moves, and finishes their turn.',
   'Pasa el teléfono al siguiente jugador.':
       'Pass the phone to the next player.',
+  'Mesa compartida para hasta 4 personas en una tablet, con nombres, CPU opcional y un solo tablero para todos.':
+      'A shared table for up to 4 people on one tablet, with names, optional CPU, and one board for everyone.',
+  'Elige de 1 a 4 personas, escribe sus nombres y escoge Tradicional o Caos.':
+      'Choose 1 to 4 people, enter their names, and pick Traditional or Chaos.',
+  'Los puestos vacíos los controla el CPU; cada color muestra quién está jugando.':
+      'CPU controls empty seats; each color shows who is playing.',
+  'Toca JUGAR AQUÍ en una base CPU para que otra persona entre sin reiniciar la partida.':
+      'Tap PLAY HERE on a CPU base so another person can join without restarting the match.',
   'Sala online': 'Online room',
+  'Sala compartida': 'Shared room',
   '2–4 JUGADORES': '2–4 PLAYERS',
   'Crea una sala pública o privada y elige Tradicional o Caos.':
       'Create a public or private room and choose Traditional or Chaos.',
@@ -792,6 +810,28 @@ const _english = <String, String>{
       'Pass & Play: share one phone and pass it after each turn for a local match.',
   'Pasa el teléfono': 'Pass the phone',
   'LOCAL · 2–4': 'LOCAL · 2–4',
+  'LOCAL · 1–4': 'LOCAL · 1–4',
+  'Mesa compartida': 'Shared table',
+  'Jueguen hasta 4 personas en una tablet, sin crear una sala ni usar internet.':
+      'Play with up to 4 people on one tablet, without creating a room or using the internet.',
+  'Antes de empezar, elige cuántas personas juegan, escribe sus nombres y escoge Tradicional o Caos.':
+      'Before starting, choose how many people play, enter their names, and pick Traditional or Chaos.',
+  'Los asientos que no tengan persona empiezan con CPU para que una partida de 1 jugador también funcione.':
+      'Seats without a person start as CPU so a one-player match also works.',
+  'Turnos y asientos': 'Turns and seats',
+  'Cada base muestra el nombre y color de quien juega; los dados aparecen en el panel del turno activo.':
+      'Each base shows the player name and color; dice appear in the active turn panel.',
+  'Si una persona llega tarde, toca JUGAR AQUÍ en la base CPU, escribe su nombre y toma esa posición sin perder el avance.':
+      'If someone arrives late, tap PLAY HERE on the CPU base, enter their name, and take that seat without losing progress.',
+  'Misiones y victoria': 'Missions and victory',
+  'Las misiones de Mesa compartida cuentan turnos humanos y partidas locales terminadas; los turnos CPU no cuentan.':
+      'Shared table missions count human turns and completed local matches; CPU turns do not count.',
+  'Hasta 4 en una tablet': 'Up to 4 on one tablet',
+  '1–4 jugadores': '1–4 players',
+  'Tablet compartida': 'Shared tablet',
+  'Nombres y CPU': 'Names and CPU',
+  'JUGAR AQUÍ': 'PLAY HERE',
+  'Tradicional o Caos': 'Traditional or Chaos',
   'Juega con tus amigos en el mismo dispositivo, sin crear una sala ni usar internet.':
       'Play with friends on the same device, without creating a room or using the internet.',
   'Elige Tradicional o Caos y confirma cuántas personas van a jugar.':
@@ -957,9 +997,9 @@ const _english = <String, String>{
   'ONLINE · LISTO': 'ONLINE · READY',
   'Busca un rival y empieza en segundos':
       'Find an opponent and start in seconds',
-  'Buscaremos otro jugador durante 30 segundos. Si no aparece nadie, podrás comenzar la partida contra el CPU.':
-      'We will search for another player for 30 seconds. If no one appears, you can start the match against the CPU.',
-  'JUGAR ONLINE · BUSCAR 30 S': 'PLAY ONLINE · SEARCH 30 S',
+  'Buscaremos jugadores durante un máximo de 10 segundos. Si faltan puestos, el CPU los completa automáticamente.':
+      'We will search for players for up to 10 seconds. CPU fills any open seats automatically.',
+  'JUGAR ONLINE · BUSCAR 10 S': 'PLAY ONLINE · SEARCH 10 S',
   'JUGAR AHORA CONTRA CPU': 'PLAY NOW AGAINST CPU',
   'VOLVER': 'BACK',
   'El servidor no autorizó esta partida. Actualiza el juego e inténtalo otra vez.':
@@ -1024,6 +1064,11 @@ const _english = <String, String>{
   'Mueve 20 casillas': 'Move 20 spaces',
   'Saca una ficha': 'Release a piece',
   'Termina una partida': 'Finish one match',
+  'MESA COMPARTIDA': 'SHARED TABLE',
+  'Misiones locales para jugar hasta 4 en un dispositivo.':
+      'Local missions for up to 4 players on one device.',
+  'Tomen 8 turnos': 'Take 8 turns',
+  'Termina una partida local': 'Finish one local match',
   'OBJETIVO SEMANAL': 'WEEKLY GOAL',
   'Completa partidas; ganar no es obligatorio.':
       'Complete matches; winning is not required.',

@@ -20,6 +20,7 @@ final class FirebaseOnlineRealtimeStore
     implements
         OnlineRealtimeStore,
         OnlineRealtimeQueryStore,
+        OnlineRealtimeTailQueryStore,
         OnlineRealtimeExactReadPolicy,
         OnlineRealtimeStoreLifecycle {
   FirebaseOnlineRealtimeStore({
@@ -215,6 +216,52 @@ final class FirebaseOnlineRealtimeStore
     }
   }
 
+  @override
+  Future<Object?> readOrderedChildrenTail(
+    String path, {
+    required String orderByChild,
+    required num startAt,
+    required int limitToLast,
+  }) async {
+    // Historical Quick Pop tickets sort first because their activeUntil is
+    // zero. A tail query keeps the newest active cohort visible even when the
+    // queue contains more than one page of old records.
+    if (OnlineConnectionSafety.enabled && _isQuickPopQueuePath(path)) {
+      try {
+        return await _readOrderedChildrenTailViaRest(
+          path,
+          orderByChild: orderByChild,
+          startAt: startAt,
+          limitToLast: limitToLast,
+        );
+      } catch (error) {
+        debugPrint(
+          'Firebase queue REST tail read failed at $path; trying native: $error',
+        );
+      }
+    }
+    final query = _reference(
+      path,
+    ).orderByChild(orderByChild).startAt(startAt).limitToLast(limitToLast);
+    try {
+      return onlineValue(
+        (await query.get().timeout(
+          OnlineConnectionSafety.queueReadTimeout,
+        )).value,
+      );
+    } catch (error) {
+      if (!OnlineConnectionSafety.enabled || !_isQuickPopQueuePath(path)) {
+        rethrow;
+      }
+      return _readOrderedChildrenTailViaRest(
+        path,
+        orderByChild: orderByChild,
+        startAt: startAt,
+        limitToLast: limitToLast,
+      );
+    }
+  }
+
   bool _isQuickPopQueuePath(String path) {
     final normalized = path.trim().replaceFirst(RegExp(r'^/+'), '');
     return OnlineConnectionSafety.protectsPath(path) &&
@@ -264,6 +311,57 @@ final class FirebaseOnlineRealtimeStore
       if (response.statusCode < 200 || response.statusCode >= 300) {
         throw StateError(
           'Firebase queue REST fallback failed (${response.statusCode}): '
+          '${decoded ?? 'unknown error'}',
+        );
+      }
+      return onlineValue(decoded);
+    } finally {
+      client.close(force: true);
+    }
+  }
+
+  Future<Object?> _readOrderedChildrenTailViaRest(
+    String path, {
+    required String orderByChild,
+    required num startAt,
+    required int limitToLast,
+  }) async {
+    final user = _auth?.currentUser;
+    final token = await user?.getIdToken().timeout(
+      OnlineConnectionSafety.authTokenTimeout,
+    );
+    if (token is! String || token.isEmpty) {
+      throw StateError('Firebase Auth has no ID token for queue fallback.');
+    }
+    final cleanPath = path.trim().isEmpty ? '' : '/${path.trim()}';
+    final uri = Uri.parse('$parchesePopRealtimeDatabaseUrl$cleanPath.json')
+        .replace(
+          queryParameters: <String, String>{
+            'auth': token,
+            'orderBy': jsonEncode(orderByChild),
+            'startAt': '$startAt',
+            'limitToLast': '$limitToLast',
+          },
+        );
+    final client = HttpClient();
+    try {
+      final request = await client
+          .getUrl(uri)
+          .timeout(OnlineConnectionSafety.queueReadTimeout);
+      final response = await request.close().timeout(
+        OnlineConnectionSafety.queueReadTimeout,
+      );
+      final body = await utf8.decoder
+          .bind(response)
+          .join()
+          .timeout(OnlineConnectionSafety.queueReadTimeout);
+      Object? decoded;
+      if (body.trim().isNotEmpty) {
+        decoded = jsonDecode(body);
+      }
+      if (response.statusCode < 200 || response.statusCode >= 300) {
+        throw StateError(
+          'Firebase queue REST tail fallback failed (${response.statusCode}): '
           '${decoded ?? 'unknown error'}',
         );
       }
@@ -538,6 +636,7 @@ final class FirebaseRestRealtimeStore
     implements
         OnlineRealtimeStore,
         OnlineRealtimeQueryStore,
+        OnlineRealtimeTailQueryStore,
         OnlineRealtimeExactReadPolicy,
         OnlineRealtimeStoreLifecycle {
   FirebaseRestRealtimeStore({
@@ -645,6 +744,25 @@ final class FirebaseRestRealtimeStore
         path == 'onlineV2/publicRooms') {
       return read(path);
     }
+    _check(response, path);
+    return onlineValue(response.body);
+  }
+
+  @override
+  Future<Object?> readOrderedChildrenTail(
+    String path, {
+    required String orderByChild,
+    required num startAt,
+    required int limitToLast,
+  }) async {
+    final response = await _request(
+      'GET',
+      _uri(path, <String, String>{
+        'orderBy': jsonEncode(orderByChild),
+        'startAt': '$startAt',
+        'limitToLast': '$limitToLast',
+      }),
+    );
     _check(response, path);
     return onlineValue(response.body);
   }

@@ -10,7 +10,7 @@ void main() {
   test('catalog has valid unique IDs and preserves legacy contracts', () {
     final ids = walletCatalog.map((product) => product.id).toList();
     expect(ids.toSet(), hasLength(ids.length));
-    expect(ids, hasLength(37));
+    expect(ids, hasLength(39));
     for (final product in walletCatalog) {
       expect(product.id, isNotEmpty);
       expect(product.name, isNotEmpty);
@@ -69,6 +69,18 @@ void main() {
         0,
         CosmeticCategory.theme,
         CosmeticRarity.basic,
+      ),
+      'theme_shared_table_prism': (
+        'Prisma de Equipos',
+        250,
+        CosmeticCategory.theme,
+        CosmeticRarity.rare,
+      ),
+      'theme_shared_table_aurora': (
+        'Aurora de Equipos',
+        500,
+        CosmeticCategory.theme,
+        CosmeticRarity.epic,
       ),
       'tokens_default': (
         'Fichas Clásicas',
@@ -224,6 +236,8 @@ void main() {
   test('theme catalog names describe visibly different destinations', () {
     const expectedThemeNames = {
       'theme_default': 'Tablero Clásico',
+      'theme_shared_table_prism': 'Prisma de Equipos',
+      'theme_shared_table_aurora': 'Aurora de Equipos',
       'theme_neon_rush': 'Ciudad Futurista',
       'theme_golden_night': 'Templo de las Pirámides',
       'theme_tropical_splash': 'Selva Viva',
@@ -250,7 +264,7 @@ void main() {
     );
   });
 
-  test('shop exposes only Classic Board and four Cosmic Realms themes', () {
+  test('shop exposes shared-table themes alongside Classic and Cosmic', () {
     final visibleThemes = shopCatalog
         .where((product) => product.category == CosmeticCategory.theme)
         .toList(growable: false);
@@ -259,6 +273,8 @@ void main() {
       visibleThemes.map((product) => product.id),
       orderedEquals(const [
         'theme_default',
+        'theme_shared_table_prism',
+        'theme_shared_table_aurora',
         'theme_cosmic_realms_red',
         'theme_cosmic_realms_yellow',
         'theme_cosmic_realms_blue',
@@ -266,11 +282,15 @@ void main() {
       ]),
     );
     expect(visibleThemes.first.price, 0);
-    for (final theme in visibleThemes.skip(1)) {
+    expect(visibleThemes[1].price, 250);
+    expect(visibleThemes[1].rarity, CosmeticRarity.rare);
+    expect(visibleThemes[2].price, 500);
+    expect(visibleThemes[2].rarity, CosmeticRarity.epic);
+    for (final theme in visibleThemes.skip(3)) {
       expect(theme.price, 1800);
       expect(theme.rarity, CosmeticRarity.legendary);
     }
-    expect(shopCatalog, hasLength(32));
+    expect(shopCatalog, hasLength(34));
   });
 
   test('each category has one free basic item and it leads that category', () {

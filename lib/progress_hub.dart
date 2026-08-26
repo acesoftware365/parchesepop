@@ -39,6 +39,7 @@ class ProgressHubScreen extends StatelessWidget {
         animation: Listenable.merge([progression, wallet]),
         builder: (context, _) {
           final daily = progression.dailyMissions;
+          final sharedTable = progression.sharedTableMissions;
           final weekly = progression.weeklyMission;
           return ListView(
             key: const ValueKey('progress-hub-list'),
@@ -80,6 +81,35 @@ class ProgressHubScreen extends StatelessWidget {
                 target: 1,
                 reward: progression.policy.firstMatchOfDayCoins,
                 claimed: daily.finishRewardClaimed,
+              ),
+              const SizedBox(height: 20),
+              const _SectionTitle(
+                icon: Icons.groups_rounded,
+                title: 'MESA COMPARTIDA',
+                subtitle:
+                    'Misiones locales para jugar hasta 4 en un dispositivo.',
+              ),
+              const SizedBox(height: 10),
+              _MissionCard(
+                key: const ValueKey('mission-shared-table-turns'),
+                icon: Icons.swap_horiz_rounded,
+                title: 'Tomen 8 turnos',
+                value: sharedTable.turnsPlayed,
+                target: sharedTable.turnTarget,
+                reward: progression.policy.sharedTableTurnsCoins,
+                claimed: sharedTable.turnRewardClaimed,
+                accent: _green,
+              ),
+              const SizedBox(height: 10),
+              _MissionCard(
+                key: const ValueKey('mission-shared-table-match'),
+                icon: Icons.table_restaurant_rounded,
+                title: 'Termina una partida local',
+                value: sharedTable.matchCompleted ? 1 : 0,
+                target: 1,
+                reward: progression.policy.sharedTableMatchCoins,
+                claimed: sharedTable.matchRewardClaimed,
+                accent: _green,
               ),
               const SizedBox(height: 20),
               const _SectionTitle(

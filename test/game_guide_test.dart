@@ -52,8 +52,23 @@ void main() {
       findsOneWidget,
     );
     expect(find.byType(Dialog), findsNothing);
-    expect(find.text('Pasa el teléfono'), findsWidgets);
-    expect(find.text('Un turno a la vez'), findsOneWidget);
+    expect(find.text('Mesa compartida'), findsOneWidget);
+    expect(find.text('Turnos y asientos'), findsOneWidget);
+    await tester.scrollUntilVisible(
+      find.textContaining('Toca JUGAR AQUÍ en una base CPU'),
+      180,
+      scrollable: find.byType(Scrollable).first,
+    );
+    expect(
+      find.textContaining('Toca JUGAR AQUÍ en una base CPU'),
+      findsOneWidget,
+    );
+    await tester.scrollUntilVisible(
+      find.text('Misiones y victoria'),
+      180,
+      scrollable: find.byType(Scrollable).first,
+    );
+    expect(find.text('Misiones y victoria'), findsOneWidget);
 
     final playModes = find.byKey(const ValueKey('guide-play-modes'));
     for (var index = 0; index < 30 && playModes.evaluate().isEmpty; index++) {
@@ -74,7 +89,10 @@ void main() {
     expect(find.textContaining('Partida casual online'), findsOneWidget);
     expect(find.text('Crea una sala o entra con un código.'), findsOneWidget);
     expect(find.textContaining('inteligencia artificial'), findsOneWidget);
-    expect(find.textContaining('pasando el dispositivo'), findsOneWidget);
+    expect(
+      find.textContaining('Mesa compartida para hasta 4 personas'),
+      findsOneWidget,
+    );
     expect(tester.takeException(), isNull);
 
     await tester.pumpWidget(const SizedBox.shrink());

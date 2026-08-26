@@ -1,4 +1,5 @@
 import 'package:flutter_test/flutter_test.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import 'package:parchesepop/online_lobby.dart';
 import 'package:parchesepop/online_match.dart';
 import 'package:parchesepop/online_quick_pop.dart';
@@ -69,6 +70,75 @@ final class _QueueQueryDeniedAfterDeadlineStore
   }
 }
 
+/// Records the lower bound used by the production-style queue query while
+/// delegating storage to the in-memory Firebase substitute.  A group search
+/// must query from zero: the security rule permits that bound and every client
+/// needs the same cohort, including players who joined just before it.
+final class _RecordingGroupQueryStore
+    implements OnlineRealtimeStore, OnlineRealtimeQueryStore {
+  _RecordingGroupQueryStore(this.delegate);
+
+  final InMemoryOnlineRealtimeStore delegate;
+  final List<num> startAtValues = <num>[];
+
+  @override
+  Future<Object?> read(String path) => delegate.read(path);
+
+  @override
+  Stream<Object?> watch(String path) => delegate.watch(path);
+
+  @override
+  Future<void> set(String path, Object? value) => delegate.set(path, value);
+
+  @override
+  Future<void> update(String path, Map<String, Object?> values) =>
+      delegate.update(path, values);
+
+  @override
+  Future<OnlineStoreTransactionResult> transaction(
+    String path,
+    OnlineStoreTransactionUpdater updater,
+  ) =>
+      delegate.transaction(path, updater);
+
+  @override
+  Future<void> setOnDisconnect(String path, Object? value) =>
+      delegate.setOnDisconnect(path, value);
+
+  @override
+  Future<void> cancelOnDisconnect(String path) =>
+      delegate.cancelOnDisconnect(path);
+
+  @override
+  Future<int> serverNowMs() => delegate.serverNowMs();
+
+  @override
+  Future<Object?> readOrderedChildren(
+    String path, {
+    required String orderByChild,
+    required num startAt,
+    required int limitToFirst,
+  }) async {
+    startAtValues.add(startAt);
+    final children = onlineMap(await delegate.read(path));
+    final ordered =
+        children.entries
+            .where((entry) {
+              final value = onlineMap(entry.value)[orderByChild];
+              return value is num && value >= startAt;
+            })
+            .toList(growable: false)
+          ..sort((left, right) {
+            final leftValue = onlineMap(left.value)[orderByChild] as num;
+            final rightValue = onlineMap(right.value)[orderByChild] as num;
+            return leftValue.compareTo(rightValue);
+          });
+    return <String, Object?>{
+      for (final entry in ordered.take(limitToFirst)) entry.key: entry.value,
+    };
+  }
+}
+
 void main() {
   test(
     'Quick Pop group admits four humans before the shared deadline',
@@ -117,6 +187,66 @@ void main() {
     },
   );
 
+  test(
+    'all group clients use one queue lower bound and converge on one room',
+    () async {
+      final memory = InMemoryOnlineRealtimeStore(initialNowMs: 100_000);
+      final store = _RecordingGroupQueryStore(memory);
+      final clients = [
+        for (final uid in const ['a', 'b', 'c', 'd']) _groupClient(store, uid),
+      ];
+      final tickets = <QuickPopQueueTicket>[];
+      for (final client in clients) {
+        tickets.add(
+          await client.enqueueQuickPop(
+            mode: 'traditional',
+            matchFormat: 'quickPop',
+          ),
+        );
+        memory.setNowMs(memory.nowMs + 250);
+      }
+
+      final resolutions = <QuickPopResolution>[];
+      // The first polling pass must be enough to derive a common four-player
+      // cohort even though each ticket was created at a different instant.
+      // Depending on which client wins the root transaction, the resolution
+      // may already be complete when the next client reads the root.
+      for (var index = 0; index < clients.length; index++) {
+        final resolution = await clients[index].resolveQuickPop(
+          tickets[index],
+          waitForGroupWindow: true,
+        );
+        if (resolution != null) resolutions.add(resolution);
+      }
+      memory.setNowMs(tickets.first.deadlineAtMs);
+      for (var index = 0; index < clients.length; index++) {
+        if (resolutions.any(
+          (resolution) => resolution.ticketId == tickets[index].ticketId,
+        )) {
+          continue;
+        }
+        final resolution = await clients[index].resolveQuickPop(
+          tickets[index],
+          waitForGroupWindow: true,
+        );
+        expect(resolution?.kind, QuickPopResolutionKind.human);
+        resolutions.add(resolution!);
+      }
+
+      expect(resolutions.map((item) => item.roomId).toSet(), hasLength(1));
+      expect(
+        resolutions.every(
+          (item) =>
+              item.participantUids.length == 4 &&
+              item.participantUids.toSet().containsAll(const ['a', 'b', 'c', 'd']),
+        ),
+        isTrue,
+      );
+      expect(store.startAtValues, isNotEmpty);
+      expect(store.startAtValues.every((value) => value == 0), isTrue);
+    },
+  );
+
   test('Quick Pop debug sink exposes the shared group lifecycle', () async {
     final store = InMemoryOnlineRealtimeStore(initialNowMs: 10_000);
     final steps = <String>[];
@@ -161,6 +291,154 @@ void main() {
       ]),
     );
   });
+
+  test(
+    'Quick Pop group resolves when the deterministic leader stops polling',
+    () async {
+      final store = InMemoryOnlineRealtimeStore(initialNowMs: 15_000);
+      final leader = _groupClient(store, 'leader');
+      final follower = _groupClient(store, 'follower');
+      final leaderTicket = await leader.enqueueQuickPop(
+        mode: 'traditional',
+        matchFormat: 'quickPop',
+      );
+      final followerTicket = await follower.enqueueQuickPop(
+        mode: 'traditional',
+        matchFormat: 'quickPop',
+      );
+
+      // The leader creates the deterministic group and then disappears. The
+      // follower must still be able to publish the single shared resolution at
+      // the deadline instead of falling back to a separate CPU room.
+      expect(
+        await leader.resolveQuickPop(leaderTicket, waitForGroupWindow: true),
+        isNull,
+      );
+      expect(
+        await follower.resolveQuickPop(
+          followerTicket,
+          waitForGroupWindow: true,
+        ),
+        isNull,
+      );
+      store.setNowMs(followerTicket.deadlineAtMs);
+
+      final resolution = await follower.resolveQuickPop(
+        followerTicket,
+        waitForGroupWindow: true,
+      );
+      expect(resolution?.kind, QuickPopResolutionKind.human);
+      expect(resolution?.participantUids.toSet(), {'leader', 'follower'});
+
+      // A late leader resume reads the same committed group resolution rather
+      // than creating a competing CPU fallback.
+      final resumed = await leader.resolveQuickPop(
+        leaderTicket,
+        waitForGroupWindow: true,
+      );
+      expect(resumed?.kind, QuickPopResolutionKind.human);
+      expect(resumed?.roomId, resolution?.roomId);
+    },
+  );
+
+  test(
+    'Quick Pop resumes a group from the durable locator at the deadline',
+    () async {
+      final store = InMemoryOnlineRealtimeStore(initialNowMs: 18_000);
+      final leader = _groupClient(store, 'leader');
+      final follower = _groupClient(store, 'follower');
+      final leaderTicket = await leader.enqueueQuickPop(
+        mode: 'traditional',
+        matchFormat: 'quickPop',
+      );
+      final followerTicket = await follower.enqueueQuickPop(
+        mode: 'traditional',
+        matchFormat: 'quickPop',
+      );
+
+      // Both clients see the cohort and commit the shared root, but neither
+      // needs to finish the resolution before the app is backgrounded.
+      expect(
+        await leader.resolveQuickPop(leaderTicket, waitForGroupWindow: true),
+        isNull,
+      );
+      expect(
+        await follower.resolveQuickPop(
+          followerTicket,
+          waitForGroupWindow: true,
+        ),
+        isNull,
+      );
+
+      // A new transport instance has an empty in-memory `_ownedQuickGroupIds`
+      // map, just like a client returning from Home. It must recover the
+      // group id from account resources before the expired queue query forces
+      // CPU fallback.
+      final resumedLeader = _groupClient(store, 'leader');
+      store.setNowMs(leaderTicket.deadlineAtMs);
+      final resolution = await resumedLeader.resolveQuickPop(
+        leaderTicket,
+        waitForGroupWindow: true,
+      );
+
+      expect(resolution?.kind, QuickPopResolutionKind.human);
+      expect(resolution?.groupId, isNotNull);
+      expect(resolution?.roomId, isNotNull);
+      expect(resolution?.participantUids.toSet(), {'leader', 'follower'});
+      expect(
+        onlineMap(
+          await store.read(
+            '$onlineTransportRoot/accountResources/leader/quickQueues/${leaderTicket.queueKey}',
+          ),
+        )['groupId'],
+        resolution?.groupId,
+      );
+    },
+  );
+
+  test(
+    'Quick Pop resumes from the local locator when server indexing is unavailable',
+    () async {
+      SharedPreferences.setMockInitialValues(<String, Object>{});
+      final store = InMemoryOnlineRealtimeStore(initialNowMs: 19_000);
+      final leader = _groupClient(store, 'local-leader');
+      final follower = _groupClient(store, 'local-follower');
+      final leaderTicket = await leader.enqueueQuickPop(
+        mode: 'traditional',
+        matchFormat: 'quickPop',
+      );
+      final followerTicket = await follower.enqueueQuickPop(
+        mode: 'traditional',
+        matchFormat: 'quickPop',
+      );
+
+      await leader.resolveQuickPop(leaderTicket, waitForGroupWindow: true);
+      await follower.resolveQuickPop(followerTicket, waitForGroupWindow: true);
+      final accountPath =
+          '$onlineTransportRoot/accountResources/local-leader/quickQueues/${leaderTicket.queueKey}';
+      // Simulate the production deployment that rejects the optional
+      // groupId/groupIndexedAt account-resource fields. The local cache must
+      // still carry the verified ticket -> group relationship across a new
+      // transport instance and prevent an unrelated CPU fallback.
+      await store.update(accountPath, <String, Object?>{
+        'groupId': null,
+        'groupIndexedAt': null,
+      });
+      final resumedLeader = _groupClient(store, 'local-leader');
+      store.setNowMs(leaderTicket.deadlineAtMs);
+      final resolution = await resumedLeader.resolveQuickPop(
+        leaderTicket,
+        waitForGroupWindow: true,
+      );
+
+      expect(resolution?.kind, QuickPopResolutionKind.human);
+      expect(resolution?.groupId, isNotNull);
+      expect(resolution?.participantUids.toSet(), {
+        'local-leader',
+        'local-follower',
+      });
+    },
+  );
 
   test(
     'Quick Pop ignores expired waiting tickets when deriving a group',
@@ -471,15 +749,23 @@ void main() {
           match.engine.dispose();
         }
       });
-      for (var index = 0; index < prepared.length; index++) {
-        expect(
+      final launchResults = <bool>[
+        for (var index = 0; index < prepared.length; index++)
           await clients[index].synchronizeQuickPopLaunch(
             ticket: tickets[index],
             resolution: resolutions[index],
           ),
-          isFalse,
-        );
-      }
+      ];
+      // Any verified member may commit the transition once all four launch
+      // markers exist; the first caller can therefore complete the barrier.
+      expect(launchResults, contains(isTrue));
+      // A stale presence snapshot must not invalidate the verified four-player
+      // launch barrier.  This mirrors the race seen when one client is still
+      // publishing its presence listener while all launchReady markers exist.
+      await store.set(
+        '$onlineTransportRoot/rooms/$roomId/presence/d/state',
+        LobbyPresence.disconnected.name,
+      );
       expect(
         await clients.first.synchronizeQuickPopLaunch(
           ticket: tickets.first,

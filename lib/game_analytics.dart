@@ -642,7 +642,14 @@ class CurrencyEvent implements GameAnalyticsEvent {
   }
 }
 
-enum MissionKind { move20Cells, releaseToken, finishOneMatch, finish7Matches }
+enum MissionKind {
+  move20Cells,
+  releaseToken,
+  finishOneMatch,
+  sharedTableTurns,
+  sharedTableMatch,
+  finish7Matches,
+}
 
 @immutable
 class MissionRewardEvent implements GameAnalyticsEvent {

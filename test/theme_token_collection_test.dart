@@ -133,7 +133,9 @@ void main() {
     expect(matchingTokenStyleIdByThemeId, _matchingThemeTokens);
     expect(
       matchingTokenStyleIdByThemeId.keys.toSet(),
-      themeVisualSpecs.keys.toSet(),
+      themeVisualSpecs.keys
+          .where((themeId) => !isSharedTableExclusiveThemeId(themeId))
+          .toSet(),
     );
     expect(
       matchingTokenStyleIdByThemeId.values.toSet(),

@@ -41,6 +41,13 @@
       "anonymous": true
     }
   },
+  "functions": {
+    "source": "functions",
+    "runtime": "nodejs20",
+    "predeploy": [
+      "npm --prefix \"$RESOURCE_DIR\" run build"
+    ]
+  },
   "database": {
     "rules": "database.rules.json"
   },

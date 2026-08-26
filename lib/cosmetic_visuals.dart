@@ -268,6 +268,41 @@ const defaultThemeVisualSpec = ThemeVisualSpec(
 
 const Map<String, ThemeVisualSpec> themeVisualSpecs = {
   'theme_default': defaultThemeVisualSpec,
+  // Full-board palettes reserved for the local shared-table experience.
+  // Team colours remain visible, while the frame, tracks and scene change as
+  // one shared board.
+  'theme_shared_table_prism': ThemeVisualSpec(
+    id: 'theme_shared_table_prism',
+    gameBackgroundColor: Color(0xFF17133B),
+    boardSurfaceColor: Color(0xFF24184D),
+    framePrimaryColor: Color(0xFF7957FF),
+    frameAccentColor: Color(0xFFFFD15C),
+    trackSurfaceColor: Color(0xFFEEE9FF),
+    outlineColor: Color(0xFF24164B),
+    stageColor: Color(0xFF151034),
+    sceneSkyColor: Color(0xFF33206C),
+    sceneGroundColor: Color(0xFF100B2B),
+    scenePrimaryColor: Color(0xFFFF5BA7),
+    sceneSecondaryColor: Color(0xFF4DE2FF),
+    sceneGlowColor: Color(0xFFFFED86),
+    motif: ThemeMotif.retro,
+  ),
+  'theme_shared_table_aurora': ThemeVisualSpec(
+    id: 'theme_shared_table_aurora',
+    gameBackgroundColor: Color(0xFF061A2D),
+    boardSurfaceColor: Color(0xFF0D2C43),
+    framePrimaryColor: Color(0xFF28D6BD),
+    frameAccentColor: Color(0xFFA98BFF),
+    trackSurfaceColor: Color(0xFFE8FAF7),
+    outlineColor: Color(0xFF0B2B42),
+    stageColor: Color(0xFF051729),
+    sceneSkyColor: Color(0xFF0B3150),
+    sceneGroundColor: Color(0xFF04111F),
+    scenePrimaryColor: Color(0xFF38E7B5),
+    sceneSecondaryColor: Color(0xFF65B8FF),
+    sceneGlowColor: Color(0xFFD8FFF0),
+    motif: ThemeMotif.aurora,
+  ),
   'theme_neon_rush': ThemeVisualSpec(
     id: 'theme_neon_rush',
     gameBackgroundColor: Color(0xFF090E2C),
@@ -416,6 +451,8 @@ const Map<String, ThemeVisualSpec> themeVisualSpecs = {
 
 const Set<String> supportedThemeStyleIds = {
   'theme_default',
+  'theme_shared_table_prism',
+  'theme_shared_table_aurora',
   'theme_neon_rush',
   'theme_golden_night',
   'theme_tropical_splash',
@@ -426,6 +463,15 @@ const Set<String> supportedThemeStyleIds = {
   'theme_cosmic_realms_blue',
   'theme_cosmic_realms_green',
 };
+
+/// Themes made exclusively for the full Mesa Compartida board.
+const Set<String> sharedTableExclusiveThemeIds = {
+  'theme_shared_table_prism',
+  'theme_shared_table_aurora',
+};
+
+bool isSharedTableExclusiveThemeId(String? productId) =>
+    productId != null && sharedTableExclusiveThemeIds.contains(productId);
 
 ThemeVisualSpec themeVisualSpecFor(String? productId) =>
     themeVisualSpecs[productId] ?? defaultThemeVisualSpec;

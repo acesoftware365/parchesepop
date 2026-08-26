@@ -200,7 +200,10 @@ void main() {
   testWidgets('the move phase keeps the HUD and board stable when cancelled', (
     tester,
   ) async {
-    SharedPreferences.setMockInitialValues({});
+    SharedPreferences.setMockInitialValues({
+      settingsMoveCalloutsKey: true,
+      settingsMoveChoicePanelKey: true,
+    });
     _useViewport(tester, const Size(402, 707));
     final engine = GameEngine();
     final wallet = await WalletController.create();
@@ -386,7 +389,10 @@ void main() {
   testWidgets('START 5 keeps the large board for the remaining die', (
     tester,
   ) async {
-    SharedPreferences.setMockInitialValues({});
+    SharedPreferences.setMockInitialValues({
+      settingsMoveCalloutsKey: true,
+      settingsMoveChoicePanelKey: true,
+    });
     _useViewport(tester, const Size(402, 707));
     final engine = GameEngine(mode: GameMode.chaos);
     final wallet = await WalletController.create();
@@ -592,6 +598,10 @@ void main() {
   testWidgets('tapping a board callout executes that exact move', (
     tester,
   ) async {
+    SharedPreferences.setMockInitialValues({
+      settingsMoveCalloutsKey: true,
+      settingsMoveChoicePanelKey: true,
+    });
     _useViewport(tester, const Size(390, 844));
     final engine = GameEngine();
     final token = engine.currentPlayer.tokens.first..progress = 0;
@@ -1181,6 +1191,8 @@ void main() {
       SharedPreferences.setMockInitialValues({
         settingsRollGuideKey: true,
         settingsDiceHandKey: DiceHandPreference.right.name,
+        settingsMoveCalloutsKey: true,
+        settingsMoveChoicePanelKey: true,
       });
       _useViewport(tester, const Size(390, 844));
       final engine = GameEngine(mode: GameMode.traditional);

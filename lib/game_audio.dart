@@ -49,8 +49,10 @@ class _AudioplayersGameAudioPlayer implements GameAudioPlayerPort {
 ///
 /// Music transitions are serialized so rapid Android lifecycle changes cannot
 /// leave an old pause or resume command as the final player state. Short game
-/// effects deliberately request no Android audio focus, allowing them to mix
-/// with the soundtrack instead of permanently pausing it.
+/// effects request a short ducking focus on Android. Some Android devices
+/// silence a sonification player that requests no focus while the music player
+/// owns game focus; transient ducking keeps the soundtrack playing and makes
+/// each dice/move cue audible.
 class GameAudioController {
   GameAudioController({
     GameAudioPlayerPort? musicPlayer,
@@ -95,11 +97,15 @@ class GameAudioController {
         android: const AudioContextAndroid(
           contentType: AndroidContentType.sonification,
           usageType: AndroidUsageType.game,
-          audioFocus: AndroidAudioFocus.none,
+          audioFocus: AndroidAudioFocus.gainTransientMayDuck,
         ),
       ),
     );
     await _musicPlayer.setReleaseMode(ReleaseMode.loop);
+    // Keep the short-effect player allocated between turns. Recreating the
+    // native player after every dice/move sound can make the first cue late or
+    // silent on slower Android devices.
+    await _effectsPlayer.setReleaseMode(ReleaseMode.stop);
     final preferenceRevision = _musicPreferenceRevision;
     final storedMusicEnabled = await _preferenceReader('settings_music');
     if (preferenceRevision == _musicPreferenceRevision) {

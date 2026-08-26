@@ -1501,6 +1501,94 @@ test('Realtime Database rules enforce the online security contract', async (t) =
     );
   });
 
+  await t.test('host lease fences takeover writes and blocks the former host', async () => {
+    await environment.clearDatabase();
+    const now = Date.now();
+    const room = waitingRoom(now, { withGuest: true });
+    room.status = 'inGame';
+    room.matchFormat = 'quickTable';
+    const roomPath = 'onlineV2/rooms/room-1';
+    const matchPath = `${roomPath}/match`;
+    const leasePath = `${roomPath}/hostLease`;
+    await seed(roomPath, room);
+    await seed(matchPath, matchDocument(now));
+
+    const hostLease = {
+      uid: 'host',
+      epoch: 1,
+      acquiredAt: now,
+      expiresAt: now + 45000,
+      reason: 'initial',
+    };
+    await assertSucceeds(set(pathRef('host', leasePath), hostLease));
+
+    const guestLease = {
+      ...hostLease,
+      uid: 'guest',
+      epoch: 2,
+      reason: 'takeover',
+    };
+    await assertFails(set(pathRef('guest', leasePath), guestLease));
+
+    await assertSucceeds(
+      set(pathRef('host', `${roomPath}/presence/host`), {
+        ...room.presence.host,
+        state: 'disconnected',
+        changedAt: now + 1,
+      }),
+    );
+    // Presence is intentionally not enough to replace an unexpired lease.
+    // The live Firebase onDisconnect hook removes the lease when the owner
+    // really disappears; until that durable removal (or expiry), a second
+    // client must not create a competing authority during startup races.
+    await assertFails(set(pathRef('guest', leasePath), guestLease));
+    await assertSucceeds(set(pathRef('host', leasePath), null));
+    await assertSucceeds(set(pathRef('guest', leasePath), guestLease));
+
+    const takeoverMatch = {
+      ...matchDocument(now),
+      hostUid: 'guest',
+      hostLocalColor: 'green',
+      hostLease: guestLease,
+      authorityRevision: 1,
+      stateRevision: 1,
+      updatedAt: now + 2,
+    };
+    await assertSucceeds(set(pathRef('guest', matchPath), takeoverMatch));
+
+    await assertSucceeds(
+      set(pathRef('guest', `${roomPath}/commands/host/takeover-action`), {
+        kind: 'roll',
+        matchId: 'match-1',
+        participantId: 'host',
+        submittedById: 'guest',
+        actionId: 'takeover-action',
+        expectedRevision: 1,
+        submittedAt: now + 3,
+      }),
+    );
+    await assertFails(
+      set(pathRef('host', `${roomPath}/commands/host/stale-host-action`), {
+        kind: 'roll',
+        matchId: 'match-1',
+        participantId: 'host',
+        submittedById: 'host',
+        actionId: 'stale-host-action',
+        expectedRevision: 1,
+        submittedAt: now + 4,
+      }),
+    );
+
+    await assertFails(
+      set(pathRef('host', matchPath), {
+        ...matchDocument(now),
+        authorityRevision: 2,
+        stateRevision: 2,
+        updatedAt: now + 5,
+      }),
+    );
+  });
+
   await t.test('an in-game host cannot delete the room or another player shared data', async () => {
     await environment.clearDatabase();
     const now = Date.now();
@@ -1815,6 +1903,193 @@ test('Realtime Database rules enforce the online security contract', async (t) =
       set(
         pathRef('guest', 'onlineV2/rooms/room-1/openingRollRequests/guest'),
         { uid: 'guest', round: 2, requestedAt: now + 3 },
+      ),
+    );
+  });
+
+  await t.test('a four-player Quick Pop group can publish launch readiness and enter the game', async () => {
+    await environment.clearDatabase();
+    const now = Date.now();
+    const queueKey = 'traditional_quickPop_v2';
+    const groupId = 'group-four-player';
+    const roomId = 'group-room';
+    const players = [
+      ['host', 'Host', 'red'],
+      ['blue-player', 'Blue Player', 'blue'],
+      ['yellow-player', 'Yellow Player', 'yellow'],
+      ['green-player', 'Green Player', 'green'],
+    ];
+    const tickets = Object.fromEntries(
+      players.map(([uid, displayName]) => [uid, {
+        ticketId: `ticket-${uid}`,
+        uid,
+        displayName,
+        queueKey,
+        joinedAt: now,
+        deadlineAt: now + 30000,
+        activeUntil: now + 30000,
+        state: 'waiting',
+      }]),
+    );
+    const groupMembers = Object.fromEntries(
+      players.map(([uid, displayName]) => [uid, {
+        uid,
+        ticketId: `ticket-${uid}`,
+        displayName,
+        joinedAt: now,
+        deadlineAt: now + 30000,
+      }]),
+    );
+    const group = {
+      groupId,
+      queueKey,
+      leaderUid: 'host',
+      createdAt: now,
+      members: groupMembers,
+      resolution: {
+        kind: 'human',
+        roomId,
+        resolvedAt: now + 1,
+        memberUids: Object.fromEntries(players.map(([uid]) => [uid, true])),
+      },
+    };
+    const roomMembers = Object.fromEntries(
+      players.map(([uid, displayName, seat]) => [uid, {
+        uid,
+        displayName,
+        seat,
+        ready: true,
+        joinedAt: now,
+      }]),
+    );
+    const room = {
+      id: roomId,
+      code: 'GRP234',
+      hostUid: 'host',
+      visibility: 'private',
+      status: 'starting',
+      mode: 'traditional',
+      matchFormat: 'quickPop',
+      members: roomMembers,
+      presence: Object.fromEntries(
+        players.map(([uid]) => [uid, presence(uid, now)]),
+      ),
+      revision: 0,
+      createdAt: now,
+      updatedAt: now,
+      quickPopLaunch: {
+        queueKey,
+        claimId: groupId,
+        groupId,
+        memberUids: Object.fromEntries(players.map(([uid]) => [uid, true])),
+        members: groupMembers,
+        sharedDeadlineAt: now + 30000,
+      },
+      match: {
+        schemaVersion: 1,
+        authorityModel: 'activeHostV1',
+        roomId,
+        matchId: 'group-match',
+        hostUid: 'host',
+        hostLocalColor: 'red',
+        authorityRevision: 0,
+        stateRevision: 0,
+        checkpoint: { phase: 'playing' },
+        authorityCheckpoint: { revision: 0 },
+        createdAt: now,
+        updatedAt: now,
+      },
+    };
+
+    await seed(`onlineV2/quickQueues/${queueKey}`, tickets);
+    await seed(`onlineV2/quickPopGroups/${queueKey}/${groupId}`, group);
+    await seed(`onlineV2/rooms/${roomId}`, room);
+
+    for (const [uid] of players) {
+      await assertSucceeds(
+        set(pathRef(uid, `onlineV2/quickPopGroups/${queueKey}/${groupId}/launchReady/${uid}`), {
+          uid,
+          ticketId: `ticket-${uid}`,
+          readyAt: now + 2,
+        }),
+      );
+    }
+
+    await assertSucceeds(
+      set(pathRef('host', `onlineV2/rooms/${roomId}/status`), 'inGame'),
+    );
+  });
+
+  await t.test('any verified Quick Pop group member can resolve when the leader is offline', async () => {
+    await environment.clearDatabase();
+    const now = Date.now();
+    const queueKey = 'traditional_quickPop_v2';
+    const groupId = 'group-leader-offline';
+    const players = [
+      ['host', 'Host'],
+      ['blue-player', 'Blue Player'],
+    ];
+    const tickets = Object.fromEntries(
+      players.map(([uid, displayName]) => [uid, {
+        ticketId: `ticket-${uid}`,
+        uid,
+        displayName,
+        queueKey,
+        joinedAt: now,
+        deadlineAt: now + 30000,
+        activeUntil: now + 30000,
+        state: 'waiting',
+      }]),
+    );
+    const members = Object.fromEntries(
+      players.map(([uid, displayName]) => [uid, {
+        uid,
+        ticketId: `ticket-${uid}`,
+        displayName,
+        joinedAt: now,
+        deadlineAt: now + 30000,
+      }]),
+    );
+    await seed(`onlineV2/quickQueues/${queueKey}`, tickets);
+    const group = {
+      groupId,
+      queueKey,
+      leaderUid: 'host',
+      createdAt: now,
+      members,
+    };
+    // The deterministic leader is intentionally offline in this case. A
+    // verified peer must be able to bootstrap the immutable group root; an
+    // outsider must not be able to manufacture one.
+    await assertFails(
+      set(
+        pathRef('outsider', `onlineV2/quickPopGroups/${queueKey}/${groupId}`),
+        group,
+      ),
+    );
+    await assertSucceeds(
+      set(
+        pathRef('blue-player', `onlineV2/quickPopGroups/${queueKey}/${groupId}`),
+        group,
+      ),
+    );
+
+    const resolution = {
+      kind: 'human',
+      roomId: 'leader-offline-room',
+      resolvedAt: now + 30000,
+      memberUids: { host: true, 'blue-player': true },
+    };
+    await assertFails(
+      set(
+        pathRef('outsider', `onlineV2/quickPopGroups/${queueKey}/${groupId}/resolution`),
+        resolution,
+      ),
+    );
+    await assertSucceeds(
+      set(
+        pathRef('blue-player', `onlineV2/quickPopGroups/${queueKey}/${groupId}/resolution`),
+        resolution,
       ),
     );
   });

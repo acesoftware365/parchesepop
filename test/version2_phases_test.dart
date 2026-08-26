@@ -415,10 +415,28 @@ void main() {
     expect(find.byKey(const ValueKey('mission-release-token')), findsOneWidget);
     expect(find.byKey(const ValueKey('mission-finish-match')), findsOneWidget);
     expect(
-      find.byKey(const ValueKey('mission-weekly-matches')),
+      find.byKey(const ValueKey('mission-shared-table-turns')),
       findsOneWidget,
     );
     expect(find.text('LISTO'), findsNWidgets(3));
+    await tester.scrollUntilVisible(
+      find.byKey(const ValueKey('mission-shared-table-match')),
+      180,
+      scrollable: find.byType(Scrollable).first,
+    );
+    expect(
+      find.byKey(const ValueKey('mission-shared-table-match')),
+      findsOneWidget,
+    );
+    await tester.scrollUntilVisible(
+      find.byKey(const ValueKey('mission-weekly-matches')),
+      180,
+      scrollable: find.byType(Scrollable).first,
+    );
+    expect(
+      find.byKey(const ValueKey('mission-weekly-matches')),
+      findsOneWidget,
+    );
     expect(find.text('3 / 7'), findsOneWidget);
     expect(tester.takeException(), isNull);
     await _unmount(tester);

@@ -196,7 +196,7 @@ void main() {
           'home-mode-quick-pop': 'Partida rápida online',
           'home-mode-quick-table': 'Amigos online · crea una sala',
           'home-mode-cpu': 'Juega contra el CPU',
-          'home-mode-pass-and-play': 'Pasa el teléfono · 2–4 jugadores',
+          'home-mode-pass-and-play': 'Hasta 4 en un dispositivo',
         }.entries) {
           final card = find.byKey(ValueKey<String>(entry.key));
           final copy = find.descendant(
@@ -502,7 +502,7 @@ void main() {
     expect(find.text('CONTRA CPU'), findsOneWidget);
     expect(find.text('Juega contra el CPU'), findsOneWidget);
     expect(find.text('PASS & PLAY'), findsOneWidget);
-    expect(find.text('Pasa el teléfono · 2–4 jugadores'), findsOneWidget);
+    expect(find.text('Hasta 4 en un dispositivo'), findsOneWidget);
     expect(tester.takeException(), isNull);
   });
 

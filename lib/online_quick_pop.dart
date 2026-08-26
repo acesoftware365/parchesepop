@@ -29,9 +29,10 @@ final class OnlineQuickPopPreparedMatch {
 /// Turns a successful Quick Pop claim into the shared room consumed by the
 /// live game synchronizer.
 ///
-/// Both devices derive the same host, colors, room code, CPU identities and
-/// seed. Only the deterministic host creates the room; the other device waits
-/// for that exact room instead of creating a competing authority.
+/// All devices derive the same host, colors, room code, CPU identities and
+/// seed. Any verified group member may create the exact room once; the other
+/// devices wait for that room instead of creating a competing authority. This
+/// keeps a backgrounded first player from preventing the match from opening.
 final class OnlineQuickPopBootstrap {
   const OnlineQuickPopBootstrap._();
 
@@ -88,7 +89,11 @@ final class OnlineQuickPopBootstrap {
     final now = await transport.store.serverNowMs();
     final roomCode = _roomCodeFor(resolution.roomId);
 
-    if (localUid == hostUid) {
+    // Legacy pair claims retain their original deterministic-host behavior.
+    // Group claims are different: every member is verified by the group
+    // launch record, so any one of them may bootstrap the same deterministic
+    // room when the first member is backgrounded or suspended.
+    if (isGroup ? humanUids.contains(localUid) : localUid == hostUid) {
       final names = <String, String>{
         for (final uid in orderedHumanUids)
           uid: uid == localUid
@@ -190,6 +195,23 @@ final class OnlineQuickPopBootstrap {
         'The Quick Pop launch was abandoned during room preparation.',
       );
     }
+    // A group room has a deterministic seat host for presentation, but the
+    // first device to finish preparation must not be that specific device.
+    // Acquire the fenced match lease here so every client agrees on exactly
+    // one authority before constructing its synchronizer.  This also lets a
+    // follower bootstrap the match when the deterministic red-seat player is
+    // backgrounded during the launch window.
+    final bootstrapLease = isGroup
+        ? await transport.acquireMatchHostLease(
+            room.id,
+            reason: 'quickPop-bootstrap',
+          )
+        : null;
+    if (isGroup && bootstrapLease == null) {
+      throw const OnlineGameSyncException(
+        'Quick Pop could not acquire a shared match authority lease.',
+      );
+    }
     final localMember = room.members[localUid]!;
     final participants = <OnlineParticipant>[
       for (final member in room.members.values)
@@ -233,7 +255,7 @@ final class OnlineQuickPopBootstrap {
       roomId: room.id,
       session: session,
       engine: engine,
-      isHost: localUid == hostUid,
+      isHost: isGroup ? bootstrapLease!.uid == localUid : localUid == hostUid,
     );
     return OnlineQuickPopPreparedMatch(
       room: room,

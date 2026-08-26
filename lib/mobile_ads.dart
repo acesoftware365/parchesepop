@@ -15,6 +15,11 @@ const _iosBannerReleaseId = 'ca-app-pub-8588489900323524/2792895853';
 const _androidRewardedReleaseId = 'ca-app-pub-8588489900323524/9654506032';
 const _iosRewardedReleaseId = 'ca-app-pub-8588489900323524/2250538595';
 
+/// A native full-screen ad must acknowledge presentation almost immediately.
+/// Without this guard, an Android presentation failure can leave the Flutter
+/// result screen disabled behind a blank native activity.
+const _rewardedPresentationTimeout = Duration(seconds: 8);
+
 // Keeps store screenshots free of test-ad UI when running a dedicated capture
 // build. It is false in every normal debug and release build.
 const _disableAdsForStoreCapture = bool.fromEnvironment('STORE_SCREENSHOTS');
@@ -53,6 +58,7 @@ enum RewardedAdResult {
 
 abstract class AppAdsController extends ChangeNotifier {
   final Set<Object> _bannerSuppressors = <Object>{};
+  final Set<Object> _buildVersionSuppressors = <Object>{};
   bool _baseDisposed = false;
 
   bool get supported;
@@ -67,6 +73,11 @@ abstract class AppAdsController extends ChangeNotifier {
   /// for exceptional overlays that explicitly cannot share that space.
   bool get bannerAllowed => _bannerSuppressors.isEmpty;
 
+  /// Whether the small build strip above the persistent banner is visible.
+  /// A full-screen game mode may relocate the same information into its own
+  /// app bar without removing the ad banner itself.
+  bool get buildVersionAllowed => _buildVersionSuppressors.isEmpty;
+
   Object suppressBanner() {
     final token = Object();
     _bannerSuppressors.add(token);
@@ -76,6 +87,19 @@ abstract class AppAdsController extends ChangeNotifier {
 
   void restoreBanner(Object token) {
     if (_bannerSuppressors.remove(token)) {
+      _notifyBannerVisibilityChanged();
+    }
+  }
+
+  Object suppressBuildVersion() {
+    final token = Object();
+    _buildVersionSuppressors.add(token);
+    _notifyBannerVisibilityChanged();
+    return token;
+  }
+
+  void restoreBuildVersion(Object token) {
+    if (_buildVersionSuppressors.remove(token)) {
       _notifyBannerVisibilityChanged();
     }
   }
@@ -108,6 +132,7 @@ abstract class AppAdsController extends ChangeNotifier {
   void dispose() {
     _baseDisposed = true;
     _bannerSuppressors.clear();
+    _buildVersionSuppressors.clear();
     super.dispose();
   }
 }
@@ -353,41 +378,37 @@ class GoogleMobileAdsController extends AppAdsController {
     _loadRewarded();
   }
 
-  /// The reward is preloaded at launch. If the player reaches a reward action
-  /// before AdMob has finished, give the request a short chance to complete
-  /// instead of skipping straight past the ad.
-  Future<RewardedAd?> _waitForRewardedAd() async {
-    const deadline = Duration(seconds: 5);
-    const pollInterval = Duration(milliseconds: 200);
-    var waited = Duration.zero;
-
-    while (!_disposed && _rewardedAd == null && waited < deadline) {
-      await Future<void>.delayed(pollInterval);
-      waited += pollInterval;
-    }
-    return _rewardedAd;
-  }
-
   @override
   Future<RewardedAdResult> showRewardedWithResult() async {
     if (_rewardShowing || _disposed) return RewardedAdResult.unavailable;
 
-    preloadRewarded();
-    var ad = _rewardedAd;
-    ad ??= await _waitForRewardedAd();
+    // Reward actions are enabled only after a fully loaded ad is present.
+    // Never keep a player in a fake loading state after they tap the button.
+    final ad = _rewardedAd;
     if (ad == null || _rewardShowing || _disposed) {
+      preloadRewarded();
       return RewardedAdResult.unavailable;
     }
 
     final completed = Completer<RewardedAdResult>();
     var earnedReward = false;
+    var fullScreenWasShown = false;
+    var adDisposed = false;
+    Timer? presentationWatchdog;
     _rewardedAd = null;
     _rewardLoadedAt = null;
     _rewardShowing = true;
     _notify();
 
+    void disposeAd() {
+      if (adDisposed) return;
+      adDisposed = true;
+      ad.dispose();
+    }
+
     void finish(RewardedAdResult result) {
       if (completed.isCompleted) return;
+      presentationWatchdog?.cancel();
       completed.complete(result);
       if (_disposed) return;
       _rewardShowing = false;
@@ -396,27 +417,42 @@ class GoogleMobileAdsController extends AppAdsController {
     }
 
     ad.fullScreenContentCallback = FullScreenContentCallback(
+      onAdShowedFullScreenContent: (_) {
+        fullScreenWasShown = true;
+        presentationWatchdog?.cancel();
+      },
       onAdDismissedFullScreenContent: (closedAd) {
-        closedAd.dispose();
+        disposeAd();
         finish(
           earnedReward ? RewardedAdResult.earned : RewardedAdResult.dismissed,
         );
       },
       onAdFailedToShowFullScreenContent: (failedAd, error) {
         debugPrint('AdMob rewarded show error: $error');
-        failedAd.dispose();
+        disposeAd();
         finish(RewardedAdResult.failed);
       },
     );
+    presentationWatchdog = Timer(_rewardedPresentationTimeout, () {
+      if (fullScreenWasShown || completed.isCompleted) return;
+      debugPrint(
+        'AdMob rewarded presentation timed out before full-screen content appeared.',
+      );
+      disposeAd();
+      finish(RewardedAdResult.failed);
+    });
     try {
-      ad.show(
+      // RewardedAd.show returns a Future. Await it so a platform-side failure
+      // clears the native overlay and unlocks the victory screen instead of
+      // leaving it black and unresponsive.
+      await ad.show(
         onUserEarnedReward: (_, _) {
           earnedReward = true;
         },
       );
     } catch (error) {
       debugPrint('AdMob rewarded synchronous show error: $error');
-      ad.dispose();
+      disposeAd();
       finish(RewardedAdResult.failed);
     }
     return completed.future;
@@ -515,6 +551,61 @@ class _SuppressMobileAdBannerState extends State<SuppressMobileAdBanner> {
   Widget build(BuildContext context) => widget.child;
 }
 
+/// Hides only the bottom build-version strip while [child] is mounted.
+/// The normal persistent banner retains its reserved space and remains
+/// independently controlled by [SuppressMobileAdBanner].
+class SuppressMobileBuildVersion extends StatefulWidget {
+  const SuppressMobileBuildVersion({
+    super.key,
+    required this.child,
+    this.enabled = true,
+  });
+
+  final Widget child;
+  final bool enabled;
+
+  @override
+  State<SuppressMobileBuildVersion> createState() =>
+      _SuppressMobileBuildVersionState();
+}
+
+class _SuppressMobileBuildVersionState
+    extends State<SuppressMobileBuildVersion> {
+  AppAdsController? _controller;
+  Object? _suppressionToken;
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    final nextController = MobileAdsScope.maybeOf(context);
+    if (identical(nextController, _controller)) return;
+    _releaseSuppression();
+    _controller = nextController;
+    _suppressionToken = widget.enabled
+        ? nextController?.suppressBuildVersion()
+        : null;
+  }
+
+  void _releaseSuppression() {
+    final controller = _controller;
+    final token = _suppressionToken;
+    _controller = null;
+    _suppressionToken = null;
+    if (controller != null && token != null) {
+      controller.restoreBuildVersion(token);
+    }
+  }
+
+  @override
+  void dispose() {
+    _releaseSuppression();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) => widget.child;
+}
+
 class MobileAdShell extends StatelessWidget {
   const MobileAdShell({
     super.key,
@@ -544,7 +635,8 @@ class MobileAdShell extends StatelessWidget {
                 child: child,
               ),
             ),
-            const _BuildVersionAboveBanner(),
+            if (controller.buildVersionAllowed)
+              const _BuildVersionAboveBanner(),
             SafeArea(
               top: false,
               minimum: const EdgeInsets.only(top: 2),

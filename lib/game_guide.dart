@@ -386,13 +386,13 @@ const _playModeGuideSpecs = <_PlayModeGuideSpec>[
   _PlayModeGuideSpec(
     id: 'quick-pop',
     title: 'QUICK POP',
-    badge: 'ONLINE · 30 S',
+    badge: 'ONLINE · 10 S',
     description:
-        'Partida casual online con 2 fichas. Busca un rival durante 30 segundos; si no aparece, continúa contra el CPU.',
+        'Partida casual online con 2 fichas. Busca jugadores hasta 10 segundos; el CPU completa los asientos que falten.',
     steps: [
       'Toca Quick Pop y comienza la búsqueda.',
       'Si se conecta alguien, juegan en el mismo tablero.',
-      'A los 30 segundos sin rival, entra el CPU automáticamente.',
+      'A los 10 segundos, el CPU completa automáticamente los puestos libres.',
     ],
     icon: Icons.bolt_rounded,
     color: GuidePalette.violet,
@@ -428,13 +428,13 @@ const _playModeGuideSpecs = <_PlayModeGuideSpec>[
   _PlayModeGuideSpec(
     id: 'pass-and-play',
     title: 'PASS & PLAY',
-    badge: 'LOCAL · AMIGOS',
+    badge: 'LOCAL · 1–4',
     description:
-        'Juega en el mismo teléfono pasando el dispositivo después de cada turno.',
+        'Mesa compartida para hasta 4 personas en una tablet, con nombres, CPU opcional y un solo tablero para todos.',
     steps: [
-      'Elige Tradicional o Caos y confirma los jugadores.',
-      'Cada persona tira, mueve y termina su turno.',
-      'Pasa el teléfono al siguiente jugador.',
+      'Elige de 1 a 4 personas, escribe sus nombres y escoge Tradicional o Caos.',
+      'Los puestos vacíos los controla el CPU; cada color muestra quién está jugando.',
+      'Toca JUGAR AQUÍ en una base CPU para que otra persona entre sin reiniciar la partida.',
     ],
     icon: Icons.swap_horiz_rounded,
     color: GuidePalette.green,
@@ -856,31 +856,32 @@ const playCpuRuleSections = <GuideRuleSection>[
 
 const passAndPlayRuleSections = <GuideRuleSection>[
   GuideRuleSection(
-    icon: Icons.swap_horiz_rounded,
-    title: 'Pasa el teléfono',
+    icon: Icons.groups_rounded,
+    title: 'Mesa compartida',
     color: GuidePalette.green,
-    badge: 'LOCAL · 2–4',
+    badge: 'LOCAL · 1–4',
     rules: [
-      'Juega con tus amigos en el mismo dispositivo, sin crear una sala ni usar internet.',
-      'Elige Tradicional o Caos y confirma cuántas personas van a jugar.',
-      'El juego indica claramente cuándo debes entregar el teléfono al siguiente jugador.',
+      'Jueguen hasta 4 personas en una tablet, sin crear una sala ni usar internet.',
+      'Antes de empezar, elige cuántas personas juegan, escribe sus nombres y escoge Tradicional o Caos.',
+      'Los asientos que no tengan persona empiezan con CPU para que una partida de 1 jugador también funcione.',
     ],
   ),
   GuideRuleSection(
     icon: Icons.casino_rounded,
-    title: 'Un turno a la vez',
+    title: 'Turnos y asientos',
     color: GuidePalette.blue,
     rules: [
-      'Cada persona tira los dados, mueve sus fichas y termina su turno antes de pasar el dispositivo.',
-      'El tablero y el visor se mantienen visibles para que el siguiente jugador pueda revisar la jugada.',
+      'Cada base muestra el nombre y color de quien juega; los dados aparecen en el panel del turno activo.',
+      'Si una persona llega tarde, toca JUGAR AQUÍ en la base CPU, escribe su nombre y toma esa posición sin perder el avance.',
       'Los dobles, capturas, barreras y bonos se aplican igual que en una partida normal.',
     ],
   ),
   GuideRuleSection(
     icon: Icons.emoji_events_rounded,
-    title: 'Gana quien llega primero',
+    title: 'Misiones y victoria',
     color: GuidePalette.yellow,
     rules: [
+      'Las misiones de Mesa compartida cuentan turnos humanos y partidas locales terminadas; los turnos CPU no cuentan.',
       'La meta depende del modo: cuatro fichas en Tradicional o dos en Quick Pop.',
       'El juego celebra al ganador y muestra el resultado al terminar la partida.',
       'Puedes iniciar otra partida local cuando todos estén listos.',
@@ -1151,7 +1152,7 @@ class _ModeSelector extends StatelessWidget {
                 selected: value == GameGuideMode.passAndPlay,
                 icon: Icons.swap_horiz_rounded,
                 title: 'PASS & PLAY',
-                subtitle: 'Pasa el teléfono · 2–4 jugadores',
+                subtitle: 'Hasta 4 en una tablet',
                 color: GuidePalette.green,
                 onTap: () => onChanged(GameGuideMode.passAndPlay),
               ),
@@ -2450,9 +2451,11 @@ class _QuickReference extends StatelessWidget {
                   _QuickPill(text: 'Doble = otra tirada'),
                 ],
                 GameGuideMode.passAndPlay => const [
-                  _QuickPill(text: '2–4 jugadores'),
-                  _QuickPill(text: 'Pasa el teléfono'),
-                  _QuickPill(text: 'Clásico o Caos'),
+                  _QuickPill(text: '1–4 jugadores'),
+                  _QuickPill(text: 'Tablet compartida'),
+                  _QuickPill(text: 'Nombres y CPU'),
+                  _QuickPill(text: 'JUGAR AQUÍ'),
+                  _QuickPill(text: 'Tradicional o Caos'),
                   _QuickPill(text: '5 = SALIDA'),
                   _QuickPill(text: 'Captura = +20'),
                 ],

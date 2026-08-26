@@ -35,9 +35,9 @@ enum OnlineGameConnectionState {
 
 /// Availability of the active-host authority from a guest's point of view.
 ///
-/// `activeHostV1` cannot safely elect a different UID without a fenced server
-/// lease. Guests therefore wait for the recorded host, then surface an
-/// explicit recovery/exit state instead of remaining on a frozen board.
+/// `activeHostV1` can hand authority to a connected peer only through the
+/// fenced match lease. Guests therefore wait for the recorded host briefly,
+/// then keep the board usable while a peer takes over the CPU seat.
 enum OnlineHostAvailability { available, reconnecting, unavailable }
 
 enum OnlineGameCommandKind { roll, move, moveAll, powerUp }
@@ -54,7 +54,7 @@ class OnlineGameSyncException implements Exception {
 final class OnlineHostUnavailableException extends OnlineGameSyncException {
   const OnlineHostUnavailableException()
     : super(
-        'The active host did not reconnect. This match must be recovered or exited.',
+        'The active host did not reconnect. A connected peer may take over the match.',
       );
 }
 
@@ -273,13 +273,18 @@ class OnlineGameSyncClient extends ChangeNotifier {
     required this.roomId,
     required this.session,
     required GameEngine engine,
-    required this.isHost,
+    required bool isHost,
     OnlineMatchAuthority? authority,
     Random? random,
     this.commandTimeout = const Duration(seconds: 12),
-    this.hostReconnectGrace = const Duration(seconds: 30),
+    // A short hand-off window keeps a returning host from losing a turn while
+    // still letting a connected peer take over quickly enough for the match
+    // to continue when iOS suspends the original app.
+    this.hostReconnectGrace = const Duration(seconds: 5),
     this.presenceRecoveryInterval = const Duration(seconds: 2),
-  }) : _engine = authority?.engine ?? engine,
+  }) : originalHost = isHost,
+       _hasAuthority = isHost,
+       _engine = authority?.engine ?? engine,
        _authority = authority,
        _random = random ?? Random.secure() {
     if (roomId.trim().isEmpty || roomId.contains('/')) {
@@ -314,11 +319,20 @@ class OnlineGameSyncClient extends ChangeNotifier {
   final OnlineTransportClient transport;
   final String roomId;
   final OnlineMatchSession session;
-  final bool isHost;
+  final bool originalHost;
   final Duration commandTimeout;
   final Duration hostReconnectGrace;
   final Duration presenceRecoveryInterval;
   final Random _random;
+
+  bool _hasAuthority;
+
+  /// Whether this client is currently fenced as the active match authority.
+  /// This can temporarily be true for a guest after it acquires hostLease.
+  bool get hasAuthority => _hasAuthority;
+
+  /// Stable room-host role used by UI and seat presentation.
+  bool get isHost => originalHost;
 
   GameEngine _engine;
   OnlineMatchAuthority? _authority;
@@ -327,6 +341,10 @@ class OnlineGameSyncClient extends ChangeNotifier {
   StreamSubscription<Object?>? _presenceSubscription;
   StreamSubscription<Object?>? _safeChatSubscription;
   OnlinePresenceLease? _presenceLease;
+  OnlineMatchHostLease? _hostLease;
+  Timer? _hostLeaseRenewTimer;
+  Timer? _hostTakeoverTimer;
+  bool _hostTakeoverInFlight = false;
   Timer? _presenceRecoveryTimer;
   bool _recoveringOwnPresence = false;
   final Map<String, Timer> _disconnectGraceTimers = <String, Timer>{};
@@ -379,6 +397,7 @@ class OnlineGameSyncClient extends ChangeNotifier {
   OnlineGameConnectionState get connectionState => _connectionState;
   OnlineHostAvailability get hostAvailability => _hostAvailability;
   DateTime? get hostReconnectDeadline => _hostReconnectDeadline;
+  String? get activeHostUid => _activeHostUid;
   bool get localParticipantAwaitingNextTurn =>
       _localParticipantAwaitingNextTurn;
   bool get requiresHostRecovery =>
@@ -394,7 +413,7 @@ class OnlineGameSyncClient extends ChangeNotifier {
   /// original virtual seat and for a remote human only after authoritative
   /// disconnect expiry changed that seat to CPU control.
   bool canHostDriveParticipant(String candidateId) {
-    if (!isHost || _disposed || _authority == null) return false;
+    if (!_hasAuthority || _disposed || _authority == null) return false;
     final participant = session.participants
         .where((candidate) => candidate.id == candidateId)
         .firstOrNull;
@@ -432,6 +451,7 @@ class OnlineGameSyncClient extends ChangeNotifier {
   Future<void> _startInternal() async {
     _ensureUsable();
     if (_started) return;
+    await _adoptCurrentAuthorityRole();
     _started = true;
     _setConnectionState(
       _initialized
@@ -439,7 +459,7 @@ class OnlineGameSyncClient extends ChangeNotifier {
           : OnlineGameConnectionState.connecting,
     );
     try {
-      if (isHost) {
+      if (_hasAuthority) {
         if (!_initialized) {
           await _initializeHost();
           _ensureStartActive();
@@ -487,6 +507,7 @@ class OnlineGameSyncClient extends ChangeNotifier {
           .watch(_safeChatPath)
           .listen(_handleSafeChatSnapshot, onError: _handleSafeChatStreamError);
       _startOwnPresenceRecovery();
+      if (_hasAuthority) _startHostLeaseRenewal();
       _initialized = true;
       if (_hostAvailability != OnlineHostAvailability.unavailable) {
         _lastError = null;
@@ -494,10 +515,27 @@ class OnlineGameSyncClient extends ChangeNotifier {
       _setConnectionState(_connectionStateForHostAvailability);
     } catch (error) {
       _started = false;
+      await _releaseOwnMatchLease();
       await _cancelSubscriptions(disconnectPresence: true);
       _lastError = error;
       _setConnectionState(OnlineGameConnectionState.failed);
       rethrow;
+    }
+  }
+
+  /// A returning original host must not assume authority from its constructor:
+  /// another player may have acquired a newer fenced lease while it was in
+  /// the background. Read the durable match first and join as a guest until a
+  /// later lease acquisition succeeds.
+  Future<void> _adoptCurrentAuthorityRole() async {
+    if (!originalHost || !_hasAuthority || _initialized) return;
+    final raw = await transport.store.read(matchPath);
+    if (raw == null) return;
+    final document = onlineMap(raw);
+    final storedHostUid = document['hostUid'];
+    if (storedHostUid is String && storedHostUid != participantId) {
+      _hasAuthority = false;
+      _authority = null;
     }
   }
 
@@ -516,6 +554,11 @@ class OnlineGameSyncClient extends ChangeNotifier {
   Future<void> _pauseInternal() async {
     if (_disposed || !_started) return;
     _started = false;
+    // Release the durable authority before suspending the app. Firebase's
+    // onDisconnect hook remains the fallback for a hard process/network loss,
+    // but an ordinary Home/background transition should let a connected peer
+    // take over immediately instead of waiting for the 45-second lease.
+    await _releaseOwnMatchLease();
     await _cancelSubscriptions(disconnectPresence: true);
     if (!_disposed) _setConnectionState(OnlineGameConnectionState.idle);
   }
@@ -546,7 +589,7 @@ class OnlineGameSyncClient extends ChangeNotifier {
   /// applied, so the UI may dismiss its recovery dialog.
   Future<bool> retryHostRecovery() async {
     _ensureUsable();
-    if (isHost) return true;
+    if (_hasAuthority) return true;
     if (!_started) await start();
     _handleGuestPresenceSnapshot(await transport.store.read(_presencePath));
     if (_hostAvailability != OnlineHostAvailability.available) return false;
@@ -829,9 +872,25 @@ class OnlineGameSyncClient extends ChangeNotifier {
   }
 
   Future<void> _initializeHost() async {
+    _hostLease = await transport.acquireMatchHostLease(
+      roomId,
+      reason: originalHost ? 'initial' : 'takeover',
+    );
+    if (_hostLease == null || _hostLease!.uid != participantId) {
+      _hasAuthority = false;
+      throw const OnlineGameSyncException(
+        'Another player currently owns the online match authority.',
+      );
+    }
     final raw = await transport.store.read(matchPath);
     if (raw != null) {
+      final acquiredLease = _hostLease;
       _restoreHostDocument(raw);
+      // The lease was acquired immediately before the durable document was
+      // restored.  Keep that fenced transaction result even when the older
+      // checkpoint still contains the previous epoch; otherwise the first
+      // publish after a host returns would be rejected by the rules.
+      _hostLease = acquiredLease;
       return;
     }
     final authority = _authority!;
@@ -854,6 +913,7 @@ class OnlineGameSyncClient extends ChangeNotifier {
     final document = onlineMap(raw);
     _validateMatchDocument(document);
     _activeHostUid = document['hostUid'] as String;
+    _hostLease = _leaseFromDocument(document);
     if (document['hostUid'] != participantId) {
       throw const OnlineGameSyncException(
         'Only the recorded room host can resume this authority.',
@@ -903,6 +963,7 @@ class OnlineGameSyncClient extends ChangeNotifier {
     _localParticipantAwaitingNextTurn =
         turn is int && awaitingNextTurn[participantId] == turn;
     _restoreResults(document['results']);
+    _hostLease ??= _leaseFromDocument(document);
   }
 
   Future<void> _readAndApplyMatchDocument({required bool required}) async {
@@ -968,6 +1029,7 @@ class OnlineGameSyncClient extends ChangeNotifier {
     final document = onlineMap(raw);
     _validateMatchDocument(document);
     _activeHostUid = document['hostUid'] as String;
+    _hostLease = _leaseFromDocument(document);
     _localAuthorityPresence = _authorityPresenceFromDocument(
       document,
       participantId,
@@ -999,7 +1061,7 @@ class OnlineGameSyncClient extends ChangeNotifier {
   }
 
   Future<void> _waitForLocalAuthorityReconnect() async {
-    if (isHost ||
+    if (_hasAuthority ||
         _localAuthorityPresence == null ||
         _localAuthorityPresence == OnlineParticipantPresence.connected) {
       return;
@@ -1036,7 +1098,7 @@ class OnlineGameSyncClient extends ChangeNotifier {
   }
 
   void _handleCommandSnapshot(Object? raw) {
-    if (!_started || !isHost) return;
+    if (!_started || !_hasAuthority) return;
     final batches = onlineMap(raw);
     final pending = <OnlineGameCommandRecord>[];
     final malformed = <(String, String)>[];
@@ -1144,20 +1206,23 @@ class OnlineGameSyncClient extends ChangeNotifier {
   }
 
   void _handleHostEngineMutation() {
-    if (_disposed || !_started || !isHost || _suppressHostEngineListener) {
+    if (_disposed ||
+        !_started ||
+        !_hasAuthority ||
+        _suppressHostEngineListener) {
       return;
     }
     unawaited(_enqueue(() => _publishHostState()));
   }
 
   void _handlePresenceSnapshot(Object? raw) {
-    if (!_started || !isHost) return;
+    if (!_started || !_hasAuthority) return;
     final records = onlineMap(raw);
     unawaited(_enqueue(() => _applyPresenceSnapshot(records)));
   }
 
   void _handleGuestPresenceSnapshot(Object? raw) {
-    if (_disposed || !_started || isHost) return;
+    if (_disposed || !_started || _hasAuthority) return;
     final records = onlineMap(raw);
     final hostUid = _activeHostUid;
     if (hostUid == null) return;
@@ -1205,7 +1270,9 @@ class OnlineGameSyncClient extends ChangeNotifier {
 
   void _markHostAvailable() {
     _hostRecoveryTimer?.cancel();
+    _hostTakeoverTimer?.cancel();
     _hostRecoveryTimer = null;
+    _hostTakeoverTimer = null;
     _hostReconnectDeadline = null;
     if (_hostAvailability == OnlineHostAvailability.available) return;
     _hostAvailability = OnlineHostAvailability.available;
@@ -1234,11 +1301,188 @@ class OnlineGameSyncClient extends ChangeNotifier {
       _hostAvailability = OnlineHostAvailability.unavailable;
       _lastError = const OnlineHostUnavailableException();
       _setConnectionState(OnlineGameConnectionState.failed);
+      _scheduleHostTakeover();
     });
   }
 
+  void _scheduleHostTakeover() {
+    if (_disposed || !_started || _hasAuthority || _hostTakeoverTimer != null) {
+      return;
+    }
+    _hostTakeoverTimer = Timer(Duration.zero, () {
+      _hostTakeoverTimer = null;
+      unawaited(_attemptHostTakeover());
+    });
+  }
+
+  Future<void> _attemptHostTakeover() async {
+    if (_disposed || !_started || _hasAuthority || _hostTakeoverInFlight) {
+      return;
+    }
+    _hostTakeoverInFlight = true;
+    try {
+      final lease = await transport.acquireMatchHostLease(
+        roomId,
+        reason: originalHost ? 'reclaim' : 'takeover',
+      );
+      if (lease == null || lease.uid != participantId) {
+        if (!_disposed &&
+            _started &&
+            _hostAvailability == OnlineHostAvailability.unavailable) {
+          _hostTakeoverTimer = Timer(presenceRecoveryInterval, () {
+            _hostTakeoverTimer = null;
+            unawaited(_attemptHostTakeover());
+          });
+        }
+        return;
+      }
+      await _promoteToAuthority(lease);
+    } catch (error) {
+      _lastError = error;
+      if (!_disposed) notifyListeners();
+      if (_started && !_disposed) {
+        _hostTakeoverTimer = Timer(presenceRecoveryInterval, () {
+          _hostTakeoverTimer = null;
+          unawaited(_attemptHostTakeover());
+        });
+      }
+    } finally {
+      _hostTakeoverInFlight = false;
+    }
+  }
+
+  Future<void> _promoteToAuthority(OnlineMatchHostLease lease) async {
+    if (_disposed || !_started || _hasAuthority) return;
+    final raw = await transport.store.read(matchPath);
+    final document = onlineMap(raw);
+    _validateMatchDocument(document);
+    final rawAuthority = onlineMap(document['authorityCheckpoint']);
+    if (rawAuthority.isEmpty) {
+      throw const OnlineGameSyncException(
+        'The match has no durable authority checkpoint for takeover.',
+      );
+    }
+    final restored = OnlineMatchAuthority.fromCheckpoint(
+      session: session,
+      checkpoint: _dynamicMap(rawAuthority),
+      localViewerColor: localColor,
+      disconnectPolicy:
+          _authority?.disconnectPolicy ?? const OnlineDisconnectPolicy(),
+    );
+    final fullCheckpoint = onlineMap(document['checkpoint']);
+    final engineCheckpoint = <String, Object?>{...fullCheckpoint}
+      ..remove('onlineAwaitingNextTurn');
+    restored.engine.applyRemoteCheckpoint(_dynamicMap(engineCheckpoint));
+    // The takeover grace already elapsed while the old host was absent.  Do
+    // not make the replacement host wait for a second disconnect grace before
+    // it can drive that seat's CPU turns.
+    final takeoverNow = DateTime.fromMillisecondsSinceEpoch(
+      await transport.store.serverNowMs(),
+      isUtc: true,
+    );
+    // The durable checkpoint can still say that the former host was
+    // connected because its app was suspended before it could publish one
+    // more match snapshot.  Fence that seat against the live presence record
+    // before enforcing the already-expired hand-off grace, otherwise the new
+    // authority would be unable to drive the host's CPU turn.
+    final previousHostUid = document['hostUid'];
+    if (previousHostUid is String && previousHostUid != participantId) {
+      final presence = onlineMap(
+        onlineMap(await transport.store.read(_presencePath))[previousHostUid],
+      );
+      if (presence['state'] != LobbyPresence.connected.name) {
+        final expiredAt = takeoverNow
+            .subtract(restored.disconnectPolicy.gracePeriod)
+            .subtract(const Duration(milliseconds: 1));
+        restored.markDisconnected(previousHostUid, now: expiredAt);
+      }
+    }
+    restored.enforceDisconnectPolicy(takeoverNow);
+
+    await _matchSubscription?.cancel();
+    await _presenceSubscription?.cancel();
+    _matchSubscription = null;
+    _presenceSubscription = null;
+    _authority?.dispose();
+    _authority = restored;
+    _engine = restored.engine;
+    _hasAuthority = true;
+    _hostLease = lease;
+    _activeHostUid = participantId;
+    _hostAvailability = OnlineHostAvailability.available;
+    _hostReconnectDeadline = null;
+    _authorityRevision = (document['authorityRevision'] as num).toInt();
+    _stateRevision = (document['stateRevision'] as num).toInt();
+    _createdAtMs = (document['createdAt'] as num).toInt();
+    _lastCheckpointJson = jsonEncode(engineCheckpoint);
+    _restoreResults(document['results']);
+    _attachHostEngineListener();
+    _commandSubscription = transport.store
+        .watch(_commandsPath)
+        .listen(_handleCommandSnapshot, onError: _handleStreamError);
+    _presenceSubscription = transport.store
+        .watch(_presencePath)
+        .listen(_handlePresenceSnapshot, onError: _handleStreamError);
+    if (_presenceLease == null || _presenceLease!.closed) {
+      _presenceLease = await transport.connectRoomPresence(roomId);
+    }
+    _startHostLeaseRenewal();
+    await _publishHostState(force: true);
+    _lastError = null;
+    _setConnectionState(OnlineGameConnectionState.connected);
+    notifyListeners();
+  }
+
+  void _startHostLeaseRenewal() {
+    _hostLeaseRenewTimer?.cancel();
+    if (!_hasAuthority || _hostLease == null) return;
+    final interval = Duration(
+      milliseconds: onlineMatchHostLeaseDuration.inMilliseconds ~/ 3,
+    );
+    _hostLeaseRenewTimer = Timer.periodic(interval, (_) {
+      unawaited(_renewHostLease());
+    });
+  }
+
+  Future<void> _renewHostLease() async {
+    final lease = _hostLease;
+    if (_disposed || !_started || !_hasAuthority || lease == null) return;
+    try {
+      final refreshed = await transport.renewMatchHostLease(roomId, lease);
+      if (refreshed == null || refreshed.uid != participantId) {
+        _hasAuthority = false;
+        _hostLeaseRenewTimer?.cancel();
+        _hostLeaseRenewTimer = null;
+        if (_hostListenerAttached) {
+          _engine.removeListener(_handleHostEngineMutation);
+          _hostListenerAttached = false;
+        }
+        await _commandSubscription?.cancel();
+        _commandSubscription = null;
+        _hostAvailability = OnlineHostAvailability.reconnecting;
+        _setConnectionState(OnlineGameConnectionState.reconnecting);
+        _attachGuestMatchWatchers();
+        return;
+      }
+      _hostLease = refreshed;
+    } catch (error) {
+      _lastError = error;
+      if (!_disposed) notifyListeners();
+    }
+  }
+
+  void _attachGuestMatchWatchers() {
+    if (_disposed || !_started || _hasAuthority) return;
+    _matchSubscription ??= transport.store
+        .watch(matchPath)
+        .listen(_handleMatchSnapshot, onError: _handleStreamError);
+    _presenceSubscription ??= transport.store
+        .watch(_presencePath)
+        .listen(_handleGuestPresenceSnapshot, onError: _handleStreamError);
+  }
+
   Future<void> _applyPresenceSnapshot(Map<String, Object?> records) async {
-    if (_disposed || !_started || !isHost) return;
+    if (_disposed || !_started || !_hasAuthority) return;
     final nowMs = await transport.store.serverNowMs();
     final now = DateTime.fromMillisecondsSinceEpoch(nowMs, isUtc: true);
     var changed = false;
@@ -1278,14 +1522,14 @@ class OnlineGameSyncClient extends ChangeNotifier {
       remaining.isNegative ? Duration.zero : remaining,
       () {
         _disconnectGraceTimers.remove(candidateId);
-        if (_disposed || !_started || !isHost) return;
+        if (_disposed || !_started || !_hasAuthority) return;
         unawaited(_enqueue(() => _enforceDisconnectGrace(candidateId)));
       },
     );
   }
 
   Future<void> _enforceDisconnectGrace(String candidateId) async {
-    if (_disposed || !_started || !isHost) return;
+    if (_disposed || !_started || !_hasAuthority) return;
     final nowMs = await transport.store.serverNowMs();
     final now = DateTime.fromMillisecondsSinceEpoch(nowMs, isUtc: true);
     final transitions = _authority!.enforceDisconnectPolicy(now);
@@ -1346,6 +1590,7 @@ class OnlineGameSyncClient extends ChangeNotifier {
       // controls disabled while the host CPU finishes the interrupted turn.
       'onlineAwaitingNextTurn': <String, int>{..._authority!.awaitingNextTurn},
     };
+    final lease = _hostLease;
     return <String, Object?>{
       'schemaVersion': onlineGameSyncSchemaVersion,
       'authorityModel': onlineGameSyncAuthorityModel,
@@ -1353,6 +1598,7 @@ class OnlineGameSyncClient extends ChangeNotifier {
       'matchId': session.matchId,
       'hostUid': participantId,
       'hostLocalColor': localColor.name,
+      if (lease != null) 'hostLease': lease.toJson(),
       'authorityRevision': _authority!.revision,
       'stateRevision': _stateRevision,
       'checkpoint': replicatedCheckpoint,
@@ -1380,6 +1626,23 @@ class OnlineGameSyncClient extends ChangeNotifier {
         document['stateRevision'] is! num ||
         document['createdAt'] is! num) {
       throw const FormatException('Invalid online match document.');
+    }
+    final rawLease = document['hostLease'];
+    if (rawLease != null) {
+      final lease = OnlineMatchHostLease.fromJson(rawLease);
+      if (lease.uid != document['hostUid']) {
+        throw const FormatException('The online match host lease is invalid.');
+      }
+    }
+  }
+
+  OnlineMatchHostLease? _leaseFromDocument(Object? raw) {
+    final value = onlineMap(raw)['hostLease'];
+    if (value == null) return null;
+    try {
+      return OnlineMatchHostLease.fromJson(value);
+    } on FormatException {
+      return null;
     }
   }
 
@@ -1409,17 +1672,22 @@ class OnlineGameSyncClient extends ChangeNotifier {
     _hostResumeTurnTimer?.cancel();
     _hostResumeEffectTimer?.cancel();
     _hostRecoveryTimer?.cancel();
+    _hostLeaseRenewTimer?.cancel();
+    _hostTakeoverTimer?.cancel();
     _presenceRecoveryTimer?.cancel();
     _hostResumeTurnTimer = null;
     _hostResumeEffectTimer = null;
     _hostRecoveryTimer = null;
+    _hostLeaseRenewTimer = null;
+    _hostTakeoverTimer = null;
+    _hostTakeoverInFlight = false;
     _presenceRecoveryTimer = null;
     _recoveringOwnPresence = false;
     for (final timer in _disconnectGraceTimers.values) {
       timer.cancel();
     }
     _disconnectGraceTimers.clear();
-    if (isHost && _hostHasPendingTransition) {
+    if (_hasAuthority && _hostHasPendingTransition) {
       final checkpoint = _engine.createCheckpoint();
       _engine.applyRemoteCheckpoint(_dynamicMap(checkpoint));
       _needsHostTransitionResume = true;
@@ -1436,6 +1704,25 @@ class OnlineGameSyncClient extends ChangeNotifier {
       final lease = _presenceLease;
       _presenceLease = null;
       await lease?.disconnect();
+    }
+  }
+
+  /// Clears this client's match-authority lease when it is intentionally
+  /// leaving the foreground or being torn down. The transaction is fenced by
+  /// uid + epoch, so stale cleanup cannot delete a lease already acquired by
+  /// another player. Firebase onDisconnect remains the safety net for a
+  /// process that disappears before this future can complete.
+  Future<void> _releaseOwnMatchLease() async {
+    final lease = _hostLease;
+    if (!_hasAuthority || lease == null) return;
+    _hostLease = null;
+    _hasAuthority = false;
+    _hostLeaseRenewTimer?.cancel();
+    _hostLeaseRenewTimer = null;
+    try {
+      await transport.releaseMatchHostLease(roomId, lease);
+    } catch (_) {
+      // A lost connection is handled by the registered onDisconnect hook.
     }
   }
 
@@ -1460,7 +1747,8 @@ class OnlineGameSyncClient extends ChangeNotifier {
               (_engine.remainingDice.isEmpty || !_engine.hasAnyMove())));
 
   OnlineGameConnectionState get _connectionStateForHostAvailability {
-    if (isHost || _hostAvailability == OnlineHostAvailability.available) {
+    if (_hasAuthority ||
+        _hostAvailability == OnlineHostAvailability.available) {
       return OnlineGameConnectionState.connected;
     }
     if (_hostAvailability == OnlineHostAvailability.reconnecting) {
@@ -1473,7 +1761,9 @@ class OnlineGameSyncClient extends ChangeNotifier {
   /// checkpoint. When the active host itself reconnects, this controller owns
   /// the one pending transition and republishes its completion.
   void _resumeHostTransitionsIfNeeded() {
-    if (!isHost || !_needsHostTransitionResume || !_hostHasPendingTransition) {
+    if (!_hasAuthority ||
+        !_needsHostTransitionResume ||
+        !_hostHasPendingTransition) {
       _needsHostTransitionResume = false;
       return;
     }
@@ -1514,7 +1804,7 @@ class OnlineGameSyncClient extends ChangeNotifier {
   }
 
   void _requireHostDrivenParticipant(String candidateId) {
-    if (!isHost) {
+    if (!_hasAuthority) {
       throw const OnlineGameSyncException(
         'Only the room host can drive a CPU-controlled participant.',
       );
@@ -1553,6 +1843,7 @@ class OnlineGameSyncClient extends ChangeNotifier {
   @override
   void dispose() {
     if (_disposed) return;
+    unawaited(_releaseOwnMatchLease());
     _disposed = true;
     _lifecycleRevision++;
     _started = false;
@@ -1571,12 +1862,16 @@ class OnlineGameSyncClient extends ChangeNotifier {
     _hostResumeTurnTimer?.cancel();
     _hostResumeEffectTimer?.cancel();
     _hostRecoveryTimer?.cancel();
+    _hostLeaseRenewTimer?.cancel();
+    _hostTakeoverTimer?.cancel();
     _presenceRecoveryTimer?.cancel();
     for (final timer in _disconnectGraceTimers.values) {
       timer.cancel();
     }
     _disconnectGraceTimers.clear();
     _hostRecoveryTimer = null;
+    _hostLeaseRenewTimer = null;
+    _hostTakeoverTimer = null;
     _presenceRecoveryTimer = null;
     _recoveringOwnPresence = false;
     _commandSubscription = null;

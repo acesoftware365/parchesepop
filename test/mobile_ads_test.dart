@@ -359,6 +359,45 @@ void main() {
     );
 
     testWidgets(
+      'Pass & Play moves the build version into the centered game app bar',
+      (tester) async {
+        _configureIPhone14View(tester);
+        SharedPreferences.setMockInitialValues({});
+        final controller = _FakeAdsController(supported: true, adsReady: true);
+        final engine = GameEngine(
+          humanPlayerColors: PlayerColor.values.toSet(),
+        );
+        addTearDown(engine.dispose);
+        addTearDown(controller.dispose);
+
+        await tester.pumpWidget(
+          _gameScreenAdApp(
+            controller: controller,
+            engine: engine,
+            passAndPlay: true,
+          ),
+        );
+        await tester.pump(const Duration(milliseconds: 200));
+
+        expect(
+          find.byKey(const ValueKey('fake-mobile-banner')),
+          findsOneWidget,
+        );
+        expect(
+          find.byKey(const ValueKey('version-above-ad-banner')),
+          findsNothing,
+        );
+        expect(
+          find.byKey(const ValueKey('pass-play-appbar-version')),
+          findsOneWidget,
+        );
+        expect(tester.takeException(), isNull);
+
+        await tester.pumpWidget(const SizedBox.shrink());
+      },
+    );
+
+    testWidgets(
       'a taller adaptive banner shrinks only the HUD, never the board',
       (tester) async {
         _configureIPhone14View(tester);
@@ -1411,7 +1450,8 @@ void main() {
       tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.resumed);
       await tester.pump();
 
-      expect(ads.rewardedPreloadCount, 1);
+      // The first preload starts at app launch; foregrounding refreshes it.
+      expect(ads.rewardedPreloadCount, 2);
 
       await tester.pumpWidget(const SizedBox.shrink());
     },
@@ -1541,13 +1581,18 @@ Widget _focusedScreenApp(AppAdsController controller, Widget screen) {
 Widget _gameScreenAdApp({
   required AppAdsController controller,
   required GameEngine engine,
+  bool passAndPlay = false,
 }) {
   return MobileAdsScope(
     controller: controller,
     child: MaterialApp(
       home: MobileAdShell(
         controller: controller,
-        child: GameScreen(opponent: 'CPU • Fácil', gameEngine: engine),
+        child: GameScreen(
+          opponent: passAndPlay ? 'PASS & PLAY' : 'CPU • Fácil',
+          gameEngine: engine,
+          passAndPlay: passAndPlay,
+        ),
       ),
     ),
   );

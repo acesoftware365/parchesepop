@@ -37,6 +37,10 @@ import 'online_quick_table.dart';
 import 'online_room_ui.dart';
 import 'online_transport.dart';
 import 'online_transport_models.dart';
+import 'online_v3_test_screen.dart';
+import 'online_v3_game_controller.dart';
+import 'online_v3_models.dart';
+import 'online_v3_quick_pop.dart';
 import 'orientation_policy.dart';
 import 'player_auth.dart';
 import 'player_progression.dart';
@@ -256,6 +260,16 @@ const Duration diceThrowAnimationDuration = Duration(milliseconds: 1500);
 const AppFeatureRollout appFeatureRollout = AppFeatureRollout(
   quickPopOnline: true,
 );
+
+/// Only enabled by the dedicated beta APK build command. Production and
+/// ordinary debug builds continue using the stable V2 Quick Pop route.
+const bool onlineV3TestEnabled = bool.fromEnvironment('ENABLE_ONLINE_V3_TEST');
+
+/// Enables the server-authoritative V3 route in the normal Quick Pop entry
+/// for the dedicated gameplay-test build. Regular and release builds stay on
+/// the existing V2 route until this test is accepted.
+const bool onlineV3GameEnabled = bool.fromEnvironment('ENABLE_ONLINE_V3_GAME');
+
 // Rewarded ads are always voluntary, but the shop coin offer remains
 // available in every build and every game mode.
 const bool shopRewardedCoinsEnabled = true;
@@ -1078,6 +1092,9 @@ class _ParchesePopAppState extends State<ParchesePopApp>
     unawaited(onlineDeepLinks.start().catchError((Object _) {}));
     adsController = widget.adsController ?? NoopAppAdsController();
     unawaited(adsController.initialize());
+    // Start the rewarded request immediately. The controller is idempotent
+    // while consent and the Google Mobile Ads SDK are still initializing.
+    adsController.preloadRewarded();
     _loadProfile();
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (mounted) unawaited(_initializeAudio());
@@ -2696,7 +2713,7 @@ class PlayHome extends StatelessWidget {
                   icon: Icons.bolt_rounded,
                   title: 'QUICK POP',
                   subtitle: 'Partida rápida online',
-                  badge: 'ONLINE · CPU EN 30 S',
+                  badge: 'ONLINE · CPU EN 10 S',
                   featured: !compactModeTiles,
                   tile: compactModeTiles,
                   dense: denseHome,
@@ -2733,8 +2750,10 @@ class PlayHome extends StatelessWidget {
                   color: PopColors.green,
                   icon: Icons.swap_horiz_rounded,
                   title: 'PASS & PLAY',
-                  subtitle: 'Pasa el teléfono · 2–4 jugadores',
-                  badge: '2–4 JUGADORES',
+                  subtitle: 'Hasta 4 en un dispositivo',
+                  badge: '1–4 JUGADORES',
+                  artwork: const _PassAndPlayModeArtwork(),
+                  copyScale: 1.25,
                   tile: compactModeTiles,
                   dense: denseHome,
                   ultraCompact: ultraCompactPortrait,
@@ -3090,30 +3109,40 @@ class PlayHome extends StatelessWidget {
   }
 
   Future<void> _showPassAndPlayDialog(BuildContext context) async {
-    final mode = await showDialog<GameMode>(
+    final sharedTableThemes = wallet.ownedProducts
+        .where(
+          (product) =>
+              product.category == CosmeticCategory.theme &&
+              (product.id == 'theme_default' || product.sharedTableExclusive),
+        )
+        .toList(growable: false);
+    final equippedThemeId = wallet.equippedProductId(CosmeticCategory.theme);
+    final setup = await showDialog<_PassAndPlaySetup>(
       context: context,
-      builder: (_) => const _PassAndPlaySetupDialog(),
+      builder: (_) => _PassAndPlaySetupDialog(
+        initialPlayerName: profile.name,
+        themes: sharedTableThemes,
+        initialThemeId: isSharedTableExclusiveThemeId(equippedThemeId)
+            ? equippedThemeId
+            : 'theme_default',
+      ),
     );
-    if (!context.mounted || mode == null) return;
+    if (!context.mounted || setup == null) return;
     final engine = GameEngine(
-      mode: mode,
-      allPlayersHuman: true,
-      humanName: profile.name,
-      playerNames: <PlayerColor, String>{
-        PlayerColor.red: profile.name,
-        PlayerColor.green: 'Jugador 2',
-        PlayerColor.yellow: 'Jugador 3',
-        PlayerColor.blue: 'Jugador 4',
-      },
+      mode: setup.mode,
+      humanPlayerColors: setup.humanPlayerColors,
+      humanName: setup.playerNames[PlayerColor.red] ?? profile.name,
+      playerNames: setup.playerNames,
     );
     Navigator.push(
       context,
       MaterialPageRoute(
         builder: (_) => GameScreen(
           opponent: 'PASS & PLAY',
-          mode: mode,
+          mode: setup.mode,
           gameEngine: engine,
           passAndPlay: true,
+          passAndPlayThemeId: setup.themeId,
           wallet: wallet,
           progression: appFeatureRollout.retentionRewards ? progression : null,
           tutorial: tutorial,
@@ -3154,16 +3183,28 @@ class PlayHome extends StatelessWidget {
         await Navigator.push<void>(
           context,
           MaterialPageRoute(
-            builder: (_) => _QuickPopOnlineSearchScreen(
-              searchStopwatch: selection.stopwatch!,
-              profile: profile,
-              wallet: wallet,
-              progression: appFeatureRollout.retentionRewards
-                  ? progression
-                  : null,
-              tutorial: tutorial,
-              analytics: analytics,
-            ),
+            builder: (_) => onlineV3TestEnabled
+                ? OnlineV3QuickPopTestScreen(playerName: profile.name)
+                : onlineV3GameEnabled
+                ? _OnlineV3QuickPopSearchScreen(
+                    profile: profile,
+                    wallet: wallet,
+                    progression: appFeatureRollout.retentionRewards
+                        ? progression
+                        : null,
+                    tutorial: tutorial,
+                    analytics: analytics,
+                  )
+                : _QuickPopOnlineSearchScreen(
+                    searchStopwatch: selection.stopwatch!,
+                    profile: profile,
+                    wallet: wallet,
+                    progression: appFeatureRollout.retentionRewards
+                        ? progression
+                        : null,
+                    tutorial: tutorial,
+                    analytics: analytics,
+                  ),
           ),
         );
         return;
@@ -3848,6 +3889,585 @@ String _safeOnlineDiagnosticSegment(String value) {
       .replaceAll(RegExp('[^a-z0-9_-]'), '-')
       .replaceAll(RegExp('-+'), '-');
   return sanitized.isEmpty ? 'unknown' : sanitized;
+}
+
+/// Normal Quick Pop entry for the server-authoritative V3 gameplay test.
+/// It deliberately has its own queue resolver and never reads/writes V2.
+class _OnlineV3QuickPopSearchScreen extends StatefulWidget {
+  const _OnlineV3QuickPopSearchScreen({
+    required this.profile,
+    required this.wallet,
+    required this.progression,
+    required this.tutorial,
+    required this.analytics,
+  });
+
+  final PlayerProfile profile;
+  final WalletController wallet;
+  final PlayerProgressionController? progression;
+  final TutorialController? tutorial;
+  final GameAnalytics analytics;
+
+  @override
+  State<_OnlineV3QuickPopSearchScreen> createState() =>
+      _OnlineV3QuickPopSearchScreenState();
+}
+
+class _OnlineV3QuickPopSearchScreenState
+    extends State<_OnlineV3QuickPopSearchScreen> {
+  static const _queueKey = 'traditional_v3_beta';
+  OnlineV3QuickPopClient? _client;
+  OnlineV3QuickPopTicket? _ticket;
+  Timer? _retryTimer;
+  Timer? _lobbyClock;
+  bool _joining = false;
+  bool _opening = false;
+  bool _disposed = false;
+  int _consecutiveJoinFailures = 0;
+  late final String _queueAttemptId =
+      'attempt_${DateTime.now().microsecondsSinceEpoch}_${math.Random.secure().nextInt(1 << 32)}';
+  String _status = 'Conectando al servidor…';
+  String? _error;
+
+  @override
+  void initState() {
+    super.initState();
+    _lobbyClock = Timer.periodic(const Duration(seconds: 1), (_) {
+      if (mounted && _ticket?.roomId == null) setState(() {});
+    });
+    unawaited(_connect());
+  }
+
+  @override
+  void dispose() {
+    _disposed = true;
+    _retryTimer?.cancel();
+    _lobbyClock?.cancel();
+    final client = _client;
+    final roomId = _ticket?.roomId;
+    if (!_opening && client != null && roomId != null) {
+      unawaited(client.endPresence(roomId));
+    }
+    super.dispose();
+  }
+
+  Future<void> _connect() async {
+    try {
+      final client = await OnlineV3QuickPopClient.connect();
+      if (!mounted || _disposed) return;
+      setState(() => _client = client);
+      await _join();
+      _retryTimer = Timer.periodic(
+        const Duration(seconds: 2),
+        (_) => unawaited(_join()),
+      );
+    } catch (error) {
+      debugPrint('Online V3 connection failed: $error');
+      if (mounted) {
+        setState(() {
+          _error = 'No pudimos conectar con el servidor. Reintentando…';
+        });
+      }
+    }
+  }
+
+  Future<void> _join() async {
+    final client = _client;
+    if (client == null || _joining || _opening || _disposed) return;
+    _joining = true;
+    try {
+      final ticket = _ticket?.roomId == null
+          ? await client.join(
+              attemptId: _queueAttemptId,
+              queueKey: _queueKey,
+              playerName: widget.profile.name,
+            )
+          : _ticket!;
+      if (!mounted || _disposed) return;
+      if (ticket.roomId == null) {
+        setState(() {
+          _ticket = ticket;
+          _status = _waitingStatus(ticket);
+          _error = null;
+          _consecutiveJoinFailures = 0;
+        });
+        return;
+      }
+      setState(() {
+        _ticket = ticket;
+        _status = 'Abriendo partida…';
+        _error = null;
+        _consecutiveJoinFailures = 0;
+      });
+      final controller = await OnlineV3QuickPopGameController.open(
+        client: client,
+        roomId: ticket.roomId!,
+        playerName: widget.profile.name,
+      );
+      if (!mounted || _disposed) {
+        controller.dispose();
+        return;
+      }
+      _opening = true;
+      _retryTimer?.cancel();
+      _lobbyClock?.cancel();
+      await Navigator.of(context).pushReplacement(
+        MaterialPageRoute(
+          builder: (_) => _OnlineV3QuickPopLoadingScreen(
+            controller: controller,
+            wallet: widget.wallet,
+            progression: widget.progression,
+            tutorial: widget.tutorial,
+            profile: widget.profile,
+            analytics: widget.analytics,
+          ),
+        ),
+      );
+    } catch (error) {
+      debugPrint('Online V3 matchmaking failed: $error');
+      if (mounted && !_disposed) {
+        _consecutiveJoinFailures += 1;
+        setState(() {
+          // A second device can briefly race while the shared room is being
+          // provisioned. It retries automatically, so don't flash an error
+          // unless the failure is sustained.
+          _error = _consecutiveJoinFailures >= 3
+              ? 'No pudimos abrir la sala. Seguimos intentando…'
+              : null;
+          _status = _consecutiveJoinFailures >= 3
+              ? 'Reconectando con la sala…'
+              : 'Buscando Room…';
+        });
+      }
+    } finally {
+      _joining = false;
+    }
+  }
+
+  String _waitingStatus(OnlineV3QuickPopTicket ticket) {
+    final remainingMilliseconds =
+        ticket.launchAt - DateTime.now().millisecondsSinceEpoch;
+    final remainingSeconds = remainingMilliseconds <= 0
+        ? 0
+        : (remainingMilliseconds + 999) ~/ 1000;
+    return remainingSeconds > 0
+        ? 'Sala de espera · $remainingSeconds s\n'
+              'Esperando jugadores para abrir la misma sala…'
+        : 'Cerrando la sala de espera…';
+  }
+
+  int get _remainingLobbySeconds {
+    final launchAt = _ticket?.launchAt;
+    if (launchAt == null) return 10;
+    final remaining = launchAt - DateTime.now().millisecondsSinceEpoch;
+    return remaining <= 0 ? 0 : (remaining + 999) ~/ 1000;
+  }
+
+  int get _lobbyPlayerCount =>
+      (_ticket?.lobbyPlayerCount ?? 1).clamp(1, 4).toInt();
+
+  int get _lobbyMaxPlayers => (_ticket?.maxPlayers ?? 4).clamp(2, 4).toInt();
+
+  @override
+  Widget build(BuildContext context) {
+    final remainingSeconds = _remainingLobbySeconds;
+    final players = _lobbyPlayerCount;
+    final maxPlayers = _lobbyMaxPlayers;
+    final progress = players / maxPlayers;
+    return Scaffold(
+      backgroundColor: PopColors.cloud,
+      appBar: AppBar(title: const Text('Quick Pop · Online')),
+      body: DecoratedBox(
+        decoration: const BoxDecoration(
+          gradient: LinearGradient(
+            begin: Alignment.topCenter,
+            end: Alignment.bottomCenter,
+            colors: [Color(0xFFEAF3FF), Color(0xFFFFF9E4), Color(0xFFEAFBF4)],
+          ),
+        ),
+        child: Center(
+          child: SingleChildScrollView(
+            padding: const EdgeInsets.all(24),
+            child: ConstrainedBox(
+              constraints: const BoxConstraints(maxWidth: 460),
+              child: Container(
+                padding: const EdgeInsets.fromLTRB(22, 24, 22, 20),
+                decoration: BoxDecoration(
+                  color: Colors.white.withValues(alpha: .96),
+                  borderRadius: BorderRadius.circular(28),
+                  border: Border.all(color: PopColors.yellow, width: 2),
+                  boxShadow: const [
+                    BoxShadow(
+                      color: Color(0x2B0A285C),
+                      blurRadius: 20,
+                      offset: Offset(0, 10),
+                    ),
+                  ],
+                ),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Container(
+                      width: 68,
+                      height: 68,
+                      decoration: const BoxDecoration(
+                        color: PopColors.blue,
+                        shape: BoxShape.circle,
+                      ),
+                      child: const Icon(
+                        Icons.travel_explore_rounded,
+                        color: Colors.white,
+                        size: 36,
+                      ),
+                    ),
+                    const SizedBox(height: 14),
+                    const PopText(
+                      'BUSCANDO ROOM',
+                      style: TextStyle(
+                        color: PopColors.navy,
+                        fontSize: 23,
+                        fontWeight: FontWeight.w900,
+                        letterSpacing: .4,
+                      ),
+                    ),
+                    const SizedBox(height: 4),
+                    const PopText(
+                      'FIND ROOM · QUICK POP ONLINE',
+                      style: TextStyle(
+                        color: Color(0xFF667085),
+                        fontSize: 10,
+                        fontWeight: FontWeight.w800,
+                        letterSpacing: .7,
+                      ),
+                    ),
+                    const SizedBox(height: 20),
+                    Container(
+                      width: double.infinity,
+                      padding: const EdgeInsets.all(16),
+                      decoration: BoxDecoration(
+                        gradient: const LinearGradient(
+                          colors: [Color(0xFF2457A2), PopColors.navy],
+                        ),
+                        borderRadius: BorderRadius.circular(20),
+                      ),
+                      child: Column(
+                        children: [
+                          Row(
+                            children: [
+                              const Icon(
+                                Icons.timer_rounded,
+                                color: PopColors.yellow,
+                              ),
+                              const SizedBox(width: 8),
+                              Expanded(
+                                child: PopText(
+                                  remainingSeconds > 0
+                                      ? 'EMPIEZA EN · ${remainingSeconds}s'
+                                      : 'CERRANDO LA SALA…',
+                                  style: const TextStyle(
+                                    color: Colors.white,
+                                    fontSize: 13,
+                                    fontWeight: FontWeight.w900,
+                                  ),
+                                ),
+                              ),
+                            ],
+                          ),
+                          const SizedBox(height: 14),
+                          Row(
+                            mainAxisAlignment: MainAxisAlignment.center,
+                            children: [
+                              PopText(
+                                'ROOM $players / $maxPlayers PLAYERS',
+                                style: const TextStyle(
+                                  color: Colors.white,
+                                  fontSize: 18,
+                                  fontWeight: FontWeight.w900,
+                                ),
+                              ),
+                            ],
+                          ),
+                          const SizedBox(height: 9),
+                          ClipRRect(
+                            borderRadius: BorderRadius.circular(8),
+                            child: LinearProgressIndicator(
+                              value: progress,
+                              minHeight: 10,
+                              color: PopColors.green,
+                              backgroundColor: Colors.white24,
+                            ),
+                          ),
+                          const SizedBox(height: 10),
+                          const PopText(
+                            'Máximo 10 s. Los asientos libres juegan con CPU.',
+                            textAlign: TextAlign.center,
+                            style: TextStyle(
+                              color: Color(0xFFDCEBFF),
+                              fontSize: 11,
+                              fontWeight: FontWeight.w700,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                    const SizedBox(height: 14),
+                    Wrap(
+                      alignment: WrapAlignment.center,
+                      spacing: 8,
+                      runSpacing: 8,
+                      children: const [
+                        _V3LobbyChip(
+                          icon: Icons.groups_rounded,
+                          label: '2–4 jugadores',
+                        ),
+                        _V3LobbyChip(
+                          icon: Icons.verified_user_rounded,
+                          label: 'Servidor valida',
+                        ),
+                        _V3LobbyChip(
+                          icon: Icons.smart_toy_rounded,
+                          label: 'CPU si AFK',
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 14),
+                    PopText(
+                      _error ?? _status,
+                      textAlign: TextAlign.center,
+                      style: TextStyle(
+                        color: _error == null
+                            ? const Color(0xFF667085)
+                            : PopColors.red,
+                        fontSize: 11,
+                        fontWeight: FontWeight.w700,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _V3LobbyChip extends StatelessWidget {
+  const _V3LobbyChip({required this.icon, required this.label});
+
+  final IconData icon;
+  final String label;
+
+  @override
+  Widget build(BuildContext context) => Container(
+    padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 7),
+    decoration: BoxDecoration(
+      color: const Color(0xFFEAF3FF),
+      borderRadius: BorderRadius.circular(14),
+      border: Border.all(color: const Color(0xFFBCD2F3)),
+    ),
+    child: Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Icon(icon, size: 14, color: PopColors.blue),
+        const SizedBox(width: 5),
+        PopText(
+          label,
+          style: const TextStyle(
+            color: PopColors.navy,
+            fontSize: 9,
+            fontWeight: FontWeight.w800,
+          ),
+        ),
+      ],
+    ),
+  );
+}
+
+/// The room is already resolved here, but the board stays hidden until the
+/// server's shared start timestamp. This keeps every device on the same
+/// loading screen instead of letting the fastest phone reveal the board first.
+class _OnlineV3QuickPopLoadingScreen extends StatefulWidget {
+  const _OnlineV3QuickPopLoadingScreen({
+    required this.controller,
+    required this.wallet,
+    required this.progression,
+    required this.tutorial,
+    required this.profile,
+    required this.analytics,
+  });
+
+  final OnlineV3QuickPopGameController controller;
+  final WalletController wallet;
+  final PlayerProgressionController? progression;
+  final TutorialController? tutorial;
+  final PlayerProfile profile;
+  final GameAnalytics analytics;
+
+  @override
+  State<_OnlineV3QuickPopLoadingScreen> createState() =>
+      _OnlineV3QuickPopLoadingScreenState();
+}
+
+class _OnlineV3QuickPopLoadingScreenState
+    extends State<_OnlineV3QuickPopLoadingScreen> {
+  Timer? _clock;
+  bool _openingBoard = false;
+
+  @override
+  void initState() {
+    super.initState();
+    widget.controller.addListener(_onMatchChanged);
+    _clock = Timer.periodic(const Duration(milliseconds: 100), (_) {
+      if (mounted) setState(() {});
+      _openBoardWhenReady();
+    });
+    _onMatchChanged();
+  }
+
+  @override
+  void dispose() {
+    _clock?.cancel();
+    widget.controller.removeListener(_onMatchChanged);
+    if (!_openingBoard) widget.controller.dispose();
+    super.dispose();
+  }
+
+  void _onMatchChanged() {
+    if (mounted) setState(() {});
+    _openBoardWhenReady();
+  }
+
+  void _openBoardWhenReady() {
+    if (!mounted || _openingBoard) return;
+    final state = widget.controller.state;
+    if (state == null || state.status != 'inGame') return;
+    final delay = state.startAt - DateTime.now().millisecondsSinceEpoch;
+    if (delay > 0) return;
+    _openingBoard = true;
+    _clock?.cancel();
+    unawaited(
+      Navigator.of(context).pushReplacement(
+        MaterialPageRoute(
+          builder: (_) => GameScreen(
+            opponent: 'Quick Pop Online',
+            mode: GameMode.traditional,
+            matchFormat: MatchFormat.quickPop,
+            gameEngine: widget.controller.engine,
+            onlineV3Game: widget.controller,
+            wallet: widget.wallet,
+            progression: widget.progression,
+            tutorial: widget.tutorial,
+            localProfile: widget.profile,
+            analytics: widget.analytics,
+          ),
+        ),
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final state = widget.controller.state;
+    final startAt = state?.startAt;
+    final now = DateTime.now().millisecondsSinceEpoch;
+    final progress = startAt == null
+        ? null
+        : ((now - (startAt - 3000)) / 3000).clamp(0.0, 1.0);
+    final seconds = startAt == null
+        ? null
+        : ((startAt - now).clamp(0, 999999) / 1000).ceil();
+    return Scaffold(
+      backgroundColor: PopColors.cloud,
+      appBar: AppBar(title: const Text('Quick Pop · Online')),
+      body: DecoratedBox(
+        decoration: const BoxDecoration(
+          gradient: LinearGradient(
+            begin: Alignment.topCenter,
+            end: Alignment.bottomCenter,
+            colors: [Color(0xFFEAF3FF), Color(0xFFFFF9E4), Color(0xFFEAFBF4)],
+          ),
+        ),
+        child: Center(
+          child: Container(
+            width: 360,
+            margin: const EdgeInsets.all(24),
+            padding: const EdgeInsets.all(28),
+            decoration: BoxDecoration(
+              color: Colors.white.withValues(alpha: .96),
+              borderRadius: BorderRadius.circular(28),
+              border: Border.all(color: PopColors.yellow, width: 2),
+              boxShadow: const [
+                BoxShadow(
+                  color: Color(0x2B0A285C),
+                  blurRadius: 20,
+                  offset: Offset(0, 10),
+                ),
+              ],
+            ),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                const CircleAvatar(
+                  radius: 34,
+                  backgroundColor: PopColors.blue,
+                  child: Icon(
+                    Icons.rocket_launch_rounded,
+                    color: Colors.white,
+                    size: 36,
+                  ),
+                ),
+                const SizedBox(height: 18),
+                const PopText(
+                  'LOADING THE GAME…',
+                  textAlign: TextAlign.center,
+                  style: TextStyle(
+                    color: PopColors.navy,
+                    fontSize: 22,
+                    fontWeight: FontWeight.w900,
+                  ),
+                ),
+                const SizedBox(height: 7),
+                const PopText(
+                  'Todos entran al tablero al mismo tiempo.',
+                  textAlign: TextAlign.center,
+                  style: TextStyle(
+                    color: Color(0xFF667085),
+                    fontSize: 12,
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+                const SizedBox(height: 22),
+                ClipRRect(
+                  borderRadius: BorderRadius.circular(10),
+                  child: LinearProgressIndicator(
+                    value: progress,
+                    minHeight: 12,
+                    color: PopColors.green,
+                    backgroundColor: const Color(0xFFDCEBFF),
+                  ),
+                ),
+                const SizedBox(height: 12),
+                PopText(
+                  seconds == null
+                      ? 'Sincronizando con el servidor…'
+                      : seconds > 0
+                      ? 'Comienza en ${seconds}s'
+                      : 'Abriendo tablero…',
+                  style: const TextStyle(
+                    color: PopColors.navy,
+                    fontSize: 13,
+                    fontWeight: FontWeight.w800,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
 }
 
 class _QuickPopOnlineSearchScreen extends StatefulWidget {
@@ -5247,7 +5867,7 @@ class _QuickPopEntryDialog extends StatelessWidget {
   Widget build(BuildContext context) {
     final details = appTranslate(
       context,
-      'Buscaremos otro jugador durante 30 segundos. Si no aparece nadie, podrás comenzar la partida contra el CPU.',
+      'Buscaremos jugadores durante un máximo de 10 segundos. Si faltan puestos, el CPU los completa automáticamente.',
     );
     return _PopSetupDialogShell(
       key: const ValueKey('quick-pop-entry-dialog'),
@@ -5300,7 +5920,7 @@ class _QuickPopEntryDialog extends StatelessWidget {
               ),
               icon: const Icon(Icons.public_rounded),
               label: _FitButtonLabel(
-                appTranslate(context, 'JUGAR ONLINE · BUSCAR 30 S'),
+                appTranslate(context, 'JUGAR ONLINE · BUSCAR 10 S'),
               ),
               style: FilledButton.styleFrom(
                 backgroundColor: const Color(0xFF7257E9),
@@ -5339,43 +5959,360 @@ class _QuickPopEntryDialog extends StatelessWidget {
   }
 }
 
-class _PassAndPlaySetupDialog extends StatelessWidget {
-  const _PassAndPlaySetupDialog();
+class _PassAndPlaySetup {
+  const _PassAndPlaySetup({
+    required this.mode,
+    required this.playerNames,
+    required this.humanPlayerColors,
+    required this.themeId,
+  });
+
+  final GameMode mode;
+  final Map<PlayerColor, String> playerNames;
+  final Set<PlayerColor> humanPlayerColors;
+  final String themeId;
+}
+
+class _PassAndPlaySetupDialog extends StatefulWidget {
+  const _PassAndPlaySetupDialog({
+    required this.initialPlayerName,
+    required this.themes,
+    required this.initialThemeId,
+  });
+
+  final String initialPlayerName;
+  final List<WalletProduct> themes;
+  final String? initialThemeId;
 
   @override
-  Widget build(BuildContext context) => _PopSetupDialogShell(
-    key: const ValueKey('pass-and-play-setup-dialog'),
-    child: SingleChildScrollView(
-      padding: const EdgeInsets.all(22),
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          const _PopSetupHeader(
-            icon: Icons.swap_horiz_rounded,
-            title: 'PASS & PLAY',
-            subtitle: 'Pasa el teléfono después de cada turno',
-            color: PopColors.green,
-          ),
-          const SizedBox(height: 16),
-          const PopText(
-            'Todos juegan en el mismo dispositivo. Elige las reglas de la mesa:',
-            textAlign: TextAlign.center,
-            style: TextStyle(
-              color: Color(0xFFEAF0FF),
-              fontWeight: FontWeight.w700,
-            ),
-          ),
-          const SizedBox(height: 14),
-          _GameModeChoices(
-            key: const ValueKey('pass-and-play-mode-step'),
-            keyPrefix: 'pass-play',
-            onSelected: (mode) => Navigator.pop(context, mode),
-          ),
-        ],
+  State<_PassAndPlaySetupDialog> createState() =>
+      _PassAndPlaySetupDialogState();
+}
+
+class _PassAndPlaySetupDialogState extends State<_PassAndPlaySetupDialog> {
+  static const _seatColors = <PlayerColor>[
+    PlayerColor.red,
+    PlayerColor.green,
+    PlayerColor.yellow,
+    PlayerColor.blue,
+  ];
+
+  late final List<TextEditingController> nameControllers;
+  final Set<int> clearedNameFields = <int>{};
+  late String selectedThemeId;
+  GameMode selectedMode = GameMode.traditional;
+  int playerCount = 2;
+
+  @override
+  void initState() {
+    super.initState();
+    final initialNames = <String>[
+      widget.initialPlayerName.trim().isEmpty
+          ? 'Jugador 1'
+          : widget.initialPlayerName.trim(),
+      'Jugador 2',
+      'Jugador 3',
+      'Jugador 4',
+    ];
+    nameControllers = [
+      for (final name in initialNames) TextEditingController(text: name),
+    ];
+    selectedThemeId =
+        widget.themes.any((theme) => theme.id == widget.initialThemeId)
+        ? widget.initialThemeId!
+        : widget.themes.first.id;
+  }
+
+  @override
+  void dispose() {
+    for (final controller in nameControllers) {
+      controller.dispose();
+    }
+    super.dispose();
+  }
+
+  Color _seatColor(PlayerColor color) => switch (color) {
+    PlayerColor.red => PopColors.red,
+    PlayerColor.green => PopColors.green,
+    PlayerColor.yellow => PopColors.yellow,
+    PlayerColor.blue => PopColors.blue,
+  };
+
+  String _seatName(int index) {
+    final supplied = nameControllers[index].text.trim();
+    return supplied.isEmpty ? 'Jugador ${index + 1}' : supplied;
+  }
+
+  void _start() {
+    final humanSeats = _seatColors.take(playerCount).toSet();
+    Navigator.pop(
+      context,
+      _PassAndPlaySetup(
+        mode: selectedMode,
+        humanPlayerColors: humanSeats,
+        themeId: selectedThemeId,
+        playerNames: <PlayerColor, String>{
+          for (var index = 0; index < playerCount; index++)
+            _seatColors[index]: _seatName(index),
+        },
       ),
-    ),
-  );
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final maxHeight = MediaQuery.sizeOf(context).height * .88;
+    final selectedTheme = widget.themes.firstWhere(
+      (theme) => theme.id == selectedThemeId,
+    );
+    final cpuSeats = 4 - playerCount;
+    return _PopSetupDialogShell(
+      key: const ValueKey('pass-and-play-setup-dialog'),
+      maxWidth: 620,
+      maxHeight: maxHeight,
+      child: SingleChildScrollView(
+        padding: const EdgeInsets.fromLTRB(22, 22, 22, 18),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            const _PopSetupHeader(
+              icon: Icons.swap_horiz_rounded,
+              title: 'PASS & PLAY',
+              subtitle: 'Prepara la mesa antes de empezar',
+              color: PopColors.green,
+            ),
+            const SizedBox(height: 18),
+            const PopText(
+              'JUGADORES HUMANOS',
+              style: TextStyle(
+                color: Colors.white,
+                fontSize: 14,
+                fontWeight: FontWeight.w900,
+                letterSpacing: .6,
+              ),
+            ),
+            const SizedBox(height: 8),
+            SegmentedButton<int>(
+              key: const ValueKey('pass-play-player-count'),
+              showSelectedIcon: false,
+              segments: const [
+                ButtonSegment(value: 1, label: Text('1 jugador')),
+                ButtonSegment(value: 2, label: Text('2 jugadores')),
+                ButtonSegment(value: 3, label: Text('3 jugadores')),
+                ButtonSegment(value: 4, label: Text('4 jugadores')),
+              ],
+              selected: {playerCount},
+              onSelectionChanged: (selection) =>
+                  setState(() => playerCount = selection.first),
+              style: ButtonStyle(
+                foregroundColor: const WidgetStatePropertyAll(Colors.white),
+                backgroundColor: WidgetStateProperty.resolveWith(
+                  (states) => states.contains(WidgetState.selected)
+                      ? PopColors.green
+                      : Colors.white.withValues(alpha: .10),
+                ),
+              ),
+            ),
+            const SizedBox(height: 12),
+            Container(
+              padding: const EdgeInsets.all(12),
+              decoration: BoxDecoration(
+                color: Colors.white.withValues(alpha: .10),
+                borderRadius: BorderRadius.circular(16),
+                border: Border.all(color: Colors.white.withValues(alpha: .20)),
+              ),
+              child: Row(
+                children: [
+                  const Icon(Icons.smart_toy_rounded, color: PopColors.yellow),
+                  const SizedBox(width: 9),
+                  Expanded(
+                    child: PopText(
+                      cpuSeats == 0
+                          ? 'Los 4 asientos son humanos.'
+                          : '$cpuSeats asiento${cpuSeats == 1 ? '' : 's'} restante${cpuSeats == 1 ? '' : 's'} jugará${cpuSeats == 1 ? '' : 'n'} con CPU.',
+                      style: const TextStyle(
+                        color: Color(0xFFEAF0FF),
+                        fontWeight: FontWeight.w700,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(height: 16),
+            const PopText(
+              'NOMBRES',
+              style: TextStyle(
+                color: Colors.white,
+                fontSize: 14,
+                fontWeight: FontWeight.w900,
+                letterSpacing: .6,
+              ),
+            ),
+            const SizedBox(height: 8),
+            for (var index = 0; index < playerCount; index++) ...[
+              TextField(
+                key: ValueKey('pass-play-name-$index'),
+                controller: nameControllers[index],
+                maxLength: 16,
+                onTap: () {
+                  if (clearedNameFields.add(index)) {
+                    nameControllers[index].clear();
+                  }
+                },
+                textCapitalization: TextCapitalization.words,
+                style: const TextStyle(
+                  color: Colors.white,
+                  fontWeight: FontWeight.w800,
+                ),
+                decoration: InputDecoration(
+                  counterText: '',
+                  prefixIcon: Icon(
+                    Icons.circle,
+                    color: _seatColor(_seatColors[index]),
+                    size: 19,
+                  ),
+                  labelText: 'Jugador ${index + 1}',
+                  labelStyle: const TextStyle(color: Color(0xFFC8D6F2)),
+                  filled: true,
+                  fillColor: Colors.white.withValues(alpha: .10),
+                  enabledBorder: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(14),
+                    borderSide: BorderSide(
+                      color: _seatColor(
+                        _seatColors[index],
+                      ).withValues(alpha: .75),
+                    ),
+                  ),
+                  focusedBorder: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(14),
+                    borderSide: BorderSide(
+                      color: _seatColor(_seatColors[index]),
+                      width: 2,
+                    ),
+                  ),
+                ),
+              ),
+              const SizedBox(height: 9),
+            ],
+            const SizedBox(height: 7),
+            const PopText(
+              'MODO DE JUEGO',
+              style: TextStyle(
+                color: Colors.white,
+                fontSize: 14,
+                fontWeight: FontWeight.w900,
+                letterSpacing: .6,
+              ),
+            ),
+            const SizedBox(height: 8),
+            SegmentedButton<GameMode>(
+              key: const ValueKey('pass-play-mode-step'),
+              showSelectedIcon: false,
+              segments: const [
+                ButtonSegment(
+                  value: GameMode.traditional,
+                  icon: Icon(Icons.workspace_premium_rounded),
+                  label: Text('Tradicional'),
+                ),
+                ButtonSegment(
+                  value: GameMode.chaos,
+                  icon: Icon(Icons.bolt_rounded),
+                  label: Text('Caos'),
+                ),
+              ],
+              selected: {selectedMode},
+              onSelectionChanged: (selection) =>
+                  setState(() => selectedMode = selection.first),
+              style: ButtonStyle(
+                foregroundColor: const WidgetStatePropertyAll(Colors.white),
+                backgroundColor: WidgetStateProperty.resolveWith(
+                  (states) => states.contains(WidgetState.selected)
+                      ? const Color(0xFF7B61FF)
+                      : Colors.white.withValues(alpha: .10),
+                ),
+              ),
+            ),
+            const SizedBox(height: 16),
+            const PopText(
+              'THEME DEL TABLERO',
+              style: TextStyle(
+                color: Colors.white,
+                fontSize: 14,
+                fontWeight: FontWeight.w900,
+                letterSpacing: .6,
+              ),
+            ),
+            const SizedBox(height: 8),
+            DropdownButtonFormField<String>(
+              key: const ValueKey('pass-play-theme'),
+              initialValue: selectedThemeId,
+              dropdownColor: PopColors.navy,
+              iconEnabledColor: Colors.white,
+              style: const TextStyle(
+                color: Colors.white,
+                fontWeight: FontWeight.w800,
+              ),
+              decoration: InputDecoration(
+                prefixIcon: Icon(
+                  Icons.palette_rounded,
+                  color: themeVisualSpecFor(selectedThemeId).framePrimaryColor,
+                ),
+                filled: true,
+                fillColor: Colors.white.withValues(alpha: .10),
+                enabledBorder: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(14),
+                  borderSide: BorderSide(
+                    color: themeVisualSpecFor(
+                      selectedThemeId,
+                    ).framePrimaryColor.withValues(alpha: .75),
+                  ),
+                ),
+                focusedBorder: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(14),
+                  borderSide: BorderSide(
+                    color: themeVisualSpecFor(
+                      selectedThemeId,
+                    ).framePrimaryColor,
+                    width: 2,
+                  ),
+                ),
+              ),
+              items: [
+                for (final theme in widget.themes)
+                  DropdownMenuItem(value: theme.id, child: Text(theme.name)),
+              ],
+              onChanged: (themeId) {
+                if (themeId != null) setState(() => selectedThemeId = themeId);
+              },
+            ),
+            const SizedBox(height: 7),
+            PopText(
+              selectedTheme.description,
+              style: const TextStyle(
+                color: Color(0xFFC8D6F2),
+                fontSize: 12,
+                fontWeight: FontWeight.w700,
+              ),
+            ),
+            const SizedBox(height: 20),
+            FilledButton.icon(
+              key: const ValueKey('pass-play-start-game'),
+              onPressed: _start,
+              icon: const Icon(Icons.play_arrow_rounded),
+              label: const _FitButtonLabel('EMPEZAR PARTIDA'),
+              style: FilledButton.styleFrom(
+                backgroundColor: PopColors.green,
+                foregroundColor: Colors.white,
+                minimumSize: const Size.fromHeight(54),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
 }
 
 class _OnlineModeDialog extends StatelessWidget {
@@ -6682,6 +7619,8 @@ class _ModeCard extends StatefulWidget {
     required this.title,
     required this.subtitle,
     required this.onTap,
+    this.artwork,
+    this.copyScale = 1,
     this.badge,
     this.featured = false,
     this.tile = false,
@@ -6694,6 +7633,8 @@ class _ModeCard extends StatefulWidget {
   final String title;
   final String subtitle;
   final VoidCallback onTap;
+  final Widget? artwork;
+  final double copyScale;
   final String? badge;
   final bool featured;
   final bool tile;
@@ -6708,6 +7649,14 @@ class _ModeCard extends StatefulWidget {
 class _ModeCardState extends State<_ModeCard> {
   bool pressed = false;
   bool hovered = false;
+
+  Widget _artwork(double size) => SizedBox(
+    width: size,
+    height: size,
+    child:
+        widget.artwork ??
+        _ModeArtwork(color: widget.color, icon: widget.icon, size: size),
+  );
 
   @override
   Widget build(BuildContext context) {
@@ -6844,11 +7793,7 @@ class _ModeCardState extends State<_ModeCard> {
                                               CrossAxisAlignment.center,
                                           children: [
                                             Center(
-                                              child: _ModeArtwork(
-                                                color: widget.color,
-                                                icon: widget.icon,
-                                                size: artworkSize,
-                                              ),
+                                              child: _artwork(artworkSize),
                                             ),
                                             SizedBox(
                                               height: compact
@@ -6891,6 +7836,7 @@ class _ModeCardState extends State<_ModeCard> {
                                                 dense: widget.dense,
                                                 veryNarrow: veryNarrow,
                                                 maxLines: compact ? 2 : 3,
+                                                fontScale: widget.copyScale,
                                               ),
                                             ),
                                           ],
@@ -6899,10 +7845,8 @@ class _ModeCardState extends State<_ModeCard> {
                                     )
                                   : Row(
                                       children: [
-                                        _ModeArtwork(
-                                          color: widget.color,
-                                          icon: widget.icon,
-                                          size: compact
+                                        _artwork(
+                                          compact
                                               ? 52
                                               : widget.dense
                                               ? 58
@@ -6931,6 +7875,7 @@ class _ModeCardState extends State<_ModeCard> {
                                                       ),
                                                   child: _ModeStatusBadge(
                                                     label: badge,
+                                                    large: widget.copyScale > 1,
                                                   ),
                                                 ),
                                               Center(
@@ -6954,6 +7899,7 @@ class _ModeCardState extends State<_ModeCard> {
                                                 dense: widget.dense,
                                                 veryNarrow: false,
                                                 maxLines: 3,
+                                                fontScale: widget.copyScale,
                                               ),
                                             ],
                                           ),
@@ -7016,6 +7962,7 @@ class _ResponsiveCardCopy extends StatelessWidget {
     required this.dense,
     required this.veryNarrow,
     required this.maxLines,
+    this.fontScale = 1,
   });
 
   final String text;
@@ -7024,6 +7971,7 @@ class _ResponsiveCardCopy extends StatelessWidget {
   final bool dense;
   final bool veryNarrow;
   final int maxLines;
+  final double fontScale;
 
   @override
   Widget build(BuildContext context) {
@@ -7039,7 +7987,7 @@ class _ResponsiveCardCopy extends StatelessWidget {
         : 13.0;
     // Keep accessibility scaling active while avoiding unreadably large copy
     // that would push the label outside its button on cover displays.
-    final effectiveSize = baseSize / math.max(1, scale * .84);
+    final effectiveSize = baseSize * fontScale / math.max(1, scale * .84);
     return PopText(
       text,
       maxLines: maxLines,
@@ -7057,13 +8005,17 @@ class _ResponsiveCardCopy extends StatelessWidget {
 }
 
 class _ModeStatusBadge extends StatelessWidget {
-  const _ModeStatusBadge({required this.label});
+  const _ModeStatusBadge({required this.label, this.large = false});
 
   final String label;
+  final bool large;
 
   @override
   Widget build(BuildContext context) => Container(
-    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+    padding: EdgeInsets.symmetric(
+      horizontal: large ? 10 : 8,
+      vertical: large ? 4.5 : 4,
+    ),
     decoration: BoxDecoration(
       color: PopColors.yellow,
       borderRadius: BorderRadius.circular(999),
@@ -7073,9 +8025,9 @@ class _ModeStatusBadge extends StatelessWidget {
       label,
       maxLines: 1,
       overflow: TextOverflow.ellipsis,
-      style: const TextStyle(
+      style: TextStyle(
         color: PopColors.navy,
-        fontSize: 8.5,
+        fontSize: large ? 10 : 8.5,
         height: 1,
         letterSpacing: .25,
         fontWeight: FontWeight.w900,
@@ -7197,6 +8149,108 @@ class _ModeArtwork extends StatelessWidget {
       ),
     );
   }
+}
+
+/// A bold, code-native mark for a shared local Parchís table: four colored
+/// pieces surround the dice, and the phone badge signals a shared device.
+class _PassAndPlayModeArtwork extends StatelessWidget {
+  const _PassAndPlayModeArtwork();
+
+  @override
+  Widget build(BuildContext context) => LayoutBuilder(
+    builder: (context, box) {
+      final side = math.min(box.maxWidth, box.maxHeight);
+      final tokenSize = side * .25;
+      return DecoratedBox(
+        decoration: BoxDecoration(
+          gradient: const LinearGradient(
+            begin: Alignment.topLeft,
+            end: Alignment.bottomRight,
+            colors: [Color(0xFF183D7D), Color(0xFF071A3F)],
+          ),
+          borderRadius: BorderRadius.circular(side * .30),
+          border: Border.all(color: Colors.white, width: 2),
+          boxShadow: const [
+            BoxShadow(
+              color: Color(0x4A07152F),
+              blurRadius: 10,
+              offset: Offset(0, 6),
+            ),
+          ],
+        ),
+        child: Stack(
+          children: [
+            for (final entry in [
+              (const Alignment(-.62, -.62), PopColors.blue),
+              (const Alignment(.62, -.62), PopColors.yellow),
+              (const Alignment(-.62, .62), PopColors.red),
+              (const Alignment(.62, .62), PopColors.green),
+            ])
+              Align(
+                alignment: entry.$1,
+                child: Container(
+                  width: tokenSize,
+                  height: tokenSize,
+                  decoration: BoxDecoration(
+                    color: entry.$2,
+                    shape: BoxShape.circle,
+                    border: Border.all(color: Colors.white, width: 1.5),
+                    boxShadow: const [
+                      BoxShadow(
+                        color: Color(0x33000000),
+                        blurRadius: 3,
+                        offset: Offset(0, 2),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            Center(
+              child: Container(
+                width: side * .58,
+                height: side * .58,
+                decoration: BoxDecoration(
+                  color: Colors.white,
+                  borderRadius: BorderRadius.circular(side * .16),
+                  border: Border.all(color: PopColors.yellow, width: 2),
+                  boxShadow: const [
+                    BoxShadow(
+                      color: Color(0x40000000),
+                      blurRadius: 5,
+                      offset: Offset(0, 3),
+                    ),
+                  ],
+                ),
+                child: Icon(
+                  Icons.casino_rounded,
+                  color: PopColors.navy,
+                  size: side * .39,
+                ),
+              ),
+            ),
+            Positioned(
+              right: -side * .05,
+              bottom: -side * .05,
+              child: Container(
+                width: side * .34,
+                height: side * .34,
+                decoration: BoxDecoration(
+                  color: PopColors.green,
+                  shape: BoxShape.circle,
+                  border: Border.all(color: Colors.white, width: 1.5),
+                ),
+                child: Icon(
+                  Icons.phone_iphone_rounded,
+                  color: Colors.white,
+                  size: side * .20,
+                ),
+              ),
+            ),
+          ],
+        ),
+      );
+    },
+  );
 }
 
 String _formatCoins(int value) {
@@ -8077,86 +9131,106 @@ class _MatchExitDialogFrame extends StatelessWidget {
   final bool stackActions;
 
   @override
-  Widget build(BuildContext context) => _PopSetupDialogShell(
-    maxWidth: 420,
-    insetPadding: const EdgeInsets.symmetric(horizontal: 24, vertical: 20),
-    padding: const EdgeInsets.fromLTRB(20, 18, 20, 16),
-    child: Column(
-      mainAxisSize: MainAxisSize.min,
-      children: [
-        Container(
-          width: 62,
-          height: 62,
-          decoration: BoxDecoration(
-            color: iconColor,
-            shape: BoxShape.circle,
-            border: Border.all(color: Colors.white, width: 3),
-            boxShadow: [
-              BoxShadow(
-                color: iconColor.withValues(alpha: .6),
-                blurRadius: 12,
-                offset: const Offset(0, 4),
-              ),
-            ],
-          ),
-          child: Icon(icon, color: Colors.white, size: 31),
-        ),
-        const SizedBox(height: 13),
-        PopText(
-          title,
-          textAlign: TextAlign.center,
-          style: const TextStyle(
-            color: Colors.white,
-            fontSize: 21,
-            fontWeight: FontWeight.w900,
-            letterSpacing: .35,
-          ),
-        ),
-        const SizedBox(height: 8),
-        Container(
-          width: double.infinity,
-          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 11),
-          decoration: BoxDecoration(
-            color: Colors.white.withValues(alpha: .11),
-            borderRadius: BorderRadius.circular(15),
-            border: Border.all(color: Colors.white.withValues(alpha: .2)),
-          ),
-          child: PopText(
-            message,
-            textAlign: TextAlign.center,
-            style: const TextStyle(
-              color: Color(0xFFF3F7FF),
-              fontSize: 14,
-              fontWeight: FontWeight.w700,
-              height: 1.25,
-            ),
-          ),
-        ),
-        const SizedBox(height: 14),
-        if (stackActions)
-          Column(
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              for (final entry in actions.asMap().entries)
-                Padding(
-                  padding: EdgeInsets.only(
-                    top: entry.key == actions.length - 1 ? 3 : 0,
-                    bottom: entry.key == actions.length - 1 ? 0 : 8,
+  Widget build(BuildContext context) {
+    // Android phones can have a short usable viewport once the status bar,
+    // navigation controls, keyboard, and an adaptive banner are reserved.
+    // The confirmation must remain actionable instead of allowing its final
+    // button to render below the dialog bounds.
+    final view = MediaQuery.sizeOf(context);
+    final safeArea = MediaQuery.paddingOf(context);
+    final keyboard = MediaQuery.viewInsetsOf(context);
+    final maxHeight = math.max(
+      240.0,
+      view.height - safeArea.top - safeArea.bottom - keyboard.bottom - 40,
+    );
+    return _PopSetupDialogShell(
+      maxWidth: 420,
+      maxHeight: maxHeight,
+      insetPadding: const EdgeInsets.symmetric(horizontal: 24, vertical: 20),
+      padding: const EdgeInsets.fromLTRB(20, 18, 20, 16),
+      child: SingleChildScrollView(
+        key: const ValueKey('match-exit-dialog-scroll'),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Container(
+              width: 62,
+              height: 62,
+              decoration: BoxDecoration(
+                color: iconColor,
+                shape: BoxShape.circle,
+                border: Border.all(color: Colors.white, width: 3),
+                boxShadow: [
+                  BoxShadow(
+                    color: iconColor.withValues(alpha: .6),
+                    blurRadius: 12,
+                    offset: const Offset(0, 4),
                   ),
-                  child: SizedBox(width: double.infinity, child: entry.value),
+                ],
+              ),
+              child: Icon(icon, color: Colors.white, size: 31),
+            ),
+            const SizedBox(height: 13),
+            PopText(
+              title,
+              textAlign: TextAlign.center,
+              style: const TextStyle(
+                color: Colors.white,
+                fontSize: 21,
+                fontWeight: FontWeight.w900,
+                letterSpacing: .35,
+              ),
+            ),
+            const SizedBox(height: 8),
+            Container(
+              width: double.infinity,
+              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 11),
+              decoration: BoxDecoration(
+                color: Colors.white.withValues(alpha: .11),
+                borderRadius: BorderRadius.circular(15),
+                border: Border.all(color: Colors.white.withValues(alpha: .2)),
+              ),
+              child: PopText(
+                message,
+                textAlign: TextAlign.center,
+                style: const TextStyle(
+                  color: Color(0xFFF3F7FF),
+                  fontSize: 14,
+                  fontWeight: FontWeight.w700,
+                  height: 1.25,
                 ),
-            ],
-          )
-        else
-          Wrap(
-            alignment: WrapAlignment.center,
-            spacing: 8,
-            runSpacing: 8,
-            children: actions,
-          ),
-      ],
-    ),
-  );
+              ),
+            ),
+            const SizedBox(height: 14),
+            if (stackActions)
+              Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  for (final entry in actions.asMap().entries)
+                    Padding(
+                      padding: EdgeInsets.only(
+                        top: entry.key == actions.length - 1 ? 3 : 0,
+                        bottom: entry.key == actions.length - 1 ? 0 : 8,
+                      ),
+                      child: SizedBox(
+                        width: double.infinity,
+                        child: entry.value,
+                      ),
+                    ),
+                ],
+              )
+            else
+              Wrap(
+                alignment: WrapAlignment.center,
+                spacing: 8,
+                runSpacing: 8,
+                children: actions,
+              ),
+          ],
+        ),
+      ),
+    );
+  }
 }
 
 class GameScreen extends StatefulWidget {
@@ -8171,9 +9245,11 @@ class GameScreen extends StatefulWidget {
     this.tutorial,
     this.guidedTutorial = false,
     this.passAndPlay = false,
+    this.passAndPlayThemeId,
     this.localProfile,
     this.onlineSession,
     this.onlineGameSync,
+    this.onlineV3Game,
     this.onOnlineRematch,
     this.analytics = const NoopGameAnalytics(),
     this.analyticsMatchRef,
@@ -8195,9 +9271,11 @@ class GameScreen extends StatefulWidget {
   final TutorialController? tutorial;
   final bool guidedTutorial;
   final bool passAndPlay;
+  final String? passAndPlayThemeId;
   final PlayerProfile? localProfile;
   final OnlineMatchSession? onlineSession;
   final OnlineGameSyncClient? onlineGameSync;
+  final OnlineV3QuickPopGameController? onlineV3Game;
   final ValueChanged<BuildContext>? onOnlineRematch;
   final GameAnalytics analytics;
   final String? analyticsMatchRef;
@@ -8266,13 +9344,13 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
   // If the active online host leaves permanently, the last connected client
   // continues from the durable checkpoint and lets the CPU drive remote seats.
   bool onlineHostCpuFallbackActive = false;
-  bool rollGuideEnabled = true;
+  bool rollGuideEnabled = false;
   bool minimapEnabled = true;
   bool minimapPreferenceExplicit = false;
   bool diceHandEffectEnabled = true;
   bool diceHandEffectPreferenceExplicit = false;
-  bool moveCalloutsEnabled = true;
-  bool moveChoicePanelEnabled = true;
+  bool moveCalloutsEnabled = false;
+  bool moveChoicePanelEnabled = false;
   DiceHandPreference diceHandPreference = DiceHandPreference.right;
   bool rollGuideVisible = false;
   bool rollGuideAppActive = true;
@@ -8318,6 +9396,8 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
   bool get _gameDiagnosticsVisible =>
       widget.onlineSession != null && onlineDiagnosticsUiEnabled;
 
+  bool get _usesOnlineV3 => widget.onlineV3Game != null;
+
   /// The local seat is red for legacy CPU/tutorial matches, but an online
   /// room can assign this device any of the four clockwise colors.
   PlayerColor get _localPlayerColor =>
@@ -8327,6 +9407,9 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
       engine.currentPlayer.isHuman &&
       (widget.passAndPlay || engine.currentPlayer.color == _localPlayerColor) &&
       !localCpuTakeoverActive &&
+      (widget.onlineV3Game == null ||
+          (widget.onlineV3Game!.isLocalHumanTurn &&
+              !widget.onlineV3Game!.submitting)) &&
       (widget.onlineGameSync == null ||
           onlineHostCpuFallbackActive ||
           (widget.onlineGameSync!.connectionState ==
@@ -8337,7 +9420,8 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
       widget.onlineGameSync?.localParticipantAwaitingNextTurn ?? false;
 
   bool get _isCpuControlledTurn {
-    if (widget.passAndPlay) return false;
+    if (widget.passAndPlay) return !engine.currentPlayer.isHuman;
+    if (_usesOnlineV3) return false;
     final sync = widget.onlineGameSync;
     final session = widget.onlineSession;
     if (sync != null && session != null) {
@@ -8355,7 +9439,7 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
   bool get _showOnlineHostRecovery {
     final sync = widget.onlineGameSync;
     return sync != null &&
-        !sync.isHost &&
+        !sync.hasAuthority &&
         !engine.gameOver &&
         (onlineHostCpuFallbackActive ||
             sync.hostAvailability != OnlineHostAvailability.available);
@@ -8599,7 +9683,8 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
           : QuickPopDiagnosticState.waiting,
       detail: sync == null
           ? 'local engine only'
-          : 'connection=${sync.connectionState.name} host=${sync.isHost} '
+          : 'connection=${sync.connectionState.name} originalHost=${sync.isHost} '
+                'authority=${sync.hasAuthority} activeHost=${sync.activeHostUid ?? 'unknown'} '
                 'revision=${sync.revision} stateRevision=${sync.stateRevision}',
       path: sync?.matchPath,
     );
@@ -8611,6 +9696,7 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
     final signature =
         '${sync.connectionState.name}|${sync.hostAvailability.name}|'
         '${sync.revision}|${sync.stateRevision}|${sync.isHost}|'
+        '${sync.hasAuthority}|${sync.activeHostUid ?? 'unknown'}|'
         '${sync.localParticipantAwaitingNextTurn}|${engine.currentPlayer.color.name}|'
         '${engine.hasRolled}|${engine.effectResolving}|${engine.gameOver}';
     if (signature == gameDiagnosticLastSyncSignature) return;
@@ -8626,7 +9712,8 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
       'SYNC_UPDATE',
       state: state,
       detail:
-          'connection=${sync.connectionState.name} host=${sync.isHost} '
+          'connection=${sync.connectionState.name} originalHost=${sync.isHost} '
+          'authority=${sync.hasAuthority} activeHost=${sync.activeHostUid ?? 'unknown'} '
           'availability=${sync.hostAvailability.name} revision=${sync.revision} '
           'stateRevision=${sync.stateRevision} waitingForTurn='
           '${sync.localParticipantAwaitingNextTurn} current=${engine.currentPlayer.color.name} '
@@ -8682,6 +9769,9 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
     await Clipboard.setData(ClipboardData(text: text));
     if (!mounted) return;
     setState(() => gameDiagnosticCopied = true);
+    // The dialog is presented on its own route and listens to this notifier;
+    // update it as well so the copy action immediately changes to COPIADO.
+    gameDiagnosticRevision.value++;
     if (sync != null) _recordGameDiagnosticSync();
   }
 
@@ -8846,6 +9936,7 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
     }
     engine.addListener(_onGameChanged);
     widget.onlineGameSync?.addListener(_onOnlineSyncChanged);
+    widget.onlineV3Game?.addListener(_onOnlineV3Changed);
     _refreshHostRecoveryTimer();
     unawaited(widget.onlineGameSync?.start());
     widget.wallet?.addListener(_onWalletChanged);
@@ -8871,11 +9962,18 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
       unawaited(_saveMatchCheckpoint());
       final sync = widget.onlineGameSync;
       if (sync != null &&
-          !sync.isHost &&
+          !sync.hasAuthority &&
           sync.requiresHostRecovery &&
           !onlineHostCpuFallbackActive) {
-        _activateOnlineHostCpuFallback(sync);
-        return;
+        _recordGameDiagnostic(
+          'HOST_WAITING_FOR_TAKEOVER',
+          state: QuickPopDiagnosticState.waiting,
+          detail:
+              'room=${sync.roomId} activeHost=${sync.activeHostUid ?? 'unknown'} '
+              'grace=${sync.hostReconnectDeadline?.toIso8601String() ?? 'expired'}',
+          path: sync.matchPath,
+          deduplicate: false,
+        );
       }
       // A restored checkpoint can open directly on a CPU turn without a fresh
       // engine notification. Kick the existing CPU driver once after mount.
@@ -8909,6 +10007,19 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
       _bindOnlineSafeChat();
       _refreshHostRecoveryTimer();
     }
+    if (oldWidget.onlineV3Game != widget.onlineV3Game) {
+      oldWidget.onlineV3Game?.removeListener(_onOnlineV3Changed);
+      widget.onlineV3Game?.addListener(_onOnlineV3Changed);
+    }
+  }
+
+  void _onOnlineV3Changed() {
+    if (!mounted) return;
+    final failure = widget.onlineV3Game?.lastError;
+    if (failure != null && !widget.onlineV3Game!.submitting) {
+      _showOnlineActionError(failure);
+    }
+    setState(() {});
   }
 
   void _bindOnlineSafeChat() {
@@ -8997,11 +10108,18 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
       );
     }
     if (sync != null &&
-        !sync.isHost &&
+        !sync.hasAuthority &&
         sync.requiresHostRecovery &&
         !onlineHostCpuFallbackActive) {
-      _activateOnlineHostCpuFallback(sync);
-      return;
+      _recordGameDiagnostic(
+        'HOST_WAITING_FOR_TAKEOVER',
+        state: QuickPopDiagnosticState.waiting,
+        detail:
+            'room=${sync.roomId} activeHost=${sync.activeHostUid ?? 'unknown'} '
+            'grace=${sync.hostReconnectDeadline?.toIso8601String() ?? 'expired'}',
+        path: sync.matchPath,
+        deduplicate: false,
+      );
     }
     _refreshHostRecoveryTimer();
     if (!engine.gameOver && _isCpuControlledTurn && !cpuThinking) {
@@ -9015,7 +10133,7 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
     final sync = widget.onlineGameSync;
     final needsCountdown =
         sync != null &&
-        !sync.isHost &&
+        !sync.hasAuthority &&
         sync.hostAvailability == OnlineHostAvailability.reconnecting;
     if (!needsCountdown) {
       hostRecoveryUiTimer?.cancel();
@@ -9029,7 +10147,7 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
 
   Future<void> _retryOnlineHostRecovery() async {
     final sync = widget.onlineGameSync;
-    if (sync == null || sync.isHost || hostRecoveryRetrying) return;
+    if (sync == null || sync.hasAuthority || hostRecoveryRetrying) return;
     setState(() => hostRecoveryRetrying = true);
     var recovered = false;
     try {
@@ -9050,8 +10168,13 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
     }
   }
 
+  // Kept as a compatibility hook for older saved sessions; the lease-based
+  // authority path now handles takeover automatically.
+  // ignore: unused_element
   void _activateOnlineHostCpuFallback(OnlineGameSyncClient sync) {
-    if (onlineHostCpuFallbackActive || sync.isHost || engine.gameOver) return;
+    if (onlineHostCpuFallbackActive || sync.hasAuthority || engine.gameOver) {
+      return;
+    }
     _recordGameDiagnostic(
       'HOST_CPU_FALLBACK_ACTIVATED',
       state: QuickPopDiagnosticState.info,
@@ -9132,6 +10255,7 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
     widget.wallet?.removeListener(_onWalletChanged);
     engine.removeListener(_onGameChanged);
     widget.onlineGameSync?.removeListener(_onOnlineSyncChanged);
+    widget.onlineV3Game?.removeListener(_onOnlineV3Changed);
     unawaited(onlineSafeChatSubscription?.cancel());
     if (widget.onlineSession != null) {
       _recordGameDiagnostic(
@@ -9143,6 +10267,7 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
       );
     }
     widget.onlineGameSync?.dispose();
+    widget.onlineV3Game?.dispose();
     if (ownsEngine) engine.dispose();
     gameDiagnosticRevision.dispose();
     super.dispose();
@@ -9201,6 +10326,14 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
       _cancelRollGuide(resetWindow: true, notify: false);
       mobileBoardCameraMode = _MobileBoardCameraMode.fullBoard;
       unawaited(_saveMatchCheckpoint());
+      // iOS may keep the RTDB socket alive briefly after Home. Mark this
+      // seat AFK explicitly so the server begins its CPU grace timer now.
+      if (state == AppLifecycleState.paused ||
+          state == AppLifecycleState.hidden ||
+          state == AppLifecycleState.detached) {
+        final v3 = widget.onlineV3Game;
+        if (v3 != null) unawaited(v3.pause());
+      }
       if (widget.onlineGameSync case final sync?) {
         if (state == AppLifecycleState.detached) {
           _recordGameDiagnostic(
@@ -9259,6 +10392,9 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
         );
         unawaited(_reconnectOnlineSyncAfterResume(sync));
       }
+      if (widget.onlineV3Game case final v3?) {
+        unawaited(v3.resume());
+      }
       unawaited(_saveMatchCheckpoint());
       unawaited(_loadRollGuidePreferences(rearm: true));
       MobileAdsScope.maybeOf(context)?.preloadRewarded();
@@ -9303,7 +10439,7 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
   Future<void> _loadRollGuidePreferences({bool rearm = false}) async {
     final tabletViewport = _isTabletGameViewport(context);
     final store = await SharedPreferences.getInstance();
-    final enabled = store.getBool(settingsRollGuideKey) ?? true;
+    final enabled = store.getBool(settingsRollGuideKey) ?? false;
     final showMinimap = store.containsKey(settingsMinimapKey)
         ? store.getBool(settingsMinimapKey) ?? !tabletViewport
         : !tabletViewport;
@@ -9314,9 +10450,9 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
     final hasHandEffectPreference = store.containsKey(
       settingsDiceHandEffectKey,
     );
-    final showMoveCallouts = store.getBool(settingsMoveCalloutsKey) ?? true;
+    final showMoveCallouts = store.getBool(settingsMoveCalloutsKey) ?? false;
     final showMoveChoicePanel =
-        store.getBool(settingsMoveChoicePanelKey) ?? true;
+        store.getBool(settingsMoveChoicePanelKey) ?? false;
     final hand = diceHandPreferenceFromStorage(
       store.getString(settingsDiceHandKey),
     );
@@ -9418,8 +10554,31 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
       unawaited(_rollOnline(sync, reduceMotion: reduceMotion));
       return;
     }
+    final v3 = widget.onlineV3Game;
+    if (v3 != null) {
+      unawaited(_rollOnlineV3(v3, reduceMotion: reduceMotion));
+      return;
+    }
     engine.roll();
     _presentRolledDice(reduceMotion: reduceMotion);
+  }
+
+  Future<void> _rollOnlineV3(
+    OnlineV3QuickPopGameController v3, {
+    required bool reduceMotion,
+  }) async {
+    try {
+      await v3.roll();
+      if (!mounted) return;
+      _presentRolledDice(reduceMotion: reduceMotion);
+    } catch (error) {
+      if (!mounted) return;
+      setState(() {
+        diceThrowInProgress = false;
+        diceThrowResult = null;
+      });
+      _showOnlineActionError(error);
+    }
   }
 
   Future<void> _rollOnline(
@@ -9534,6 +10693,11 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
     if (onlineMoveSubmitting) return;
     final sync = onlineHostCpuFallbackActive ? null : widget.onlineGameSync;
     if (sync == null) {
+      final v3 = widget.onlineV3Game;
+      if (v3 != null) {
+        unawaited(_submitOnlineV3Move(v3, command));
+        return;
+      }
       engine.executeMoveCommand(command);
       return;
     }
@@ -9545,6 +10709,21 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
         usesAllDice: command.usesAllDice,
       ),
     );
+  }
+
+  Future<void> _submitOnlineV3Move(
+    OnlineV3QuickPopGameController v3,
+    LegalMoveCommand command,
+  ) async {
+    try {
+      if (command.usesAllDice) {
+        await v3.moveAll(tokenId: command.token.id);
+      } else {
+        await v3.move(tokenId: command.token.id, die: command.die!);
+      }
+    } catch (error) {
+      if (mounted) _showOnlineActionError(error);
+    }
   }
 
   Future<void> _submitOnlineMove(
@@ -9813,13 +10992,14 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
   }
 
   Future<void> _openGameSettings() async {
+    if (!mounted) return;
     _cancelRollGuide(resetWindow: true);
-    await Navigator.push<void>(
-      context,
+    await Navigator.of(context).push<void>(
       MaterialPageRoute(
         builder: (_) => SettingsScreen(
           themeId: 'theme_default',
           analytics: widget.analytics,
+          hideDiceHandControls: widget.passAndPlay,
         ),
       ),
     );
@@ -9861,7 +11041,11 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
     // Live online matches reconnect from the authoritative room document;
     // persisting a device-local replica would incorrectly turn it into a CPU
     // match after a restart.
-    if (_usesGuidedTutorial || widget.onlineGameSync != null) return;
+    if (_usesGuidedTutorial ||
+        widget.onlineGameSync != null ||
+        widget.onlineV3Game != null) {
+      return;
+    }
     final store = await SharedPreferences.getInstance();
     if (engine.gameOver) {
       await store.remove('active_match_checkpoint');
@@ -10039,9 +11223,28 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
   Future<void> _trackProgressionEvent(GameEvent event) async {
     if (_usesGuidedTutorial) return;
     final controller = widget.progression;
-    if (controller == null || event.playerColor != _localPlayerColor) return;
+    if (controller == null) return;
     final eventId = '${progressionEventRunRef}_${event.sequence}';
     final transactions = <ProgressionTransaction>[];
+    if (widget.passAndPlay && event.type == GameEventType.turnStarted) {
+      final player = engine.players.firstWhere(
+        (candidate) => candidate.color == event.playerColor,
+      );
+      if (player.isHuman) {
+        final update = await controller.recordSharedTableTurn(
+          eventId: '${eventId}_shared_table_turn',
+        );
+        transactions.addAll(update.transactions);
+      }
+    }
+
+    // The original daily missions remain personal to the red local profile.
+    // Pass & Play has its own shared-table track above, which counts every
+    // human seat rather than accidentally treating CPU turns as player turns.
+    if (event.playerColor != _localPlayerColor) {
+      await _creditProgression(transactions);
+      return;
+    }
     final releasedQuickPopToken =
         engine.matchFormat == MatchFormat.quickPop &&
         event.type == GameEventType.move &&
@@ -10086,6 +11289,8 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
           CurrencySource.firstMatchOfDay,
         ProgressionTransactionSource.dailyMoveMission ||
         ProgressionTransactionSource.dailyReleaseMission ||
+        ProgressionTransactionSource.sharedTableTurnsMission ||
+        ProgressionTransactionSource.sharedTableMatchMission ||
         ProgressionTransactionSource.weeklyMatchesMission =>
           CurrencySource.mission,
         ProgressionTransactionSource.rewardedDouble =>
@@ -10120,6 +11325,16 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
           ProgressionTransactionSource.dailyReleaseMission => (
             MissionKind.releaseToken,
             progression.dailyMissions.tokenReleased ? 1 : 0,
+            1,
+          ),
+          ProgressionTransactionSource.sharedTableTurnsMission => (
+            MissionKind.sharedTableTurns,
+            progression.sharedTableMissions.turnsPlayed,
+            progression.sharedTableMissions.turnTarget,
+          ),
+          ProgressionTransactionSource.sharedTableMatchMission => (
+            MissionKind.sharedTableMatch,
+            progression.sharedTableMissions.matchCompleted ? 1 : 0,
             1,
           ),
           ProgressionTransactionSource.weeklyMatchesMission => (
@@ -10159,6 +11374,11 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
     final matchId =
         analyticsMatch.correlation.anonymousMatchId ??
         'local_${engine.hashCode}';
+    if (widget.passAndPlay) {
+      final sharedTableUpdate = await progression
+          .recordSharedTableMatchCompleted(matchId: matchId);
+      await _creditProgression(sharedTableUpdate.transactions);
+    }
     ProgressionUpdate update;
     if (!matchCompletionRewardSettled) {
       matchCompletionRewardSettled = true;
@@ -10275,6 +11495,95 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
     }
   }
 
+  Future<void> _claimPassAndPlayCpuSeat(PlayerColor color) async {
+    if (!widget.passAndPlay) return;
+    final player = engine.players.firstWhere(
+      (candidate) => candidate.color == color,
+    );
+    if (player.isHuman) return;
+    final controller = TextEditingController();
+    final name = await showDialog<String>(
+      context: context,
+      builder: (dialogContext) => _PopSetupDialogShell(
+        maxWidth: 410,
+        child: Padding(
+          padding: const EdgeInsets.all(22),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              const _PopSetupHeader(
+                icon: Icons.person_add_alt_1_rounded,
+                title: 'UNIRSE A LA PARTIDA',
+                subtitle: 'El CPU conserva sus fichas y su turno',
+                color: PopColors.green,
+              ),
+              const SizedBox(height: 18),
+              TextField(
+                key: ValueKey('pass-play-claim-name-${color.name}'),
+                controller: controller,
+                autofocus: true,
+                maxLength: 16,
+                textCapitalization: TextCapitalization.words,
+                onSubmitted: (value) => Navigator.pop(dialogContext, value),
+                style: const TextStyle(
+                  color: Colors.white,
+                  fontWeight: FontWeight.w800,
+                ),
+                decoration: InputDecoration(
+                  labelText: 'Nombre del jugador',
+                  counterText: '',
+                  labelStyle: const TextStyle(color: Color(0xFFC8D6F2)),
+                  filled: true,
+                  fillColor: Colors.white.withValues(alpha: .10),
+                  enabledBorder: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(14),
+                    borderSide: BorderSide(
+                      color: _playerUiColor(color).withValues(alpha: .75),
+                    ),
+                  ),
+                  focusedBorder: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(14),
+                    borderSide: BorderSide(
+                      color: _playerUiColor(color),
+                      width: 2,
+                    ),
+                  ),
+                ),
+              ),
+              const SizedBox(height: 14),
+              FilledButton.icon(
+                key: ValueKey('pass-play-claim-confirm-${color.name}'),
+                onPressed: () => Navigator.pop(dialogContext, controller.text),
+                icon: const Icon(Icons.check_rounded),
+                label: const _FitButtonLabel('ENTRAR AL JUEGO'),
+                style: FilledButton.styleFrom(
+                  backgroundColor: PopColors.green,
+                  minimumSize: const Size.fromHeight(50),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+    final resolvedName = name?.trim() ?? '';
+    // A dialog route remains mounted for its reverse animation after pop.
+    // Keep the controller alive until that animation is complete so its
+    // TextField cannot rebuild against an already-disposed controller.
+    unawaited(
+      Future<void>.delayed(
+        const Duration(milliseconds: 300),
+      ).then((_) => controller.dispose()),
+    );
+    if (!mounted || resolvedName.isEmpty) return;
+    if (engine.claimCpuSeat(color, name: resolvedName)) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: PopText('$resolvedName se unió a la partida.')),
+      );
+    }
+  }
+
   void _queueVictoryCelebration() {
     if (victoryQueued || engine.winner == null) return;
     victoryQueued = true;
@@ -10311,6 +11620,19 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
     }
     final ads = MobileAdsScope.maybeOf(context);
     if (ads == null || !ads.supported) return;
+    if (!ads.rewardedReady) {
+      ads.preloadRewarded();
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: PopText(
+              'Estamos preparando el anuncio. Inténtalo en un momento.',
+            ),
+          ),
+        );
+      }
+      return;
+    }
     final rewardAmount = widget.progression == null ? 100 : matchBasePayout;
     if (rewardAmount <= 0 ||
         (widget.progression != null && !matchCompletionRewardSettled)) {
@@ -10319,7 +11641,13 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
 
     finalReturnTimer?.cancel();
     final legacyBalanceBefore = widget.wallet?.balance;
-    setState(() => endMatchRewardInProgress = true);
+    // Keep the victory route visually stable while Android attaches the
+    // full-screen rewarded activity. The Shop uses the same direct hand-off;
+    // rebuilding this large animated result overlay immediately before
+    // `show()` can leave some Android devices on a black native surface.
+    // The field still blocks a second tap, and the UI is refreshed once the
+    // ad returns its terminal result.
+    endMatchRewardInProgress = true;
     unawaited(
       widget.analytics.logEvent(
         RewardedAdEvent(
@@ -10415,6 +11743,10 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
     finalReturnTimer?.cancel();
     _logMatchCompleted(placement: engine.placementFor(_localPlayerColor));
     _logRewardedDeclinedIfIgnored();
+    if (widget.onlineV3Game != null) {
+      unawaited(_restartOnlineV3QuickPop());
+      return;
+    }
     final playType = _playTypeForSession(widget.onlineSession);
     if (widget.onlineGameSync != null) {
       final onlineRematch = widget.onOnlineRematch;
@@ -10448,6 +11780,33 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
     );
   }
 
+  Future<void> _restartOnlineV3QuickPop() async {
+    final v3 = widget.onlineV3Game;
+    final profile = widget.localProfile;
+    final wallet = widget.wallet;
+    if (v3 == null || profile == null || wallet == null) {
+      await _returnToStart();
+      return;
+    }
+    try {
+      await v3.leaveMatch();
+    } catch (error) {
+      debugPrint('Online V3 match release before rematch failed: $error');
+    }
+    if (!mounted) return;
+    Navigator.of(context).pushReplacement(
+      MaterialPageRoute<void>(
+        builder: (_) => _OnlineV3QuickPopSearchScreen(
+          profile: profile,
+          wallet: wallet,
+          progression: widget.progression,
+          tutorial: widget.tutorial,
+          analytics: widget.analytics,
+        ),
+      ),
+    );
+  }
+
   Future<void> _runPostVictoryNavigation(
     Future<void> Function() navigate,
   ) async {
@@ -10462,8 +11821,13 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
     }
   }
 
-  Future<void> _playAgainFromVictory() =>
-      _runPostVictoryNavigation(() async => _playAgain());
+  Future<void> _playAgainFromVictory() => _runPostVictoryNavigation(() async {
+    if (_usesOnlineV3) {
+      await _restartOnlineV3QuickPop();
+      return;
+    }
+    _playAgain();
+  });
 
   Future<void> _homeFromVictory() {
     unawaited(
@@ -10778,6 +12142,14 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
 
   Future<void> _leaveToHome({required bool discardSavedMatch}) async {
     finalReturnTimer?.cancel();
+    final v3 = widget.onlineV3Game;
+    if (v3 != null) {
+      try {
+        await v3.leaveMatch();
+      } catch (error) {
+        debugPrint('Online V3 match release before exit failed: $error');
+      }
+    }
     if (discardSavedMatch) {
       if (engine.gameOver) {
         _logMatchCompleted(placement: engine.placementFor(_localPlayerColor));
@@ -10808,7 +12180,7 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
       if (navigator.canPop()) navigator.pop();
       return;
     }
-    if (_sessionHasRemoteHuman(widget.onlineSession)) {
+    if (_usesOnlineV3 || _sessionHasRemoteHuman(widget.onlineSession)) {
       final leaveOnline = await showDialog<bool>(
         context: context,
         builder: (dialogContext) => _MatchExitDialogFrame(
@@ -11050,6 +12422,17 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
     final tappedToken = _ownTokenAt(tapped, excluding: excluding);
     if (tappedToken == null) return false;
     if (!_tutorialAllowsToken(tappedToken)) return true;
+    // In Pass & Play, a rolled 5 is the dedicated exit action. Tapping a
+    // piece still in the nest should take it straight onto the board instead
+    // of making the player select the piece and then tap the same 5 again.
+    if (widget.passAndPlay &&
+        tappedToken.inNest &&
+        engine.legalDiceFor(tappedToken).contains(5) &&
+        _tutorialAllowsMove(tappedToken, 5)) {
+      setState(() => selectedToken = tappedToken);
+      _moveSelectedToken(5);
+      return true;
+    }
     if (!identical(tappedToken, selectedToken)) {
       final canSelect =
           engine.legalDiceFor(tappedToken).isNotEmpty ||
@@ -11122,6 +12505,20 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
     setState(() => selectedToken = null);
     final sync = onlineHostCpuFallbackActive ? null : widget.onlineGameSync;
     if (sync == null) {
+      final v3 = widget.onlineV3Game;
+      if (v3 != null) {
+        unawaited(
+          _submitOnlineV3Move(
+            v3,
+            LegalMoveCommand.singleDie(
+              token: token,
+              die: die,
+              destinationProgress: token.progress,
+            ),
+          ),
+        );
+        return;
+      }
       engine.moveToken(token, die: die);
     } else {
       unawaited(
@@ -11151,6 +12548,15 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
     setState(() => selectedToken = null);
     final sync = onlineHostCpuFallbackActive ? null : widget.onlineGameSync;
     if (sync == null) {
+      final v3 = widget.onlineV3Game;
+      if (v3 != null) {
+        unawaited(
+          v3.moveAll(tokenId: token.id).catchError((Object error) {
+            if (mounted) _showOnlineActionError(error);
+          }),
+        );
+        return;
+      }
       engine.moveTokenUsingAllDice(token);
     } else {
       unawaited(
@@ -11543,9 +12949,21 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
     final currentParticipant = widget.onlineSession?.participantForColor(
       engine.currentPlayer.color,
     );
-    final localThemeId =
+    final equippedLocalThemeId =
         widget.wallet?.equippedProductId(CosmeticCategory.theme) ??
         localParticipant?.loadout.themeId;
+    // Shared-table themes decorate a common board, never one online player's
+    // private quadrant.
+    final localThemeId =
+        !widget.passAndPlay &&
+            isSharedTableExclusiveThemeId(equippedLocalThemeId)
+        ? 'theme_default'
+        : equippedLocalThemeId;
+    final sharedTableThemeId =
+        widget.passAndPlay &&
+            isSharedTableExclusiveThemeId(widget.passAndPlayThemeId)
+        ? widget.passAndPlayThemeId
+        : null;
     final playerThemeIds = <PlayerColor, String?>{
       if (widget.onlineSession case final onlineSession?)
         for (final participant in onlineSession.participants)
@@ -11553,6 +12971,9 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
       // The live wallet must win over the snapshot captured when online
       // matchmaking began so changing an owned item updates immediately.
       _localPlayerColor: localThemeId,
+      if (widget.passAndPlay && widget.passAndPlayThemeId != null)
+        for (final color in PlayerColor.values)
+          color: widget.passAndPlayThemeId,
     };
     final localTokenStyleId =
         widget.wallet?.equippedProductId(CosmeticCategory.tokens) ??
@@ -11585,6 +13006,8 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
         if (entry.value == 'tokens_robot') entry.key,
     };
     final playerLabels = <PlayerColor, String>{
+      if (widget.passAndPlay)
+        for (final player in engine.players) player.color: player.name,
       if (widget.onlineSession case final onlineSession?)
         for (final participant in onlineSession.participants)
           participant.color:
@@ -11593,6 +13016,15 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
                       participant.color != _localPlayerColor)
               ? 'CPU · ${participant.displayName}'
               : participant.displayName,
+      if (widget.onlineV3Game?.state case final v3State?)
+        for (final seat in v3State.seats.values)
+          PlayerColor.values.firstWhere(
+            (color) => color.name == seat.color,
+          ): seat.control == OnlineV3SeatControl.human
+              ? (seat.displayName.isEmpty ? 'Jugador' : seat.displayName)
+              : seat.displayName.isEmpty
+              ? 'CPU'
+              : seat.displayName,
     };
     final standingEntries = _standingEntries(avatarIds);
     final localDiceStyleId =
@@ -11601,9 +13033,12 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
     final diceStyleId = engine.currentPlayer.color == _localPlayerColor
         ? localDiceStyleId
         : currentParticipant?.loadout.diceId;
-    final gameBackground = defaultThemeVisualSpec.gameBackgroundColor;
-    final mobileAdsSupported =
-        MobileAdsScope.maybeOf(context)?.supported ?? false;
+    final gameBackground = themeVisualSpecFor(
+      sharedTableThemeId,
+    ).gameBackgroundColor;
+    final mobileAds = MobileAdsScope.maybeOf(context);
+    final mobileAdsSupported = mobileAds?.supported ?? false;
+    final rewardedReady = mobileAds?.rewardedReady ?? false;
     return PopScope(
       // Leaving a live match must always happen through its explicit
       // home/exit action, never through an accidental system back swipe.
@@ -11611,786 +13046,891 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
       onPopInvokedWithResult: (didPop, _) {
         if (!didPop) unawaited(_handleBackRequest());
       },
-      child: Scaffold(
-        backgroundColor: gameBackground,
-        body: ColoredBox(
-          color: Colors.white,
-          child: SafeArea(
-            child: Stack(
-              fit: StackFit.expand,
-              children: [
-                Positioned.fill(
-                  child: _AnimatedThemeBackdrop(themeId: 'theme_default'),
-                ),
-                LayoutBuilder(
-                  builder: (context, box) {
-                    compactPhoneBoard = _usesCompactPhoneBoard(context);
-                    final sideBySide =
-                        box.maxWidth >= 560 &&
-                        box.maxWidth >= box.maxHeight * 1.15;
-                    // A portrait tablet has enough room for the full board,
-                    // but not enough vertical space for a desktop-sized HUD
-                    // below it once the persistent banner is reserved. Use
-                    // the same board-first controls as a phone in portrait.
-                    final tabletPortrait = !compactPhoneBoard && !sideBySide;
-                    final mobileBoardTools = !sideBySide;
-                    final interactionState = GameInteractionState.derive(
-                      engine: engine,
-                      isLocallyControlledTurn:
-                          _isLocallyControlledTurn && !diceThrowInProgress,
-                      selectedToken: selectedToken,
-                    );
-                    const railGap = 4.0;
-                    final minimumRailWidth = (box.maxWidth * .25)
-                        .clamp(205.0, 290.0)
-                        .toDouble();
-                    final boardSize = sideBySide
-                        ? math
-                              .min(
-                                box.maxHeight,
-                                math.max(
-                                  0,
-                                  box.maxWidth - minimumRailWidth - railGap,
-                                ),
-                              )
-                              .toDouble()
-                        // In portrait the board is the primary game surface.
-                        // Keep it edge-to-edge on phones and tablets; the
-                        // adaptive banner may only reduce the secondary HUD.
-                        : box.maxWidth;
-                    final availableRailWidth = sideBySide
-                        ? math.max(0.0, box.maxWidth - boardSize - railGap)
-                        : 0.0;
-                    final phoneLandscape =
-                        sideBySide &&
-                        box.maxHeight <= 430 &&
-                        availableRailWidth >= 330;
-                    final selectedMovePreviews = diceThrowInProgress
-                        ? const <MoveDestinationPreview>[]
-                        : _visibleMoveDestinationPreviews(
-                            selectedToken,
-                          ).where((preview) => !preview.overview).toList();
-                    final mobileMoveChoicesVisible =
-                        mobileBoardTools &&
-                        moveCalloutsEnabled &&
-                        selectedMovePreviews.isNotEmpty;
-                    final mobileTurnDecisionVisible =
-                        mobileBoardTools &&
-                        !diceThrowInProgress &&
-                        _isLocallyControlledTurn &&
-                        !engine.gameOver &&
-                        (engine.hasRolled || engine.effectResolving);
-                    // On phones the board itself is always the move selector.
-                    // The setting only controls the explanatory bubbles; it
-                    // must not resurrect the old bottom popup when a player
-                    // chooses the cleaner, bubble-free board.
-                    final rawMovePopup =
-                        !moveChoicePanelEnabled ||
-                            (mobileBoardTools &&
-                                selectedMovePreviews.isNotEmpty)
-                        ? null
-                        : _buildMovePopup();
-                    final movePopup = rawMovePopup == null
-                        ? null
-                        : TapRegion(
-                            groupId: moveSelectionTapGroup,
-                            onTapOutside: (_) => _cancelTokenSelection(),
-                            child: rawMovePopup,
-                          );
-                    final trapAlert = _buildTrapAlert();
-                    final trapDiagnostics = _buildTrapDiagnostics();
-                    final chatBanner = _buildChatBanner();
-                    final spectatorBar = _buildSpectatorBar(
-                      compact: sideBySide,
-                    );
-                    final mobileFocus = _mobileBoardFocus;
-                    final mobileFullBoard =
-                        mobileBoardCameraMode ==
-                        _MobileBoardCameraMode.fullBoard;
-                    final cameraScale = mobileBoardTools && !mobileFullBoard
-                        ? _mobileBoardZoomScale
-                        : 1.0;
-                    final cameraTranslation = Offset(
-                      boardSize * (.5 - cameraScale * mobileFocus.dx),
-                      boardSize * (.5 - cameraScale * mobileFocus.dy),
-                    );
-                    final cameraTransform = Matrix4.identity()
-                      ..setEntry(0, 0, cameraScale)
-                      ..setEntry(1, 1, cameraScale)
-                      ..setTranslationRaw(
-                        cameraTranslation.dx,
-                        cameraTranslation.dy,
-                        0,
+      child: SuppressMobileBuildVersion(
+        key: ValueKey('pass-play-version-placement-${widget.passAndPlay}'),
+        enabled: widget.passAndPlay,
+        child: Scaffold(
+          backgroundColor: gameBackground,
+          body: ColoredBox(
+            color: Colors.white,
+            child: SafeArea(
+              child: Stack(
+                fit: StackFit.expand,
+                children: [
+                  Positioned.fill(
+                    child: _AnimatedThemeBackdrop(
+                      themeId: sharedTableThemeId ?? 'theme_default',
+                    ),
+                  ),
+                  LayoutBuilder(
+                    builder: (context, box) {
+                      compactPhoneBoard = _usesCompactPhoneBoard(context);
+                      final sideBySide =
+                          box.maxWidth >= 560 &&
+                          box.maxWidth >= box.maxHeight * 1.15;
+                      // A portrait tablet has enough room for the full board,
+                      // but not enough vertical space for a desktop-sized HUD
+                      // below it once the persistent banner is reserved. Use
+                      // the same board-first controls as a phone in portrait.
+                      final tabletPortrait = !compactPhoneBoard && !sideBySide;
+                      final tabletPassAndPlayLayout =
+                          tabletPortrait && widget.passAndPlay;
+                      final mobileBoardTools = !sideBySide;
+                      final interactionState = GameInteractionState.derive(
+                        engine: engine,
+                        isLocallyControlledTurn:
+                            _isLocallyControlledTurn && !diceThrowInProgress,
+                        selectedToken: selectedToken,
                       );
-                    final tokenChoiceGuideTarget = _tokenChoiceGuideTarget;
-                    final tokenChoicePromptTarget = mobileBoardTools
-                        ? _tokenChoicePromptTarget
-                        : null;
-                    final boardTokenCells = _displayTokenCells(
-                      engine,
-                      compactPhone: compactPhoneBoard,
-                    );
-                    final ownTokenCenters = <Offset>[];
-                    for (final token in engine.currentPlayer.tokens) {
-                      if (token.finished) continue;
-                      final center = boardTokenCells[token];
-                      if (center != null) ownTokenCenters.add(center);
-                    }
-                    final tokenChoiceGuideCell = tokenChoiceGuideTarget == null
-                        ? null
-                        : boardTokenCells[tokenChoiceGuideTarget];
-                    final tokenChoicePromptCell =
-                        tokenChoicePromptTarget == null
-                        ? null
-                        : boardTokenCells[tokenChoicePromptTarget];
-                    final boardGeometry = _BoardGeometry(
-                      boardSize,
-                      compactPhone: compactPhoneBoard,
-                    );
-                    final boardHitPlane = SizedBox.square(
-                      key: const ValueKey('game-board-hit-plane'),
-                      dimension: boardSize,
-                      child: GestureDetector(
-                        behavior: HitTestBehavior.opaque,
-                        excludeFromSemantics: true,
-                        onTapUp: interactionState.boardInputEnabled
-                            ? (details) =>
-                                  _tapBoard(details.localPosition, boardSize)
-                            : null,
-                        child: Stack(
-                          fit: StackFit.expand,
-                          children: [
-                            GameBoardMockup(
-                              engine: engine,
-                              compactPhone: compactPhoneBoard,
-                              selectedToken: selectedToken,
-                              movePreviews: _visibleMoveDestinationPreviews(
-                                selectedToken,
-                              ),
-                              revealAllTraps: trapDiagnosticsEnabled,
-                              playerThemeIds: playerThemeIds,
-                              robotTokens: robotTokens,
-                              robotTokenColors: robotTokenColors,
-                              tokenStyleIds: tokenStyleIds,
-                              playerLabels: playerLabels,
-                            ),
-                            if (mobileMoveChoicesVisible)
-                              _BoardMoveChoiceCallouts(
-                                previews: selectedMovePreviews,
-                                geometry: boardGeometry,
-                                selectedTokenCenter: selectedToken == null
-                                    ? null
-                                    : boardTokenCells[selectedToken!],
-                                avoidTokenCenters: ownTokenCenters,
-                                onChoice: (preview) {
-                                  if (preview.usesAllDice) {
-                                    _moveSelectedTokenUsingAllDice();
-                                  } else {
-                                    _moveSelectedToken(preview.value);
-                                  }
-                                },
-                                onTapAt: (boardPosition) =>
-                                    _trySelectOwnTokenAtBoardPosition(
-                                      boardPosition,
-                                      boardSize,
-                                      excludeSelected: true,
-                                    ),
-                              ),
-                            if (mobileBoardTools && trapAlert != null)
-                              _MobileBoardNotice(
-                                anchor: engine.effectBoardCell,
-                                child: trapAlert,
-                              ),
-                            if (mobileBoardTools &&
-                                mobileTurnDecisionVisible &&
-                                trapAlert == null &&
-                                chatBanner != null)
-                              _MobileBoardNotice(
-                                anchor: null,
-                                preferTop: true,
-                                height: 58,
-                                child: chatBanner,
-                              ),
-                            if (mobileBoardTools &&
-                                !mobileMoveChoicesVisible &&
-                                rawMovePopup != null)
-                              _MobileBoardNotice(
-                                anchor: selectedToken == null
-                                    ? null
-                                    : _displayTokenCells(
-                                        engine,
-                                        compactPhone: compactPhoneBoard,
-                                      )[selectedToken!],
-                                interactive: true,
-                                height: 108,
-                                child: movePopup!,
-                              ),
-                            if (moveCalloutsEnabled &&
-                                tokenChoicePromptTarget != null &&
-                                tokenChoicePromptCell != null)
-                              _BoardTokenChoiceCallout(
-                                geometry: boardGeometry,
-                                target: tokenChoicePromptCell,
-                                avoidTokenCenters: ownTokenCenters,
-                                rolledDice: engine.dice,
-                                remainingDice: _guidedTutorialActive
-                                    ? <int>[
-                                        tutorialScenario!.expectedDie(
-                                          _guidedTutorialStep,
-                                        )!,
-                                      ]
-                                    : engine.remainingDice,
-                                onTap: () {
-                                  setState(() {
-                                    selectedToken = tokenChoicePromptTarget;
-                                    mobileBoardCameraMode =
-                                        _MobileBoardCameraMode.fullBoard;
-                                  });
-                                },
-                                onTapAt: (boardPosition) =>
-                                    _trySelectOwnTokenAtBoardPosition(
-                                      boardPosition,
-                                      boardSize,
-                                      excludeSelected: true,
-                                    ),
-                              ),
-                            if (tokenChoiceGuideTarget != null &&
-                                tokenChoiceGuideCell != null)
-                              _TokenChoiceGuide(
-                                key: ValueKey(
-                                  'token-choice-guide-target-'
-                                  '${tokenChoiceGuideTarget.id}',
-                                ),
-                                center: boardGeometry.toPixel(
-                                  tokenChoiceGuideCell,
-                                ),
-                                cell: boardGeometry.cell,
-                                hand: diceHandPreference,
-                              ),
-                          ],
-                        ),
-                      ),
-                    );
-                    final boardInteractionLayer = IgnorePointer(
-                      key: const ValueKey('game-board-interaction-lock'),
-                      ignoring: diceThrowInProgress,
-                      child: diceThrowInProgress
-                          ? ExcludeSemantics(child: boardHitPlane)
-                          : boardHitPlane,
-                    );
-                    final board = TapRegion(
-                      groupId: moveSelectionTapGroup,
-                      onTapOutside: (_) => _cancelTokenSelection(),
-                      child: SizedBox.square(
-                        key: const ValueKey('game-board'),
-                        dimension: boardSize,
-                        child: mobileBoardTools
-                            ? ClipRRect(
-                                borderRadius: BorderRadius.circular(18),
-                                child: Transform(
-                                  key: const ValueKey(
-                                    'mobile-board-camera-transform',
+                      const railGap = 4.0;
+                      final minimumRailWidth = (box.maxWidth * .25)
+                          .clamp(205.0, 290.0)
+                          .toDouble();
+                      final boardSize = sideBySide
+                          ? math
+                                .min(
+                                  box.maxHeight,
+                                  math.max(
+                                    0,
+                                    box.maxWidth - minimumRailWidth - railGap,
                                   ),
-                                  alignment: Alignment.topLeft,
-                                  transform: cameraTransform,
-                                  transformHitTests: true,
-                                  child: boardInteractionLayer,
+                                )
+                                .toDouble()
+                          // In portrait the board is the primary game surface.
+                          // Keep it edge-to-edge on phones and tablets; the
+                          // adaptive banner may only reduce the secondary HUD.
+                          : tabletPassAndPlayLayout
+                          ? math
+                                .min(
+                                  box.maxWidth,
+                                  // Reserve the quick bar, two table-player rows,
+                                  // and their gaps before sizing the square board.
+                                  // Without this reserve a tall board is squeezed
+                                  // only vertically, which shifts the painted board
+                                  // to the left instead of keeping it centered.
+                                  math.max(260, box.maxHeight - 236),
+                                )
+                                .toDouble()
+                          : box.maxWidth;
+                      final availableRailWidth = sideBySide
+                          ? math.max(0.0, box.maxWidth - boardSize - railGap)
+                          : 0.0;
+                      final phoneLandscape =
+                          sideBySide &&
+                          box.maxHeight <= 430 &&
+                          availableRailWidth >= 330;
+                      final selectedMovePreviews = diceThrowInProgress
+                          ? const <MoveDestinationPreview>[]
+                          : _visibleMoveDestinationPreviews(
+                              selectedToken,
+                            ).where((preview) => !preview.overview).toList();
+                      final mobileMoveChoicesVisible =
+                          mobileBoardTools &&
+                          moveCalloutsEnabled &&
+                          selectedMovePreviews.isNotEmpty;
+                      final mobileTurnDecisionVisible =
+                          mobileBoardTools &&
+                          !diceThrowInProgress &&
+                          _isLocallyControlledTurn &&
+                          !engine.gameOver &&
+                          (engine.hasRolled || engine.effectResolving);
+                      // On phones the board itself is always the move selector.
+                      // The setting only controls the explanatory bubbles; it
+                      // must not resurrect the old bottom popup when a player
+                      // chooses the cleaner, bubble-free board.
+                      final rawMovePopup =
+                          !moveChoicePanelEnabled ||
+                              (mobileBoardTools &&
+                                  selectedMovePreviews.isNotEmpty)
+                          ? null
+                          : _buildMovePopup();
+                      final movePopup = rawMovePopup == null
+                          ? null
+                          : TapRegion(
+                              groupId: moveSelectionTapGroup,
+                              onTapOutside: (_) => _cancelTokenSelection(),
+                              child: rawMovePopup,
+                            );
+                      final trapAlert = _buildTrapAlert();
+                      final trapDiagnostics = _buildTrapDiagnostics();
+                      final chatBanner = _buildChatBanner();
+                      final spectatorBar = _buildSpectatorBar(
+                        compact: sideBySide,
+                      );
+                      final mobileFocus = _mobileBoardFocus;
+                      final mobileFullBoard =
+                          mobileBoardCameraMode ==
+                          _MobileBoardCameraMode.fullBoard;
+                      final cameraScale = mobileBoardTools && !mobileFullBoard
+                          ? _mobileBoardZoomScale
+                          : 1.0;
+                      final cameraTranslation = Offset(
+                        boardSize * (.5 - cameraScale * mobileFocus.dx),
+                        boardSize * (.5 - cameraScale * mobileFocus.dy),
+                      );
+                      final cameraTransform = Matrix4.identity()
+                        ..setEntry(0, 0, cameraScale)
+                        ..setEntry(1, 1, cameraScale)
+                        ..setTranslationRaw(
+                          cameraTranslation.dx,
+                          cameraTranslation.dy,
+                          0,
+                        );
+                      final tokenChoiceGuideTarget = _tokenChoiceGuideTarget;
+                      final tokenChoicePromptTarget = mobileBoardTools
+                          ? _tokenChoicePromptTarget
+                          : null;
+                      final boardTokenCells = _displayTokenCells(
+                        engine,
+                        compactPhone: compactPhoneBoard,
+                      );
+                      final ownTokenCenters = <Offset>[];
+                      for (final token in engine.currentPlayer.tokens) {
+                        if (token.finished) continue;
+                        final center = boardTokenCells[token];
+                        if (center != null) ownTokenCenters.add(center);
+                      }
+                      final tokenChoiceGuideCell =
+                          tokenChoiceGuideTarget == null
+                          ? null
+                          : boardTokenCells[tokenChoiceGuideTarget];
+                      final tokenChoicePromptCell =
+                          tokenChoicePromptTarget == null
+                          ? null
+                          : boardTokenCells[tokenChoicePromptTarget];
+                      final boardGeometry = _BoardGeometry(
+                        boardSize,
+                        compactPhone: compactPhoneBoard,
+                      );
+                      final boardHitPlane = SizedBox.square(
+                        key: const ValueKey('game-board-hit-plane'),
+                        dimension: boardSize,
+                        child: GestureDetector(
+                          behavior: HitTestBehavior.opaque,
+                          excludeFromSemantics: true,
+                          onTapUp: interactionState.boardInputEnabled
+                              ? (details) =>
+                                    _tapBoard(details.localPosition, boardSize)
+                              : null,
+                          child: Stack(
+                            fit: StackFit.expand,
+                            children: [
+                              GameBoardMockup(
+                                engine: engine,
+                                compactPhone: compactPhoneBoard,
+                                enlargeNestsForPassAndPlay: false,
+                                selectedToken: selectedToken,
+                                movePreviews: _visibleMoveDestinationPreviews(
+                                  selectedToken,
                                 ),
-                              )
-                            : boardInteractionLayer,
-                      ),
-                    );
-                    final tabletGameViewport = _isTabletGameViewport(context);
-                    final showMinimapForLayout =
-                        minimapEnabled &&
-                        (compactPhoneBoard ||
-                            (tabletGameViewport && minimapPreferenceExplicit));
-                    final showHandEffectForLayout =
-                        diceHandEffectEnabled &&
-                        (!tabletGameViewport ||
-                            diceHandEffectPreferenceExplicit);
-                    final mobileBoardNavigator =
-                        mobileBoardTools && showMinimapForLayout
-                        ? _MobileBoardNavigator(
-                            boardPainter: _ParcheseBoardPainter(
-                              engine,
-                              compactPhone: true,
-                              selectedToken: selectedToken,
-                              animatedCells: _displayTokenCells(
+                                revealAllTraps: trapDiagnosticsEnabled,
+                                playerThemeIds: playerThemeIds,
+                                sharedTableThemeId: sharedTableThemeId,
+                                robotTokens: robotTokens,
+                                robotTokenColors: robotTokenColors,
+                                tokenStyleIds: tokenStyleIds,
+                                playerLabels: playerLabels,
+                                rotateTopPlayerLabels:
+                                    widget.passAndPlay &&
+                                    tabletPassAndPlayLayout,
+                              ),
+                              if (widget.passAndPlay &&
+                                  !tabletPassAndPlayLayout)
+                                _PassAndPlayBaseDice(
+                                  boardSize: boardSize,
+                                  compactPhone: compactPhoneBoard,
+                                  useLargeTabletLayout: false,
+                                  playerColor: engine.currentPlayer.color,
+                                  engine: engine,
+                                  selectedToken: selectedToken,
+                                  diceStyle: diceVisualSpecFor(diceStyleId),
+                                  canRoll:
+                                      interactionState.canRollDice &&
+                                      _tutorialAllowsRoll &&
+                                      !diceThrowInProgress,
+                                  onRoll: _rollDiceFromHud,
+                                  onDieSelected: _moveSelectedToken,
+                                ),
+                              if (widget.passAndPlay)
+                                _PassAndPlayCpuSeatClaims(
+                                  boardSize: boardSize,
+                                  compactPhone: compactPhoneBoard,
+                                  players: engine.players,
+                                  onClaim: _claimPassAndPlayCpuSeat,
+                                ),
+                              if (mobileMoveChoicesVisible)
+                                _BoardMoveChoiceCallouts(
+                                  previews: selectedMovePreviews,
+                                  geometry: boardGeometry,
+                                  selectedTokenCenter: selectedToken == null
+                                      ? null
+                                      : boardTokenCells[selectedToken!],
+                                  avoidTokenCenters: ownTokenCenters,
+                                  onChoice: (preview) {
+                                    if (preview.usesAllDice) {
+                                      _moveSelectedTokenUsingAllDice();
+                                    } else {
+                                      _moveSelectedToken(preview.value);
+                                    }
+                                  },
+                                  onTapAt: (boardPosition) =>
+                                      _trySelectOwnTokenAtBoardPosition(
+                                        boardPosition,
+                                        boardSize,
+                                        excludeSelected: true,
+                                      ),
+                                ),
+                              if (mobileBoardTools && trapAlert != null)
+                                _MobileBoardNotice(
+                                  anchor: engine.effectBoardCell,
+                                  child: trapAlert,
+                                ),
+                              if (mobileBoardTools &&
+                                  mobileTurnDecisionVisible &&
+                                  trapAlert == null &&
+                                  chatBanner != null)
+                                _MobileBoardNotice(
+                                  anchor: null,
+                                  preferTop: true,
+                                  height: 58,
+                                  child: chatBanner,
+                                ),
+                              if (mobileBoardTools &&
+                                  !mobileMoveChoicesVisible &&
+                                  rawMovePopup != null)
+                                _MobileBoardNotice(
+                                  anchor: selectedToken == null
+                                      ? null
+                                      : _displayTokenCells(
+                                          engine,
+                                          compactPhone: compactPhoneBoard,
+                                        )[selectedToken!],
+                                  interactive: true,
+                                  height: 108,
+                                  child: movePopup!,
+                                ),
+                              if (moveCalloutsEnabled &&
+                                  tokenChoicePromptTarget != null &&
+                                  tokenChoicePromptCell != null)
+                                _BoardTokenChoiceCallout(
+                                  geometry: boardGeometry,
+                                  target: tokenChoicePromptCell,
+                                  avoidTokenCenters: ownTokenCenters,
+                                  rolledDice: engine.dice,
+                                  remainingDice: _guidedTutorialActive
+                                      ? <int>[
+                                          tutorialScenario!.expectedDie(
+                                            _guidedTutorialStep,
+                                          )!,
+                                        ]
+                                      : engine.remainingDice,
+                                  onTap: () {
+                                    setState(() {
+                                      selectedToken = tokenChoicePromptTarget;
+                                      mobileBoardCameraMode =
+                                          _MobileBoardCameraMode.fullBoard;
+                                    });
+                                  },
+                                  onTapAt: (boardPosition) =>
+                                      _trySelectOwnTokenAtBoardPosition(
+                                        boardPosition,
+                                        boardSize,
+                                        excludeSelected: true,
+                                      ),
+                                ),
+                              if (tokenChoiceGuideTarget != null &&
+                                  tokenChoiceGuideCell != null)
+                                _TokenChoiceGuide(
+                                  key: ValueKey(
+                                    'token-choice-guide-target-'
+                                    '${tokenChoiceGuideTarget.id}',
+                                  ),
+                                  center: boardGeometry.toPixel(
+                                    tokenChoiceGuideCell,
+                                  ),
+                                  cell: boardGeometry.cell,
+                                  hand: diceHandPreference,
+                                ),
+                            ],
+                          ),
+                        ),
+                      );
+                      final boardInteractionLayer = IgnorePointer(
+                        key: const ValueKey('game-board-interaction-lock'),
+                        ignoring: diceThrowInProgress,
+                        child: diceThrowInProgress
+                            ? ExcludeSemantics(child: boardHitPlane)
+                            : boardHitPlane,
+                      );
+                      final board = TapRegion(
+                        groupId: moveSelectionTapGroup,
+                        onTapOutside: (_) => _cancelTokenSelection(),
+                        child: SizedBox.square(
+                          key: const ValueKey('game-board'),
+                          dimension: boardSize,
+                          child: mobileBoardTools
+                              ? ClipRRect(
+                                  borderRadius: BorderRadius.circular(18),
+                                  child: Transform(
+                                    key: const ValueKey(
+                                      'mobile-board-camera-transform',
+                                    ),
+                                    alignment: Alignment.topLeft,
+                                    transform: cameraTransform,
+                                    transformHitTests: true,
+                                    child: boardInteractionLayer,
+                                  ),
+                                )
+                              : boardInteractionLayer,
+                        ),
+                      );
+                      final tabletGameViewport = _isTabletGameViewport(context);
+                      final showMinimapForLayout =
+                          minimapEnabled &&
+                          (compactPhoneBoard ||
+                              (tabletGameViewport &&
+                                  minimapPreferenceExplicit));
+                      final showHandEffectForLayout =
+                          !widget.passAndPlay &&
+                          diceHandEffectEnabled &&
+                          (!tabletGameViewport ||
+                              diceHandEffectPreferenceExplicit);
+                      final mobileBoardNavigator =
+                          mobileBoardTools && showMinimapForLayout
+                          ? _MobileBoardNavigator(
+                              boardPainter: _ParcheseBoardPainter(
                                 engine,
                                 compactPhone: true,
+                                selectedToken: selectedToken,
+                                animatedCells: _displayTokenCells(
+                                  engine,
+                                  compactPhone: true,
+                                ),
+                                pulse: .32,
+                                cubeSpin: .28,
+                                effectProgress: 0,
+                                playerThemeIds: playerThemeIds,
+                                revealAllTraps: trapDiagnosticsEnabled,
+                                robotTokens: robotTokens,
+                                robotTokenColors: robotTokenColors,
+                                tokenStyleIds: tokenStyleIds,
+                                playerLabels: playerLabels,
+                                localPlayerLabel: appTranslate(context, 'TÚ'),
+                                languageCode: appLanguageCodeOf(context),
+                                movePreviews: _visibleMoveDestinationPreviews(
+                                  selectedToken,
+                                ),
                               ),
-                              pulse: .32,
-                              cubeSpin: .28,
-                              effectProgress: 0,
-                              playerThemeIds: playerThemeIds,
-                              revealAllTraps: trapDiagnosticsEnabled,
-                              robotTokens: robotTokens,
-                              robotTokenColors: robotTokenColors,
-                              tokenStyleIds: tokenStyleIds,
-                              playerLabels: playerLabels,
-                              localPlayerLabel: appTranslate(context, 'TÚ'),
-                              languageCode: appLanguageCodeOf(context),
-                              movePreviews: _visibleMoveDestinationPreviews(
-                                selectedToken,
+                              focus: mobileFocus,
+                              fullBoard: mobileFullBoard,
+                              onFocusChanged: _setMobileBoardManualFocus,
+                              onInteractionEnd: _showFullMobileBoard,
+                            )
+                          : null;
+                      final rawPanel = GameControlPanel(
+                        engine: engine,
+                        selectedToken: selectedToken,
+                        onDieSelected: _moveSelectedToken,
+                        onCancelSelection: _cancelTokenSelection,
+                        onRollRequested: _rollDiceFromHud,
+                        onUsePowerUp: _useHeldPowerFromHud,
+                        rollEnabled:
+                            interactionState.canRollDice &&
+                            _tutorialAllowsRoll &&
+                            !diceThrowInProgress,
+                        rollGuideEnabled: rollGuideEnabled,
+                        rollGuideVisible: rollGuideVisible,
+                        rollGuidePulseSerial: rollGuidePulseSerial,
+                        diceHandPreference: diceHandPreference,
+                        diceHandEffectEnabled: showHandEffectForLayout,
+                        diceThrowInProgress: diceThrowInProgress,
+                        diceThrowSerial: diceThrowSerial,
+                        diceThrowResult: diceThrowResult,
+                        waitingForNextTurn: _waitingForNextOnlineTurn,
+                        onShowChat: widget.onlineSession == null
+                            ? null
+                            : _showSafeChatPicker,
+                        onCustomize: widget.wallet == null
+                            ? null
+                            : _showOwnedCosmetics,
+                        diceStyleId: diceStyleId,
+                        avatarIds: avatarIds,
+                        onlineSession: widget.onlineSession,
+                        diceInPlayerBase:
+                            widget.passAndPlay && !tabletPassAndPlayLayout,
+                        assignedPlayerColor: _usesOnlineV3
+                            ? _localPlayerColor
+                            : null,
+                        localCpuTakeoverActive: localCpuTakeoverActive,
+                        mobileBoardTools: mobileBoardTools,
+                        mobileBoardNavigator: mobileBoardNavigator,
+                        mobileBoardFullView: mobileFullBoard,
+                        visibleRemainingDice: _guidedVisibleRemainingDice,
+                      );
+                      final Widget panel = mobileBoardTools
+                          ? TapRegion(
+                              groupId: moveSelectionTapGroup,
+                              child: rawPanel,
+                            )
+                          : rawPanel;
+                      final quickBar = _GameQuickBar(
+                        chaos: engine.isChaos,
+                        matchFormat: engine.matchFormat,
+                        passAndPlay: widget.passAndPlay,
+                        compact: sideBySide,
+                        phoneLandscape: phoneLandscape,
+                        attached: !sideBySide,
+                        elapsed: matchElapsed,
+                        onBack: _handleBackRequest,
+                        onShowPowers: _showPowerStatus,
+                        onShowHistory: _showEventHistory,
+                        onShowGuide: () {
+                          _cancelRollGuide();
+                          Navigator.push(
+                            context,
+                            MaterialPageRoute(
+                              builder: (_) => GameGuideScreen(
+                                initialMode:
+                                    engine.matchFormat == MatchFormat.quickPop
+                                    ? GameGuideMode.quickPop
+                                    : engine.isChaos
+                                    ? GameGuideMode.chaos
+                                    : GameGuideMode.traditional,
                               ),
                             ),
-                            focus: mobileFocus,
-                            fullBoard: mobileFullBoard,
-                            onFocusChanged: _setMobileBoardManualFocus,
-                            onInteractionEnd: _showFullMobileBoard,
-                          )
-                        : null;
-                    final rawPanel = GameControlPanel(
-                      engine: engine,
-                      selectedToken: selectedToken,
-                      onDieSelected: _moveSelectedToken,
-                      onCancelSelection: _cancelTokenSelection,
-                      onRollRequested: _rollDiceFromHud,
-                      onUsePowerUp: _useHeldPowerFromHud,
-                      rollEnabled:
-                          interactionState.canRollDice &&
-                          _tutorialAllowsRoll &&
-                          !diceThrowInProgress,
-                      rollGuideEnabled: rollGuideEnabled,
-                      rollGuideVisible: rollGuideVisible,
-                      rollGuidePulseSerial: rollGuidePulseSerial,
-                      diceHandPreference: diceHandPreference,
-                      diceHandEffectEnabled: showHandEffectForLayout,
-                      diceThrowInProgress: diceThrowInProgress,
-                      diceThrowSerial: diceThrowSerial,
-                      diceThrowResult: diceThrowResult,
-                      waitingForNextTurn: _waitingForNextOnlineTurn,
-                      onShowChat: widget.onlineSession == null
-                          ? null
-                          : _showSafeChatPicker,
-                      onCustomize: widget.wallet == null
-                          ? null
-                          : _showOwnedCosmetics,
-                      diceStyleId: diceStyleId,
-                      avatarIds: avatarIds,
-                      onlineSession: widget.onlineSession,
-                      localCpuTakeoverActive: localCpuTakeoverActive,
-                      mobileBoardTools: mobileBoardTools,
-                      mobileBoardNavigator: mobileBoardNavigator,
-                      mobileBoardFullView: mobileFullBoard,
-                      visibleRemainingDice: _guidedVisibleRemainingDice,
-                    );
-                    final Widget panel = mobileBoardTools
-                        ? TapRegion(
-                            groupId: moveSelectionTapGroup,
-                            child: rawPanel,
-                          )
-                        : rawPanel;
-                    final quickBar = _GameQuickBar(
-                      chaos: engine.isChaos,
-                      matchFormat: engine.matchFormat,
-                      compact: sideBySide,
-                      phoneLandscape: phoneLandscape,
-                      attached: !sideBySide,
-                      elapsed: matchElapsed,
-                      onBack: _handleBackRequest,
-                      onShowPowers: _showPowerStatus,
-                      onShowHistory: _showEventHistory,
-                      onShowGuide: () {
-                        _cancelRollGuide();
-                        Navigator.push(
-                          context,
-                          MaterialPageRoute(
-                            builder: (_) => GameGuideScreen(
-                              initialMode:
-                                  engine.matchFormat == MatchFormat.quickPop
-                                  ? GameGuideMode.quickPop
-                                  : engine.isChaos
-                                  ? GameGuideMode.chaos
-                                  : GameGuideMode.traditional,
-                            ),
-                          ),
-                        );
-                      },
-                      showDiagnostics: _gameDiagnosticsVisible,
-                      onShowDiagnostics: _showGameDiagnostics,
-                      onShowSettings: _openGameSettings,
-                      canReport: widget.onlineSession != null,
-                      onReportIssue: _openReportIssue,
-                    );
-                    return KeyedSubtree(
-                      key: const ValueKey('game-content-area'),
-                      child: sideBySide
-                          ? KeyedSubtree(
-                              key: phoneLandscape
-                                  ? const ValueKey('phone-landscape-layout')
-                                  : null,
-                              child: Row(
-                                key: const ValueKey('game-side-layout'),
-                                crossAxisAlignment: CrossAxisAlignment.start,
-                                children: [
-                                  board,
-                                  const SizedBox(width: railGap),
-                                  Expanded(
-                                    key: const ValueKey('game-rail-slot'),
-                                    child: phoneLandscape
-                                        ? Stack(
-                                            fit: StackFit.expand,
-                                            children: [
-                                              Column(
-                                                children: [
-                                                  quickBar,
-                                                  ?spectatorBar,
-                                                  const SizedBox(height: 3),
-                                                  Expanded(
-                                                    child: _GameSideRail(
-                                                      engine: engine,
-                                                      elapsed: matchElapsed,
-                                                      selectedToken:
-                                                          selectedToken,
-                                                      onDieSelected:
-                                                          _moveSelectedToken,
-                                                      onCancelSelection:
-                                                          _cancelTokenSelection,
-                                                      onRollRequested:
-                                                          _rollDiceFromHud,
-                                                      onUsePowerUp:
-                                                          _useHeldPowerFromHud,
-                                                      rollEnabled:
-                                                          interactionState
-                                                              .canRollDice &&
-                                                          _tutorialAllowsRoll,
-                                                      rollGuideEnabled:
-                                                          rollGuideEnabled,
-                                                      rollGuideVisible:
-                                                          rollGuideVisible,
-                                                      rollGuidePulseSerial:
-                                                          rollGuidePulseSerial,
-                                                      diceHandPreference:
-                                                          diceHandPreference,
-                                                      diceHandEffectEnabled:
-                                                          showHandEffectForLayout,
-                                                      diceThrowInProgress:
-                                                          diceThrowInProgress,
-                                                      diceThrowSerial:
-                                                          diceThrowSerial,
-                                                      diceThrowResult:
-                                                          diceThrowResult,
-                                                      waitingForNextTurn:
-                                                          _waitingForNextOnlineTurn,
-                                                      onShowPowers:
-                                                          _showPowerStatus,
-                                                      onShowChat:
-                                                          widget.onlineSession ==
-                                                              null
-                                                          ? null
-                                                          : _showSafeChatPicker,
-                                                      onCustomize:
-                                                          widget.wallet == null
-                                                          ? null
-                                                          : _showOwnedCosmetics,
-                                                      diceStyleId: diceStyleId,
-                                                      onlineSession:
-                                                          widget.onlineSession,
-                                                      avatarIds: avatarIds,
-                                                      revealTrapDetails:
-                                                          trapDiagnosticsEnabled,
-                                                      wideShortLandscape: true,
-                                                      visibleRemainingDice:
-                                                          _guidedVisibleRemainingDice,
+                          );
+                        },
+                        showDiagnostics: _gameDiagnosticsVisible,
+                        onShowDiagnostics: _showGameDiagnostics,
+                        onShowSettings: _openGameSettings,
+                        canReport: widget.onlineSession != null,
+                        onReportIssue: _openReportIssue,
+                      );
+                      return KeyedSubtree(
+                        key: const ValueKey('game-content-area'),
+                        child: sideBySide
+                            ? KeyedSubtree(
+                                key: phoneLandscape
+                                    ? const ValueKey('phone-landscape-layout')
+                                    : null,
+                                child: Row(
+                                  key: const ValueKey('game-side-layout'),
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    board,
+                                    const SizedBox(width: railGap),
+                                    Expanded(
+                                      key: const ValueKey('game-rail-slot'),
+                                      child: phoneLandscape
+                                          ? Stack(
+                                              fit: StackFit.expand,
+                                              children: [
+                                                Column(
+                                                  children: [
+                                                    quickBar,
+                                                    ?spectatorBar,
+                                                    const SizedBox(height: 3),
+                                                    Expanded(
+                                                      child: _GameSideRail(
+                                                        engine: engine,
+                                                        elapsed: matchElapsed,
+                                                        selectedToken:
+                                                            selectedToken,
+                                                        onDieSelected:
+                                                            _moveSelectedToken,
+                                                        onCancelSelection:
+                                                            _cancelTokenSelection,
+                                                        onRollRequested:
+                                                            _rollDiceFromHud,
+                                                        onUsePowerUp:
+                                                            _useHeldPowerFromHud,
+                                                        rollEnabled:
+                                                            interactionState
+                                                                .canRollDice &&
+                                                            _tutorialAllowsRoll,
+                                                        rollGuideEnabled:
+                                                            rollGuideEnabled,
+                                                        rollGuideVisible:
+                                                            rollGuideVisible,
+                                                        rollGuidePulseSerial:
+                                                            rollGuidePulseSerial,
+                                                        diceHandPreference:
+                                                            diceHandPreference,
+                                                        diceHandEffectEnabled:
+                                                            showHandEffectForLayout,
+                                                        diceThrowInProgress:
+                                                            diceThrowInProgress,
+                                                        diceThrowSerial:
+                                                            diceThrowSerial,
+                                                        diceThrowResult:
+                                                            diceThrowResult,
+                                                        waitingForNextTurn:
+                                                            _waitingForNextOnlineTurn,
+                                                        onShowPowers:
+                                                            _showPowerStatus,
+                                                        onShowChat:
+                                                            widget.onlineSession ==
+                                                                null
+                                                            ? null
+                                                            : _showSafeChatPicker,
+                                                        onCustomize:
+                                                            widget.wallet ==
+                                                                null
+                                                            ? null
+                                                            : _showOwnedCosmetics,
+                                                        diceStyleId:
+                                                            diceStyleId,
+                                                        onlineSession: widget
+                                                            .onlineSession,
+                                                        diceInPlayerBase:
+                                                            widget.passAndPlay,
+                                                        avatarIds: avatarIds,
+                                                        revealTrapDetails:
+                                                            trapDiagnosticsEnabled,
+                                                        wideShortLandscape:
+                                                            true,
+                                                        visibleRemainingDice:
+                                                            _guidedVisibleRemainingDice,
+                                                      ),
+                                                    ),
+                                                  ],
+                                                ),
+                                                if (trapDiagnostics != null)
+                                                  Positioned(
+                                                    top:
+                                                        49 +
+                                                        (spectatorBar == null
+                                                            ? 0
+                                                            : 40),
+                                                    left: 5,
+                                                    right: 66,
+                                                    child: trapDiagnostics,
+                                                  ),
+                                                if (movePopup ??
+                                                        trapAlert ??
+                                                        chatBanner
+                                                    case final overlay?)
+                                                  Positioned(
+                                                    left: 5,
+                                                    right: 66,
+                                                    bottom: 5,
+                                                    child: ConstrainedBox(
+                                                      constraints:
+                                                          const BoxConstraints(
+                                                            maxHeight: 170,
+                                                          ),
+                                                      child:
+                                                          SingleChildScrollView(
+                                                            child: overlay,
+                                                          ),
                                                     ),
                                                   ),
-                                                ],
-                                              ),
-                                              if (trapDiagnostics != null)
-                                                Positioned(
-                                                  top:
-                                                      49 +
-                                                      (spectatorBar == null
-                                                          ? 0
-                                                          : 40),
-                                                  left: 5,
-                                                  right: 66,
-                                                  child: trapDiagnostics,
-                                                ),
-                                              if (movePopup ??
-                                                      trapAlert ??
-                                                      chatBanner
-                                                  case final overlay?)
-                                                Positioned(
-                                                  left: 5,
-                                                  right: 66,
-                                                  bottom: 5,
-                                                  child: ConstrainedBox(
-                                                    constraints:
-                                                        const BoxConstraints(
-                                                          maxHeight: 170,
-                                                        ),
-                                                    child:
-                                                        SingleChildScrollView(
-                                                          child: overlay,
-                                                        ),
+                                              ],
+                                            )
+                                          : Column(
+                                              children: [
+                                                quickBar,
+                                                ?spectatorBar,
+                                                ?trapDiagnostics,
+                                                ?chatBanner,
+                                                ?trapAlert,
+                                                ?movePopup,
+                                                const SizedBox(height: 3),
+                                                Expanded(
+                                                  child: _GameSideRail(
+                                                    engine: engine,
+                                                    elapsed: matchElapsed,
+                                                    selectedToken:
+                                                        selectedToken,
+                                                    onDieSelected:
+                                                        _moveSelectedToken,
+                                                    onCancelSelection:
+                                                        _cancelTokenSelection,
+                                                    onRollRequested:
+                                                        _rollDiceFromHud,
+                                                    onUsePowerUp:
+                                                        _useHeldPowerFromHud,
+                                                    rollEnabled:
+                                                        interactionState
+                                                            .canRollDice &&
+                                                        _tutorialAllowsRoll,
+                                                    rollGuideEnabled:
+                                                        rollGuideEnabled,
+                                                    rollGuideVisible:
+                                                        rollGuideVisible,
+                                                    rollGuidePulseSerial:
+                                                        rollGuidePulseSerial,
+                                                    diceHandPreference:
+                                                        diceHandPreference,
+                                                    diceHandEffectEnabled:
+                                                        showHandEffectForLayout,
+                                                    diceThrowInProgress:
+                                                        diceThrowInProgress,
+                                                    diceThrowSerial:
+                                                        diceThrowSerial,
+                                                    diceThrowResult:
+                                                        diceThrowResult,
+                                                    waitingForNextTurn:
+                                                        _waitingForNextOnlineTurn,
+                                                    onShowPowers:
+                                                        _showPowerStatus,
+                                                    onShowChat:
+                                                        widget.onlineSession ==
+                                                            null
+                                                        ? null
+                                                        : _showSafeChatPicker,
+                                                    onCustomize:
+                                                        widget.wallet == null
+                                                        ? null
+                                                        : _showOwnedCosmetics,
+                                                    diceStyleId: diceStyleId,
+                                                    onlineSession:
+                                                        widget.onlineSession,
+                                                    diceInPlayerBase:
+                                                        widget.passAndPlay,
+                                                    avatarIds: avatarIds,
+                                                    revealTrapDetails:
+                                                        trapDiagnosticsEnabled,
+                                                    visibleRemainingDice:
+                                                        _guidedVisibleRemainingDice,
                                                   ),
                                                 ),
-                                            ],
-                                          )
-                                        : Column(
-                                            children: [
-                                              quickBar,
-                                              ?spectatorBar,
-                                              ?trapDiagnostics,
-                                              ?chatBanner,
-                                              ?trapAlert,
-                                              ?movePopup,
-                                              const SizedBox(height: 3),
-                                              Expanded(
-                                                child: _GameSideRail(
-                                                  engine: engine,
-                                                  elapsed: matchElapsed,
-                                                  selectedToken: selectedToken,
-                                                  onDieSelected:
-                                                      _moveSelectedToken,
-                                                  onCancelSelection:
-                                                      _cancelTokenSelection,
-                                                  onRollRequested:
-                                                      _rollDiceFromHud,
-                                                  onUsePowerUp:
-                                                      _useHeldPowerFromHud,
-                                                  rollEnabled:
-                                                      interactionState
-                                                          .canRollDice &&
-                                                      _tutorialAllowsRoll,
-                                                  rollGuideEnabled:
-                                                      rollGuideEnabled,
-                                                  rollGuideVisible:
-                                                      rollGuideVisible,
-                                                  rollGuidePulseSerial:
-                                                      rollGuidePulseSerial,
-                                                  diceHandPreference:
-                                                      diceHandPreference,
-                                                  diceHandEffectEnabled:
-                                                      showHandEffectForLayout,
-                                                  diceThrowInProgress:
-                                                      diceThrowInProgress,
-                                                  diceThrowSerial:
-                                                      diceThrowSerial,
-                                                  diceThrowResult:
-                                                      diceThrowResult,
-                                                  waitingForNextTurn:
-                                                      _waitingForNextOnlineTurn,
-                                                  onShowPowers:
-                                                      _showPowerStatus,
-                                                  onShowChat:
-                                                      widget.onlineSession ==
-                                                          null
-                                                      ? null
-                                                      : _showSafeChatPicker,
-                                                  onCustomize:
-                                                      widget.wallet == null
-                                                      ? null
-                                                      : _showOwnedCosmetics,
-                                                  diceStyleId: diceStyleId,
-                                                  onlineSession:
-                                                      widget.onlineSession,
-                                                  avatarIds: avatarIds,
-                                                  revealTrapDetails:
-                                                      trapDiagnosticsEnabled,
-                                                  visibleRemainingDice:
-                                                      _guidedVisibleRemainingDice,
-                                                ),
-                                              ),
-                                            ],
-                                          ),
-                                  ),
-                                ],
-                              ),
-                            )
-                          : mobileBoardTools
-                          ? Column(
-                              key: const ValueKey(
-                                'mobile-portrait-game-layout',
-                              ),
-                              children: [
-                                quickBar,
-                                const SizedBox(height: 3),
-                                SizedBox.square(
-                                  key: const ValueKey('mobile-board-stage'),
-                                  dimension: boardSize,
-                                  child: board,
-                                ),
-                                Expanded(
-                                  key: const ValueKey('mobile-hud-slot'),
-                                  child: Padding(
-                                    // On portrait tablets, make the HUD a
-                                    // short full-width action strip instead
-                                    // of a second oversized panel below the
-                                    // board. Phones keep their small inset.
-                                    padding: tabletPortrait
-                                        ? EdgeInsets.zero
-                                        : const EdgeInsets.all(4),
-                                    child: tabletPortrait
-                                        // Keep the board's size stable and
-                                        // restore the compact blue action
-                                        // panel on portrait tablets. The rest
-                                        // of the reserved space stays as the
-                                        // neutral game backdrop above ads.
-                                        ? Stack(
-                                            // On tablets the HUD owns all the
-                                            // space between the board and the
-                                            // adaptive banner.  Keeping the
-                                            // stack expanded removes the old
-                                            // empty strip below the short HUD
-                                            // and lets the dice stage grow
-                                            // naturally with the device.
-                                            fit: StackFit.expand,
-                                            clipBehavior: Clip.none,
-                                            children: [
-                                              panel,
-                                              if (spectatorBar ?? chatBanner
-                                                  case final overlay?)
-                                                Positioned(
-                                                  left: 0,
-                                                  top: 0,
-                                                  right: 0,
-                                                  child: overlay,
-                                                ),
-                                            ],
-                                          )
-                                        : Stack(
-                                            fit: StackFit.expand,
-                                            clipBehavior: Clip.none,
-                                            children: [
-                                              panel,
-                                              if (spectatorBar ?? chatBanner
-                                                  case final overlay?)
-                                                Positioned(
-                                                  left: 0,
-                                                  top: 0,
-                                                  right: 0,
-                                                  child: overlay,
-                                                ),
-                                            ],
-                                          ),
-                                  ),
-                                ),
-                              ],
-                            )
-                          : SingleChildScrollView(
-                              child: Column(
-                                children: [
-                                  quickBar,
-                                  ?spectatorBar,
-                                  const SizedBox(height: 3),
-                                  board,
-                                  ?trapDiagnostics,
-                                  ?chatBanner,
-                                  ?trapAlert,
-                                  ?movePopup,
-                                  Padding(
-                                    padding: const EdgeInsets.fromLTRB(
-                                      4,
-                                      4,
-                                      4,
-                                      4,
+                                              ],
+                                            ),
                                     ),
-                                    child: panel,
-                                  ),
-                                ],
+                                  ],
+                                ),
+                              )
+                            : mobileBoardTools
+                            ? tabletPassAndPlayLayout
+                                  ? Column(
+                                      key: const ValueKey(
+                                        'tablet-pass-and-play-layout',
+                                      ),
+                                      children: [
+                                        quickBar,
+                                        const SizedBox(height: 4),
+                                        Expanded(
+                                          child: _TabletPassAndPlayGameLayout(
+                                            board: SizedBox.square(
+                                              key: const ValueKey(
+                                                'tablet-pass-and-play-board-stage',
+                                              ),
+                                              dimension: boardSize,
+                                              child: board,
+                                            ),
+                                            engine: engine,
+                                            selectedToken: selectedToken,
+                                            diceStyle: diceVisualSpecFor(
+                                              diceStyleId,
+                                            ),
+                                            canRoll:
+                                                interactionState.canRollDice &&
+                                                _tutorialAllowsRoll &&
+                                                !diceThrowInProgress,
+                                            onRoll: _rollDiceFromHud,
+                                            onDieSelected: _moveSelectedToken,
+                                          ),
+                                        ),
+                                      ],
+                                    )
+                                  : Column(
+                                      key: const ValueKey(
+                                        'mobile-portrait-game-layout',
+                                      ),
+                                      children: [
+                                        quickBar,
+                                        const SizedBox(height: 3),
+                                        SizedBox.square(
+                                          key: const ValueKey(
+                                            'mobile-board-stage',
+                                          ),
+                                          dimension: boardSize,
+                                          child: board,
+                                        ),
+                                        Expanded(
+                                          key: const ValueKey(
+                                            'mobile-hud-slot',
+                                          ),
+                                          child: Padding(
+                                            // On portrait tablets, make the HUD a
+                                            // short full-width action strip instead
+                                            // of a second oversized panel below the
+                                            // board. Phones keep their small inset.
+                                            padding: tabletPortrait
+                                                ? EdgeInsets.zero
+                                                : const EdgeInsets.all(4),
+                                            child: tabletPortrait
+                                                // Keep the board's size stable and
+                                                // restore the compact blue action
+                                                // panel on portrait tablets. The rest
+                                                // of the reserved space stays as the
+                                                // neutral game backdrop above ads.
+                                                ? Stack(
+                                                    // On tablets the HUD owns all the
+                                                    // space between the board and the
+                                                    // adaptive banner.  Keeping the
+                                                    // stack expanded removes the old
+                                                    // empty strip below the short HUD
+                                                    // and lets the dice stage grow
+                                                    // naturally with the device.
+                                                    fit: StackFit.expand,
+                                                    clipBehavior: Clip.none,
+                                                    children: [
+                                                      panel,
+                                                      if (spectatorBar ??
+                                                              chatBanner
+                                                          case final overlay?)
+                                                        Positioned(
+                                                          left: 0,
+                                                          top: 0,
+                                                          right: 0,
+                                                          child: overlay,
+                                                        ),
+                                                    ],
+                                                  )
+                                                : Stack(
+                                                    fit: StackFit.expand,
+                                                    clipBehavior: Clip.none,
+                                                    children: [
+                                                      panel,
+                                                      if (spectatorBar ??
+                                                              chatBanner
+                                                          case final overlay?)
+                                                        Positioned(
+                                                          left: 0,
+                                                          top: 0,
+                                                          right: 0,
+                                                          child: overlay,
+                                                        ),
+                                                    ],
+                                                  ),
+                                          ),
+                                        ),
+                                      ],
+                                    )
+                            : SingleChildScrollView(
+                                child: Column(
+                                  children: [
+                                    quickBar,
+                                    ?spectatorBar,
+                                    const SizedBox(height: 3),
+                                    board,
+                                    ?trapDiagnostics,
+                                    ?chatBanner,
+                                    ?trapAlert,
+                                    ?movePopup,
+                                    Padding(
+                                      padding: const EdgeInsets.fromLTRB(
+                                        4,
+                                        4,
+                                        4,
+                                        4,
+                                      ),
+                                      child: panel,
+                                    ),
+                                  ],
+                                ),
                               ),
-                            ),
-                    );
-                  },
-                ),
-                if (_usesGuidedTutorial &&
-                    widget.tutorial?.lifecycle == TutorialLifecycle.inProgress)
-                  Positioned(
-                    left: 10,
-                    right: 10,
-                    top: 62,
-                    child: Align(
-                      alignment: Alignment.topCenter,
-                      child: ConstrainedBox(
-                        constraints: const BoxConstraints(maxWidth: 520),
-                        child: _TutorialCoachBanner(
-                          controller: widget.tutorial!,
-                          onSkip: () async {
+                      );
+                    },
+                  ),
+                  if (_usesGuidedTutorial &&
+                      widget.tutorial?.lifecycle ==
+                          TutorialLifecycle.inProgress)
+                    Positioned(
+                      left: 10,
+                      right: 10,
+                      top: 62,
+                      child: Align(
+                        alignment: Alignment.topCenter,
+                        child: ConstrainedBox(
+                          constraints: const BoxConstraints(maxWidth: 520),
+                          child: _TutorialCoachBanner(
+                            controller: widget.tutorial!,
+                            onSkip: () async {
+                              final navigator = Navigator.of(context);
+                              await widget.tutorial!.skip();
+                              if (!mounted) return;
+                              if (widget.guidedTutorial && navigator.canPop()) {
+                                navigator.pop();
+                              } else {
+                                setState(() {});
+                              }
+                            },
+                          ),
+                        ),
+                      ),
+                    ),
+                  if (tutorialCompletionVisible)
+                    Positioned.fill(
+                      child: BlockSemantics(
+                        child: _TutorialCompletionCard(
+                          onDone: () {
                             final navigator = Navigator.of(context);
-                            await widget.tutorial!.skip();
-                            if (!mounted) return;
-                            if (widget.guidedTutorial && navigator.canPop()) {
+                            if (navigator.canPop()) {
                               navigator.pop();
                             } else {
-                              setState(() {});
+                              setState(() => tutorialCompletionVisible = false);
                             }
                           },
                         ),
                       ),
                     ),
-                  ),
-                if (tutorialCompletionVisible)
-                  Positioned.fill(
-                    child: BlockSemantics(
-                      child: _TutorialCompletionCard(
-                        onDone: () {
-                          final navigator = Navigator.of(context);
-                          if (navigator.canPop()) {
-                            navigator.pop();
-                          } else {
-                            setState(() => tutorialCompletionVisible = false);
-                          }
-                        },
+                  if (showVictory && engine.winner != null)
+                    Positioned.fill(
+                      child: BlockSemantics(
+                        child: _VictoryCelebration(
+                          winner: engine.winner!,
+                          mode: engine.mode,
+                          matchFormat: engine.matchFormat,
+                          elapsed: matchElapsed,
+                          standings: standingEntries,
+                          standingsComplete: engine.standingsComplete,
+                          rewardCoins: matchRewardCoinsAwarded,
+                          doubleRewardCoins: widget.progression == null
+                              ? 100
+                              : matchBasePayout,
+                          onContinueWatching: engine.canContinueAfterWinner
+                              ? _continueWatching
+                              : null,
+                          onWatchRewarded:
+                              widget.wallet != null &&
+                                  (widget.progression == null
+                                      ? true
+                                      : matchCompletionRewardSettled &&
+                                            matchBasePayout > 0) &&
+                                  mobileAdsSupported &&
+                                  !endMatchRewardClaimed &&
+                                  !postVictoryNavigationInProgress
+                              ? _watchEndMatchRewarded
+                              : null,
+                          rewardInProgress: endMatchRewardInProgress,
+                          rewardClaimed: endMatchRewardClaimed,
+                          rewardReady: rewardedReady,
+                          navigationInProgress: postVictoryNavigationInProgress,
+                          onPlayAgain: _playAgainFromVictory,
+                          onHome: _homeFromVictory,
+                        ),
                       ),
                     ),
-                  ),
-                if (showVictory && engine.winner != null)
-                  Positioned.fill(
-                    child: BlockSemantics(
-                      child: _VictoryCelebration(
-                        winner: engine.winner!,
-                        mode: engine.mode,
-                        matchFormat: engine.matchFormat,
-                        elapsed: matchElapsed,
-                        standings: standingEntries,
-                        standingsComplete: engine.standingsComplete,
-                        rewardCoins: matchRewardCoinsAwarded,
-                        doubleRewardCoins: widget.progression == null
-                            ? 100
-                            : matchBasePayout,
-                        onContinueWatching: engine.canContinueAfterWinner
-                            ? _continueWatching
-                            : null,
-                        onWatchRewarded:
-                            widget.wallet != null &&
-                                (widget.progression == null
-                                    ? true
-                                    : matchCompletionRewardSettled &&
-                                          matchBasePayout > 0) &&
-                                mobileAdsSupported &&
-                                !endMatchRewardClaimed &&
-                                !postVictoryNavigationInProgress
-                            ? _watchEndMatchRewarded
-                            : null,
-                        rewardInProgress: endMatchRewardInProgress,
-                        rewardClaimed: endMatchRewardClaimed,
-                        navigationInProgress: postVictoryNavigationInProgress,
-                        onPlayAgain: _playAgainFromVictory,
-                        onHome: _homeFromVictory,
+                  if (_showOnlineHostRecovery)
+                    Positioned(
+                      top: 8,
+                      left: 12,
+                      right: 12,
+                      child: _OnlineHostRecoveryOverlay(
+                        unavailable:
+                            widget.onlineGameSync!.requiresHostRecovery,
+                        secondsRemaining: _hostReconnectSecondsRemaining,
+                        retrying: hostRecoveryRetrying,
+                        onRetry: _retryOnlineHostRecovery,
+                        onExit: () =>
+                            unawaited(_leaveToHome(discardSavedMatch: true)),
                       ),
                     ),
-                  ),
-                if (_showOnlineHostRecovery)
-                  Positioned(
-                    top: 8,
-                    left: 12,
-                    right: 12,
-                    child: _OnlineHostRecoveryOverlay(
-                      unavailable:
-                          onlineHostCpuFallbackActive ||
-                          widget.onlineGameSync!.requiresHostRecovery,
-                      secondsRemaining: _hostReconnectSecondsRemaining,
-                      retrying: hostRecoveryRetrying,
-                      onRetry: _retryOnlineHostRecovery,
-                      onExit: () =>
-                          unawaited(_leaveToHome(discardSavedMatch: true)),
-                    ),
-                  ),
-              ],
+                ],
+              ),
             ),
           ),
         ),
@@ -12453,7 +13993,7 @@ class _OnlineHostRecoveryOverlay extends StatelessWidget {
                       PopText(
                         unavailable
                             ? 'CPU JUGANDO POR EL ANFITRIÓN'
-                            : 'ESPERANDO AL JUGADOR',
+                            : 'ESPERANDO AL ANFITRIÓN',
                         style: const TextStyle(
                           color: Colors.white,
                           fontSize: 12,
@@ -12463,7 +14003,7 @@ class _OnlineHostRecoveryOverlay extends StatelessWidget {
                       const SizedBox(height: 2),
                       PopText(
                         unavailable
-                            ? 'La partida sigue activa. El anfitrión puede volver a sincronizar.'
+                            ? 'La partida sigue activa. El CPU juega por él mientras regresa.'
                             : 'El CPU mantiene la partida mientras vuelve el anfitrión.',
                         maxLines: 2,
                         overflow: TextOverflow.ellipsis,
@@ -13653,6 +15193,7 @@ class _GameQuickBar extends StatelessWidget {
   const _GameQuickBar({
     required this.chaos,
     required this.matchFormat,
+    required this.passAndPlay,
     required this.compact,
     this.phoneLandscape = false,
     required this.attached,
@@ -13670,6 +15211,7 @@ class _GameQuickBar extends StatelessWidget {
 
   final bool chaos;
   final MatchFormat matchFormat;
+  final bool passAndPlay;
   final bool compact;
   final bool phoneLandscape;
   final bool attached;
@@ -13714,6 +15256,13 @@ class _GameQuickBar extends StatelessWidget {
             // phone. Keep the essential 44-point controls reachable and hide
             // only secondary labels/help at that extreme width.
             final veryNarrow = constraints.maxWidth < 280;
+            // Portrait phones have room for the turn identity, timer,
+            // history, settings, and (in QA) the troubleshooting action, but
+            // not every secondary action at once. Those secondary actions
+            // remain available from their dedicated in-game surfaces; the
+            // trace button stays visible so a phone capture can always be
+            // copied without causing a toolbar overflow.
+            final compactPortrait = constraints.maxWidth < 560;
             return Row(
               children: [
                 _GameBackAction(
@@ -13727,18 +15276,20 @@ class _GameQuickBar extends StatelessWidget {
                 else
                   Expanded(
                     child: LayoutBuilder(
-                      builder: (context, box) => _AutoFitSingleLineText(
-                        key: const ValueKey('game-mode-indicator'),
-                        compact || box.maxWidth < 92
-                            ? modeLabel
-                            : 'Parchís Pop · $modeLabel',
-                        textAlign: TextAlign.center,
-                        style: TextStyle(
-                          color: PopColors.navy,
-                          fontSize: compact ? 11 : 13,
-                          fontWeight: FontWeight.w900,
-                        ),
-                      ),
+                      builder: (context, box) => passAndPlay
+                          ? const _PassAndPlayAppBarVersion()
+                          : _AutoFitSingleLineText(
+                              key: const ValueKey('game-mode-indicator'),
+                              compact || box.maxWidth < 92
+                                  ? modeLabel
+                                  : 'Parchís Pop · $modeLabel',
+                              textAlign: TextAlign.center,
+                              style: TextStyle(
+                                color: PopColors.navy,
+                                fontSize: compact ? 11 : 13,
+                                fontWeight: FontWeight.w900,
+                              ),
+                            ),
                     ),
                   ),
                 if (!veryNarrow && (!compact || phoneLandscape)) ...[
@@ -13746,8 +15297,9 @@ class _GameQuickBar extends StatelessWidget {
                   _MatchTimerBadge(elapsed: elapsed, compact: phoneLandscape),
                   const SizedBox(width: 2),
                 ],
-                if (chaos)
+                if (chaos && !compactPortrait)
                   _GameQuickAction(
+                    key: const ValueKey('game-powers-button'),
                     tooltip: appTranslate(context, 'Poderes y trampas'),
                     icon: Icons.backpack_rounded,
                     iconSize: iconSize,
@@ -13762,7 +15314,7 @@ class _GameQuickBar extends StatelessWidget {
                   expandedTarget: phoneLandscape,
                   onPressed: onShowHistory,
                 ),
-                if (!veryNarrow)
+                if (!veryNarrow && !compactPortrait)
                   _GameQuickAction(
                     tooltip: appTranslate(context, 'Cómo jugar'),
                     icon: Icons.help_rounded,
@@ -13782,7 +15334,10 @@ class _GameQuickBar extends StatelessWidget {
                     expandedTarget: phoneLandscape,
                     onPressed: onShowDiagnostics!,
                   ),
-                if (canReport && !veryNarrow && onReportIssue != null)
+                if (canReport &&
+                    !veryNarrow &&
+                    !compactPortrait &&
+                    onReportIssue != null)
                   _GameQuickAction(
                     key: const ValueKey('game-report-button'),
                     tooltip: appTranslate(context, 'Reportar jugador'),
@@ -13808,11 +15363,81 @@ class _GameQuickBar extends StatelessWidget {
   }
 }
 
+/// Pass & Play owns the center of its toolbar, so it keeps the build label
+/// there instead of consuming a separate strip above the mobile ad banner.
+class _PassAndPlayAppBarVersion extends StatefulWidget {
+  const _PassAndPlayAppBarVersion();
+
+  @override
+  State<_PassAndPlayAppBarVersion> createState() =>
+      _PassAndPlayAppBarVersionState();
+}
+
+class _PassAndPlayAppBarVersionState extends State<_PassAndPlayAppBarVersion> {
+  String _label = 'v…';
+
+  @override
+  void initState() {
+    super.initState();
+    _loadVersion();
+  }
+
+  Future<void> _loadVersion() async {
+    try {
+      final package = await PackageInfo.fromPlatform();
+      final build = package.buildNumber.trim();
+      final label = build.isEmpty
+          ? 'v${package.version}'
+          : 'v${package.version}+$build';
+      if (mounted) setState(() => _label = label);
+    } catch (_) {
+      if (mounted) setState(() => _label = 'v—');
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) => Semantics(
+    label: 'Versión de la app: $_label',
+    child: Center(
+      child: FittedBox(
+        fit: BoxFit.scaleDown,
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const PopText(
+              'MESA COMPARTIDA',
+              style: TextStyle(
+                color: Color(0xFF527063),
+                fontSize: 7,
+                height: 1,
+                fontWeight: FontWeight.w900,
+                letterSpacing: .35,
+              ),
+            ),
+            const SizedBox(height: 1),
+            PopText(
+              _label,
+              key: const ValueKey('pass-play-appbar-version'),
+              style: const TextStyle(
+                color: PopColors.navy,
+                fontSize: 10,
+                height: 1,
+                fontWeight: FontWeight.w900,
+                letterSpacing: .15,
+              ),
+            ),
+          ],
+        ),
+      ),
+    ),
+  );
+}
+
 /// QA-only, copyable trace for the part of an online match that happens after
 /// matchmaking.  It deliberately lives in the game route so lifecycle and
 /// realtime failures can be captured even after the player has entered the
 /// board.  The parent gates the route with [onlineDiagnosticsUiEnabled].
-class _OnlineGameDiagnosticsDialog extends StatelessWidget {
+class _OnlineGameDiagnosticsDialog extends StatefulWidget {
   const _OnlineGameDiagnosticsDialog({
     required this.revision,
     required this.entries,
@@ -13826,6 +15451,24 @@ class _OnlineGameDiagnosticsDialog extends StatelessWidget {
   final bool Function() copied;
   final Future<void> Function() onCopy;
   final VoidCallback onClose;
+
+  @override
+  State<_OnlineGameDiagnosticsDialog> createState() =>
+      _OnlineGameDiagnosticsDialogState();
+}
+
+class _OnlineGameDiagnosticsDialogState
+    extends State<_OnlineGameDiagnosticsDialog> {
+  late bool copied = widget.copied();
+
+  Future<void> _handleCopy() async {
+    await widget.onCopy();
+    if (!mounted) return;
+    // Keep feedback local to the dialog as well as in the parent game state.
+    // The dialog is presented on a separate route, so relying only on the
+    // parent setState can leave the button label stale.
+    setState(() => copied = true);
+  }
 
   Color _stateColor(QuickPopDiagnosticState state) => switch (state) {
     QuickPopDiagnosticState.success => PopColors.green,
@@ -13844,9 +15487,9 @@ class _OnlineGameDiagnosticsDialog extends StatelessWidget {
       insetPadding: const EdgeInsets.all(16),
       padding: const EdgeInsets.fromLTRB(18, 16, 18, 14),
       child: ValueListenableBuilder<int>(
-        valueListenable: revision,
+        valueListenable: widget.revision,
         builder: (context, _, _) {
-          final currentEntries = entries();
+          final currentEntries = widget.entries();
           return Column(
             mainAxisSize: MainAxisSize.min,
             crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -13871,7 +15514,7 @@ class _OnlineGameDiagnosticsDialog extends StatelessWidget {
                   ),
                   IconButton(
                     tooltip: 'Cerrar',
-                    onPressed: onClose,
+                    onPressed: widget.onClose,
                     icon: const Icon(Icons.close_rounded, color: Colors.white),
                   ),
                 ],
@@ -13976,9 +15619,9 @@ class _OnlineGameDiagnosticsDialog extends StatelessWidget {
               const SizedBox(height: 12),
               FilledButton.icon(
                 key: const ValueKey('copy-game-diagnostics'),
-                onPressed: onCopy,
-                icon: Icon(copied() ? Icons.check_rounded : Icons.copy_rounded),
-                label: PopText(copied() ? 'COPIADO' : 'COPIAR DIAGNÓSTICO'),
+                onPressed: _handleCopy,
+                icon: Icon(copied ? Icons.check_rounded : Icons.copy_rounded),
+                label: PopText(copied ? 'COPIADO' : 'COPIAR DIAGNÓSTICO'),
                 style: FilledButton.styleFrom(
                   backgroundColor: PopColors.blue,
                   foregroundColor: Colors.white,
@@ -14371,6 +16014,7 @@ class _GameSideRail extends StatefulWidget {
     this.avatarIds = const <PlayerColor, String?>{},
     this.diceStyleId,
     this.onlineSession,
+    this.diceInPlayerBase = false,
     this.revealTrapDetails = false,
     this.wideShortLandscape = false,
     this.visibleRemainingDice,
@@ -14399,6 +16043,7 @@ class _GameSideRail extends StatefulWidget {
   final Map<PlayerColor, String?> avatarIds;
   final String? diceStyleId;
   final OnlineMatchSession? onlineSession;
+  final bool diceInPlayerBase;
   final bool revealTrapDetails;
   final bool wideShortLandscape;
   final List<int>? visibleRemainingDice;
@@ -14468,6 +16113,7 @@ class _GameSideRailState extends State<_GameSideRail> {
                     avatarIds: widget.avatarIds,
                     visibleRemainingDice: widget.visibleRemainingDice,
                     onlineSession: widget.onlineSession,
+                    diceInPlayerBase: widget.diceInPlayerBase,
                   ),
                   const SizedBox(height: 5),
                   _LandscapePlayerStrip(
@@ -14505,6 +16151,7 @@ class _GameSideRailState extends State<_GameSideRail> {
                     avatarIds: widget.avatarIds,
                     visibleRemainingDice: widget.visibleRemainingDice,
                     onlineSession: widget.onlineSession,
+                    diceInPlayerBase: widget.diceInPlayerBase,
                   ),
                   if (showRosterBelowControls) ...[
                     const SizedBox(height: 7),
@@ -15042,6 +16689,7 @@ class _VictoryCelebration extends StatefulWidget {
     this.onWatchRewarded,
     this.rewardInProgress = false,
     this.rewardClaimed = false,
+    this.rewardReady = false,
     this.navigationInProgress = false,
     required this.onPlayAgain,
     required this.onHome,
@@ -15059,6 +16707,7 @@ class _VictoryCelebration extends StatefulWidget {
   final VoidCallback? onWatchRewarded;
   final bool rewardInProgress;
   final bool rewardClaimed;
+  final bool rewardReady;
   final bool navigationInProgress;
   final VoidCallback onPlayAgain;
   final VoidCallback onHome;
@@ -15109,7 +16758,7 @@ class _VictoryCelebrationState extends State<_VictoryCelebration>
           if (widget.onWatchRewarded != null)
             FilledButton.icon(
               key: const ValueKey('victory-early-rewarded-ad'),
-              onPressed: widget.rewardInProgress
+              onPressed: widget.rewardInProgress || !widget.rewardReady
                   ? null
                   : widget.onWatchRewarded,
               style: FilledButton.styleFrom(
@@ -15125,10 +16774,16 @@ class _VictoryCelebrationState extends State<_VictoryCelebration>
                         color: Colors.white,
                       ),
                     )
-                  : const Icon(Icons.play_circle_fill_rounded),
+                  : Icon(
+                      widget.rewardReady
+                          ? Icons.play_circle_fill_rounded
+                          : Icons.hourglass_top_rounded,
+                    ),
               label: PopText(
                 widget.rewardInProgress
                     ? 'CARGANDO ANUNCIO…'
+                    : !widget.rewardReady
+                    ? 'PREPARANDO ANUNCIO…'
                     : 'VER ANUNCIO\n'
                           '+${widget.doubleRewardCoins} MONEDAS EXTRA',
                 textAlign: TextAlign.center,
@@ -15257,7 +16912,10 @@ class _VictoryCelebrationState extends State<_VictoryCelebration>
 
     Widget? extra;
     if (widget.onWatchRewarded != null) {
-      final onPressed = widget.rewardInProgress || widget.navigationInProgress
+      final onPressed =
+          widget.rewardInProgress ||
+              widget.navigationInProgress ||
+              !widget.rewardReady
           ? null
           : widget.onWatchRewarded;
       extra = Semantics(
@@ -15294,10 +16952,21 @@ class _VictoryCelebrationState extends State<_VictoryCelebration>
                       color: Color(0xFF09663E),
                     ),
                   )
-                : const Icon(Icons.play_circle_fill_rounded, size: 21),
+                : Icon(
+                    widget.rewardReady
+                        ? Icons.play_circle_fill_rounded
+                        : Icons.hourglass_top_rounded,
+                    size: 21,
+                  ),
             label: widget.rewardInProgress
                 ? const PopText(
                     'CARGANDO…',
+                    maxLines: 1,
+                    style: TextStyle(fontSize: 11, fontWeight: FontWeight.w900),
+                  )
+                : !widget.rewardReady
+                ? const PopText(
+                    'PREPARANDO…',
                     maxLines: 1,
                     style: TextStyle(fontSize: 11, fontWeight: FontWeight.w900),
                   )
@@ -15812,7 +17481,8 @@ class _VictoryCelebrationState extends State<_VictoryCelebration>
                                                   'victory-rewarded-ad',
                                                 ),
                                                 onPressed:
-                                                    widget.rewardInProgress
+                                                    widget.rewardInProgress ||
+                                                        !widget.rewardReady
                                                     ? null
                                                     : widget.onWatchRewarded,
                                                 style: FilledButton.styleFrom(
@@ -15834,13 +17504,18 @@ class _VictoryCelebrationState extends State<_VictoryCelebration>
                                                                   Colors.white,
                                                             ),
                                                       )
-                                                    : const Icon(
-                                                        Icons
-                                                            .play_circle_fill_rounded,
+                                                    : Icon(
+                                                        widget.rewardReady
+                                                            ? Icons
+                                                                  .play_circle_fill_rounded
+                                                            : Icons
+                                                                  .hourglass_top_rounded,
                                                       ),
                                                 label: PopText(
                                                   widget.rewardInProgress
                                                       ? 'CARGANDO ANUNCIO…'
+                                                      : !widget.rewardReady
+                                                      ? 'PREPARANDO ANUNCIO…'
                                                       : 'VER ANUNCIO\n'
                                                             '+${widget.doubleRewardCoins} MONEDAS EXTRA',
                                                   textAlign: TextAlign.center,
@@ -18095,30 +19770,40 @@ class GameBoardMockup extends StatefulWidget {
     super.key,
     required this.engine,
     this.compactPhone = false,
+    this.enlargeNestsForPassAndPlay = false,
     this.selectedToken,
     this.movePreviews,
     this.themeId,
+    this.sharedTableThemeId,
     this.playerThemeIds = const <PlayerColor, String?>{},
     this.revealAllTraps = false,
     this.robotTokens = false,
     this.robotTokenColors = const <PlayerColor>{},
     this.tokenStyleIds = const <PlayerColor, String?>{},
     this.playerLabels = const <PlayerColor, String>{},
+    this.rotateTopPlayerLabels = false,
   });
   final GameEngine engine;
   final bool compactPhone;
+
+  /// Only Pass & Play displays the dice inside a player's nest.
+  final bool enlargeNestsForPassAndPlay;
   final GameToken? selectedToken;
   final List<MoveDestinationPreview>? movePreviews;
 
   /// Legacy single-player theme. When supplied it only styles the red/local
   /// quadrant; shared routes and the other three bases remain neutral.
   final String? themeId;
+
+  /// A board-wide visual identity available only in Mesa Compartida.
+  final String? sharedTableThemeId;
   final Map<PlayerColor, String?> playerThemeIds;
   final bool revealAllTraps;
   final bool robotTokens;
   final Set<PlayerColor> robotTokenColors;
   final Map<PlayerColor, String?> tokenStyleIds;
   final Map<PlayerColor, String> playerLabels;
+  final bool rotateTopPlayerLabels;
 
   Map<PlayerColor, String?> get resolvedPlayerThemeIds {
     final resolved = <PlayerColor, String?>{...playerThemeIds};
@@ -18408,17 +20093,20 @@ class _GameBoardMockupState extends State<GameBoardMockup>
             painter: _ParcheseBoardPainter(
               widget.engine,
               compactPhone: widget.compactPhone,
+              enlargeNestsForPassAndPlay: widget.enlargeNestsForPassAndPlay,
               selectedToken: widget.selectedToken,
               animatedCells: _animatedCells(),
               pulse: pulseController.value,
               cubeSpin: cubeController.value,
               effectProgress: effectController.value,
               playerThemeIds: widget.resolvedPlayerThemeIds,
+              sharedTableThemeId: widget.sharedTableThemeId,
               revealAllTraps: widget.revealAllTraps,
               robotTokens: widget.robotTokens,
               robotTokenColors: widget.robotTokenColors,
               tokenStyleIds: widget.tokenStyleIds,
               playerLabels: widget.playerLabels,
+              rotateTopPlayerLabels: widget.rotateTopPlayerLabels,
               localPlayerLabel: appTranslate(context, 'TÚ'),
               languageCode: appLanguageCodeOf(context),
               movePreviews:
@@ -18437,34 +20125,40 @@ class _ParcheseBoardPainter extends CustomPainter {
   const _ParcheseBoardPainter(
     this.engine, {
     required this.compactPhone,
+    this.enlargeNestsForPassAndPlay = false,
     required this.selectedToken,
     required this.animatedCells,
     required this.pulse,
     required this.cubeSpin,
     required this.effectProgress,
     required this.playerThemeIds,
+    this.sharedTableThemeId,
     required this.revealAllTraps,
     required this.robotTokens,
     required this.robotTokenColors,
     required this.tokenStyleIds,
     required this.playerLabels,
+    this.rotateTopPlayerLabels = false,
     required this.localPlayerLabel,
     required this.languageCode,
     required this.movePreviews,
   });
   final GameEngine engine;
   final bool compactPhone;
+  final bool enlargeNestsForPassAndPlay;
   final GameToken? selectedToken;
   final Map<GameToken, Offset> animatedCells;
   final double pulse;
   final double cubeSpin;
   final double effectProgress;
   final Map<PlayerColor, String?> playerThemeIds;
+  final String? sharedTableThemeId;
   final bool revealAllTraps;
   final bool robotTokens;
   final Set<PlayerColor> robotTokenColors;
   final Map<PlayerColor, String?> tokenStyleIds;
   final Map<PlayerColor, String> playerLabels;
+  final bool rotateTopPlayerLabels;
   final String localPlayerLabel;
   final String languageCode;
   final List<MoveDestinationPreview> movePreviews;
@@ -18495,11 +20189,11 @@ class _ParcheseBoardPainter extends CustomPainter {
     final cell = geometry.cell;
     final outerBoard = Rect.fromLTWH(0, 0, side, side);
     final frameCell = side / grid;
-    // A cosmetic belongs to a player, not to the shared table. Keep the
-    // routes and frame classic so every quadrant can show its owner's
-    // independent loadout without changing another player's side. Each goal
-    // triangle is themed independently for the player who owns it.
-    const theme = defaultThemeVisualSpec;
+    // Standard and online games retain player-local cosmetics. Mesa
+    // Compartida alone may choose a single full-board identity.
+    final theme = sharedTableThemeId == null
+        ? defaultThemeVisualSpec
+        : themeVisualSpecFor(sharedTableThemeId);
     final boardSurface = theme.boardSurfaceColor;
     final framePrimary = theme.framePrimaryColor;
     final frameAccent = theme.frameAccentColor;
@@ -18530,7 +20224,9 @@ class _ParcheseBoardPainter extends CustomPainter {
       0,
       PopColors.blue,
       PlayerColor.blue,
-      themeVisualSpecFor(playerThemeIds[PlayerColor.blue]),
+      sharedTableThemeId == null
+          ? themeVisualSpecFor(playerThemeIds[PlayerColor.blue])
+          : theme,
       cubeSpin,
     );
     _base(
@@ -18540,7 +20236,9 @@ class _ParcheseBoardPainter extends CustomPainter {
       0,
       PopColors.yellow,
       PlayerColor.yellow,
-      themeVisualSpecFor(playerThemeIds[PlayerColor.yellow]),
+      sharedTableThemeId == null
+          ? themeVisualSpecFor(playerThemeIds[PlayerColor.yellow])
+          : theme,
       cubeSpin,
     );
     _base(
@@ -18550,7 +20248,9 @@ class _ParcheseBoardPainter extends CustomPainter {
       13,
       PopColors.red,
       PlayerColor.red,
-      themeVisualSpecFor(playerThemeIds[PlayerColor.red]),
+      sharedTableThemeId == null
+          ? themeVisualSpecFor(playerThemeIds[PlayerColor.red])
+          : theme,
       cubeSpin,
     );
     _base(
@@ -18560,7 +20260,9 @@ class _ParcheseBoardPainter extends CustomPainter {
       13,
       PopColors.green,
       PlayerColor.green,
-      themeVisualSpecFor(playerThemeIds[PlayerColor.green]),
+      sharedTableThemeId == null
+          ? themeVisualSpecFor(playerThemeIds[PlayerColor.green])
+          : theme,
       cubeSpin,
     );
 
@@ -18568,19 +20270,22 @@ class _ParcheseBoardPainter extends CustomPainter {
       final departure = departureColors[index];
       final isStar = visibleStarIndices.contains(index);
       final sectorOwner = visualSectorOwnerForLoopIndex(index);
-      final sectorTheme = themeVisualSpecFor(playerThemeIds[sectorOwner]);
-      final isCosmic = sectorTheme.motif == ThemeMotif.cosmic;
-      final fill = isCosmic
+      final sectorTheme = sharedTableThemeId == null
+          ? themeVisualSpecFor(playerThemeIds[sectorOwner])
+          : theme;
+      final isEnhancedTrack =
+          sharedTableThemeId != null || sectorTheme.motif == ThemeMotif.cosmic;
+      final fill = isEnhancedTrack
           ? (departure == null
                 ? sectorTheme.trackSurfaceColor
-                : Color.lerp(departure, sectorTheme.scenePrimaryColor, .58)!)
+                : Color.lerp(departure, sectorTheme.scenePrimaryColor, .30)!)
           : departure ??
                 (isStar ? const Color(0xFFC9CDD3) : theme.trackSurfaceColor);
       final transition = _transitionTrackPath(index, cell);
       if (transition == null) {
         final rect = _trackRect(GameEngine.loop[index], cell);
         _raisedCell(canvas, rect, fill, outline);
-        if (isCosmic) {
+        if (sectorTheme.motif == ThemeMotif.cosmic) {
           _cosmicCellOverlay(
             canvas,
             Path()..addRect(rect),
@@ -18593,7 +20298,7 @@ class _ParcheseBoardPainter extends CustomPainter {
         }
       } else {
         _raisedPathCell(canvas, transition, fill, outline);
-        if (isCosmic) {
+        if (sectorTheme.motif == ThemeMotif.cosmic) {
           _cosmicCellOverlay(
             canvas,
             transition,
@@ -18609,7 +20314,9 @@ class _ParcheseBoardPainter extends CustomPainter {
 
     for (final entry in GameEngine.homeLanes.entries) {
       final teamColor = _playerColor(entry.key);
-      final ownerTheme = themeVisualSpecFor(playerThemeIds[entry.key]);
+      final ownerTheme = sharedTableThemeId == null
+          ? themeVisualSpecFor(playerThemeIds[entry.key])
+          : theme;
       final color = ownerTheme.motif == ThemeMotif.classic
           ? teamColor
           : Color.lerp(teamColor, ownerTheme.scenePrimaryColor, .18)!;
@@ -18631,15 +20338,24 @@ class _ParcheseBoardPainter extends CustomPainter {
       }
     }
 
-    _center(canvas, cell, playerThemeIds, cubeSpin);
+    _center(
+      canvas,
+      cell,
+      sharedTableThemeId == null
+          ? playerThemeIds
+          : {for (final color in PlayerColor.values) color: theme.id},
+      cubeSpin,
+    );
 
     for (var index = 0; index < GameEngine.loop.length; index++) {
       final logicalCenter = GameEngine.loop[index];
       final center = logicalCenter * cell;
       if (visibleStarIndices.contains(index)) {
-        final safeTheme = themeVisualSpecFor(
-          playerThemeIds[visualSectorOwnerForLoopIndex(index)],
-        );
+        final safeTheme = sharedTableThemeId == null
+            ? themeVisualSpecFor(
+                playerThemeIds[visualSectorOwnerForLoopIndex(index)],
+              )
+            : theme;
         final starCenter =
             (logicalCenter +
                 safeStarPaintNudgeForTesting(
@@ -18649,9 +20365,11 @@ class _ParcheseBoardPainter extends CustomPainter {
             cell;
         _safe(canvas, cell, starCenter, theme: safeTheme);
       } else if (!departureColors.containsKey(index)) {
-        final numberTheme = themeVisualSpecFor(
-          playerThemeIds[visualSectorOwnerForLoopIndex(index)],
-        );
+        final numberTheme = sharedTableThemeId == null
+            ? themeVisualSpecFor(
+                playerThemeIds[visualSectorOwnerForLoopIndex(index)],
+              )
+            : theme;
         _number(
           canvas,
           cell,
@@ -19292,8 +21010,9 @@ class _ParcheseBoardPainter extends CustomPainter {
     );
     _baseThemeMotif(canvas, baseRect, theme, baseCell, progress);
     final nestCenter = baseRect.center;
-    const nestShadowRadius = 2.38;
-    const nestRadius = 2.35;
+    final nestScale = enlargeNestsForPassAndPlay ? 1.15 : 1.0;
+    final nestShadowRadius = 2.38 * nestScale;
+    final nestRadius = 2.35 * nestScale;
     canvas.drawCircle(
       nestCenter + Offset(0, baseCell * .16),
       baseCell * nestShadowRadius,
@@ -19367,10 +21086,18 @@ class _ParcheseBoardPainter extends CustomPainter {
         : playerColor == PlayerColor.yellow
         ? 'CPU 2'
         : 'CPU 1';
-    final fullLabel = playerColor == PlayerColor.red
-        ? localPlayerLabel
-        : (playerLabels[playerColor] ?? fallback).toUpperCase();
-    _baseLabel(canvas, baseRect, baseCell, row == 0, fullLabel);
+    final fullLabel = (playerLabels[playerColor] ?? fallback).toUpperCase();
+    _baseLabel(
+      canvas,
+      baseRect,
+      baseCell,
+      row == 0,
+      fullLabel,
+      upsideDown:
+          rotateTopPlayerLabels &&
+          (playerColor == PlayerColor.blue ||
+              playerColor == PlayerColor.yellow),
+    );
   }
 
   void _baseThemeMotif(
@@ -19760,8 +21487,9 @@ class _ParcheseBoardPainter extends CustomPainter {
     Rect baseRect,
     double baseCell,
     bool top,
-    String label,
-  ) {
+    String label, {
+    bool upsideDown = false,
+  }) {
     TextPainter buildPainter(double fontSize) => TextPainter(
       text: TextSpan(
         text: label,
@@ -19787,6 +21515,7 @@ class _ParcheseBoardPainter extends CustomPainter {
     );
     canvas.save();
     canvas.translate(center.dx, center.dy);
+    if (upsideDown) canvas.rotate(math.pi);
     text.paint(canvas, Offset(-text.width / 2, -text.height / 2));
     canvas.restore();
   }
@@ -21570,6 +23299,8 @@ class GameControlPanel extends StatelessWidget {
     this.mobileBoardFullView = false,
     this.visibleRemainingDice,
     this.onlineSession,
+    this.diceInPlayerBase = false,
+    this.assignedPlayerColor,
     this.localCpuTakeoverActive = false,
   });
   final GameEngine engine;
@@ -21599,6 +23330,8 @@ class GameControlPanel extends StatelessWidget {
   final bool mobileBoardFullView;
   final List<int>? visibleRemainingDice;
   final OnlineMatchSession? onlineSession;
+  final bool diceInPlayerBase;
+  final PlayerColor? assignedPlayerColor;
   final bool localCpuTakeoverActive;
 
   String? get diceId => diceStyleId;
@@ -21607,6 +23340,13 @@ class GameControlPanel extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final diceStyle = diceVisualSpecFor(diceStyleId);
+    final panelPlayerColor = assignedPlayerColor ?? engine.currentPlayer.color;
+    final panelPlayerColorValue = switch (panelPlayerColor) {
+      PlayerColor.red => PopColors.red,
+      PlayerColor.green => PopColors.green,
+      PlayerColor.yellow => PopColors.yellow,
+      PlayerColor.blue => PopColors.blue,
+    };
     final tabletPortraitHud =
         mobileBoardTools && _isTabletGameViewport(context);
     final activeTraps = engine
@@ -21717,6 +23457,27 @@ class GameControlPanel extends StatelessWidget {
         ],
       ],
     );
+    if (diceInPlayerBase) {
+      final playerColor = _playerUiColor(engine.currentPlayer.color);
+      return KeyedSubtree(
+        key: const ValueKey('game-control-panel'),
+        child: Container(
+          key: const ValueKey('pass-and-play-turn-panel'),
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 9),
+          decoration: BoxDecoration(
+            gradient: LinearGradient(
+              colors: [const Color(0xFF0B0E14), playerColor],
+            ),
+            borderRadius: BorderRadius.circular(18),
+            border: Border.all(color: Colors.white, width: 1.5),
+          ),
+          child: DefaultTextStyle.merge(
+            style: const TextStyle(color: Colors.white),
+            child: status,
+          ),
+        ),
+      );
+    }
     final remainingForSlots = <int>[
       ...(visibleRemainingDice ?? engine.remainingDice),
     ];
@@ -22021,10 +23782,10 @@ class GameControlPanel extends StatelessWidget {
               key: const ValueKey('phone-landscape-game-hud'),
               padding: const EdgeInsets.fromLTRB(7, 6, 7, 7),
               decoration: BoxDecoration(
-                gradient: const LinearGradient(
-                  begin: Alignment.topLeft,
-                  end: Alignment.bottomRight,
-                  colors: [Color(0xFF2D7BE8), Color(0xFF12376F)],
+                gradient: LinearGradient(
+                  begin: Alignment.centerLeft,
+                  end: Alignment.centerRight,
+                  colors: [const Color(0xFF0B0E14), panelPlayerColorValue],
                 ),
                 borderRadius: BorderRadius.circular(15),
                 border: Border.all(
@@ -22283,10 +24044,10 @@ class GameControlPanel extends StatelessWidget {
                   verticalPadding,
                 ),
                 decoration: BoxDecoration(
-                  gradient: const LinearGradient(
-                    begin: Alignment.topLeft,
-                    end: Alignment.bottomRight,
-                    colors: [Color(0xFF2457A2), PopColors.navy],
+                  gradient: LinearGradient(
+                    begin: Alignment.centerLeft,
+                    end: Alignment.centerRight,
+                    colors: [const Color(0xFF0B0E14), panelPlayerColorValue],
                   ),
                   borderRadius: BorderRadius.circular(24),
                   border: Border.all(color: Colors.white, width: 1.5),
@@ -22362,15 +24123,6 @@ class GameControlPanel extends StatelessWidget {
                                         ),
                                       ),
                                       const SizedBox(height: 3),
-                                      if (onlineSession != null)
-                                        PopText(
-                                          'Room: ${onlineSession!.matchId.substring(math.max(0, onlineSession!.matchId.length - 8))}',
-                                          style: const TextStyle(
-                                            color: Colors.white70,
-                                            fontSize: 10,
-                                            fontWeight: FontWeight.w600,
-                                          ),
-                                        ),
                                       _AutoFitSingleLineText(
                                         phaseLabel,
                                         style: TextStyle(
@@ -22554,13 +24306,10 @@ class GameControlPanel extends StatelessWidget {
                 verticalPadding,
               ),
               decoration: BoxDecoration(
-                gradient: const LinearGradient(
-                  begin: Alignment.topLeft,
-                  end: Alignment.bottomRight,
-                  // Keep the phone HUD in the same blue game-panel language
-                  // used by the desktop builds. The board remains untouched;
-                  // this is only the action surface below it.
-                  colors: [Color(0xFF2457A2), PopColors.navy],
+                gradient: LinearGradient(
+                  begin: Alignment.centerLeft,
+                  end: Alignment.centerRight,
+                  colors: [const Color(0xFF0B0E14), panelPlayerColorValue],
                 ),
                 borderRadius: BorderRadius.circular(22),
                 // Keep the blue frame visible without stealing the last pixel
@@ -22822,10 +24571,10 @@ class GameControlPanel extends StatelessWidget {
               key: const ValueKey('portrait-game-hud'),
               padding: const EdgeInsets.fromLTRB(8, 7, 8, 8),
               decoration: BoxDecoration(
-                gradient: const LinearGradient(
-                  begin: Alignment.topLeft,
-                  end: Alignment.bottomRight,
-                  colors: [Color(0xFF2457A2), PopColors.navy],
+                gradient: LinearGradient(
+                  begin: Alignment.centerLeft,
+                  end: Alignment.centerRight,
+                  colors: [const Color(0xFF0B0E14), panelPlayerColorValue],
                 ),
                 borderRadius: BorderRadius.circular(20),
                 border: Border.all(color: Colors.white, width: 2),
@@ -22998,10 +24747,10 @@ class GameControlPanel extends StatelessWidget {
           return Container(
             key: const ValueKey('desktop-game-hud'),
             decoration: BoxDecoration(
-              gradient: const LinearGradient(
-                begin: Alignment.topLeft,
-                end: Alignment.bottomRight,
-                colors: [Color(0xFF2457A2), PopColors.navy],
+              gradient: LinearGradient(
+                begin: Alignment.centerLeft,
+                end: Alignment.centerRight,
+                colors: [const Color(0xFF0B0E14), panelPlayerColorValue],
               ),
               borderRadius: BorderRadius.circular(20),
               border: Border.all(color: Colors.white, width: 2),
@@ -23449,10 +25198,10 @@ class _ThrownDie extends StatelessWidget {
         ? 0.0
         : math.sin(settle * math.pi) * (1 - settle) * size * .32;
     center = Offset(center.dx, center.dy - arc - bounce);
-    final faceStep = (progress * 17).floor();
-    final shown = progress < .84
-        ? ((value + slotIndex * 2 + faceStep * 5) % 6) + 1
-        : value;
+    // The server gives us both values in the same authoritative roll. Keeping
+    // the faces stable while the dice fly avoids showing a misleading first
+    // result and then changing the second die a moment later on slower phones.
+    final shown = value;
     final direction = slotIndex.isEven ? 1.0 : -1.0;
     final spin = Curves.easeOutQuart.transform(progress);
     final resultZoom = Curves.easeOutBack.transform(zoomProgress);
@@ -24286,6 +26035,485 @@ class _HudMessageButton extends StatelessWidget {
   }
 }
 
+/// Tablet Pass & Play has a dedicated table layout: two teams above the
+/// centered board and two below it. The dice move to the active team's panel
+/// so handing off the device remains obvious without covering the board.
+class _TabletPassAndPlayGameLayout extends StatelessWidget {
+  const _TabletPassAndPlayGameLayout({
+    required this.board,
+    required this.engine,
+    required this.selectedToken,
+    required this.diceStyle,
+    required this.canRoll,
+    required this.onRoll,
+    required this.onDieSelected,
+  });
+
+  final Widget board;
+  final GameEngine engine;
+  final GameToken? selectedToken;
+  final DiceVisualSpec diceStyle;
+  final bool canRoll;
+  final VoidCallback onRoll;
+  final ValueChanged<int> onDieSelected;
+
+  PlayerState _player(PlayerColor color) =>
+      engine.players.firstWhere((player) => player.color == color);
+
+  @override
+  Widget build(BuildContext context) => LayoutBuilder(
+    builder: (context, constraints) {
+      final panelHeight = (constraints.maxHeight * .12)
+          .clamp(68.0, 84.0)
+          .toDouble();
+      Widget teamPanel(PlayerColor color) => _TabletPassAndPlayTeamPanel(
+        player: _player(color),
+        engine: engine,
+        selectedToken: selectedToken,
+        diceStyle: diceStyle,
+        canRoll: canRoll && engine.currentPlayer.color == color,
+        onRoll: onRoll,
+        onDieSelected: onDieSelected,
+      );
+      Widget teamRow(PlayerColor first, PlayerColor second) => SizedBox(
+        height: panelHeight,
+        child: Row(
+          children: [
+            Expanded(child: teamPanel(first)),
+            const SizedBox(width: 6),
+            Expanded(child: teamPanel(second)),
+          ],
+        ),
+      );
+      return Padding(
+        padding: const EdgeInsets.symmetric(vertical: 2),
+        child: Column(
+          children: [
+            teamRow(PlayerColor.blue, PlayerColor.yellow),
+            const SizedBox(height: 5),
+            Expanded(
+              child: SizedBox(
+                width: double.infinity,
+                child: Align(alignment: Alignment.center, child: board),
+              ),
+            ),
+            const SizedBox(height: 5),
+            teamRow(PlayerColor.red, PlayerColor.green),
+          ],
+        ),
+      );
+    },
+  );
+}
+
+class _TabletPassAndPlayTeamPanel extends StatelessWidget {
+  const _TabletPassAndPlayTeamPanel({
+    required this.player,
+    required this.engine,
+    required this.selectedToken,
+    required this.diceStyle,
+    required this.canRoll,
+    required this.onRoll,
+    required this.onDieSelected,
+  });
+
+  final PlayerState player;
+  final GameEngine engine;
+  final GameToken? selectedToken;
+  final DiceVisualSpec diceStyle;
+  final bool canRoll;
+  final VoidCallback onRoll;
+  final ValueChanged<int> onDieSelected;
+
+  @override
+  Widget build(BuildContext context) {
+    final active = engine.currentPlayer.color == player.color;
+    final facesTableTop =
+        player.color == PlayerColor.blue || player.color == PlayerColor.yellow;
+    final color = _playerUiColor(player.color);
+    final completed = player.tokens.where((token) => token.finished).length;
+    final required = engine.rules.tokensRequiredToWin;
+    final remaining = <int>[...engine.remainingDice];
+    final available = [
+      for (final value in engine.dice)
+        !engine.hasRolled || remaining.remove(value),
+    ];
+    final moveChoices =
+        !active || selectedToken == null || engine.effectResolving
+        ? const <int>[]
+        : engine.legalDieValuesFor(selectedToken!);
+    final turnLabel = !active
+        ? appTranslate(context, 'Esperando')
+        : canRoll
+        ? appTranslate(context, 'Toca los dados')
+        : engine.hasRolled
+        ? appTranslate(context, 'Elige una ficha')
+        : appTranslate(context, 'Preparando turno');
+    final dice = Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        _DieSlot(
+          key: ValueKey('tablet-pass-and-play-die-${player.color.name}-0'),
+          slotIndex: 0,
+          value: engine.dice[0],
+          style: diceStyle,
+          animationId: engine.rollSerial,
+          emphasizeResult: engine.hasRolled,
+          available: available[0],
+          selectable:
+              active && !canRoll && moveChoices.contains(engine.dice[0]),
+          dimension: 52,
+          onTap: onDieSelected,
+        ),
+        const SizedBox(width: 7),
+        _DieSlot(
+          key: ValueKey('tablet-pass-and-play-die-${player.color.name}-1'),
+          slotIndex: 1,
+          value: engine.dice[1],
+          style: diceStyle,
+          animationId: engine.rollSerial,
+          emphasizeResult: engine.hasRolled,
+          available: available[1],
+          selectable:
+              active && !canRoll && moveChoices.contains(engine.dice[1]),
+          dimension: 52,
+          onTap: onDieSelected,
+        ),
+      ],
+    );
+    return AnimatedContainer(
+      duration: const Duration(milliseconds: 220),
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+      decoration: BoxDecoration(
+        gradient: LinearGradient(
+          begin: Alignment.centerLeft,
+          end: Alignment.centerRight,
+          colors: active
+              ? [const Color(0xFF090D13), color]
+              : [
+                  const Color(0xFF111827),
+                  Color.lerp(const Color(0xFF111827), color, .56)!,
+                ],
+        ),
+        borderRadius: BorderRadius.circular(18),
+        border: Border.all(
+          color: active ? Colors.white : color.withValues(alpha: .80),
+          width: active ? 2 : 1.4,
+        ),
+        boxShadow: active
+            ? [
+                BoxShadow(
+                  color: color.withValues(alpha: .34),
+                  blurRadius: 12,
+                  offset: const Offset(0, 5),
+                ),
+              ]
+            : null,
+      ),
+      child: Transform.rotate(
+        angle: facesTableTop ? math.pi : 0,
+        child: Row(
+          children: [
+            Expanded(
+              child: Column(
+                mainAxisAlignment: MainAxisAlignment.center,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    children: [
+                      Container(
+                        width: 15,
+                        height: 15,
+                        decoration: BoxDecoration(
+                          shape: BoxShape.circle,
+                          color: color,
+                          border: Border.all(color: Colors.white, width: 1.5),
+                        ),
+                      ),
+                      const SizedBox(width: 6),
+                      Expanded(
+                        child: _AutoFitSingleLineText(
+                          player.name,
+                          style: const TextStyle(
+                            color: Colors.white,
+                            fontSize: 16,
+                            fontWeight: FontWeight.w900,
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 4),
+                  Text(
+                    '$completed / $required ${appTranslate(context, 'EN META')}',
+                    style: TextStyle(
+                      color: Colors.white.withValues(alpha: .82),
+                      fontSize: 10,
+                      fontWeight: FontWeight.w800,
+                    ),
+                  ),
+                  const SizedBox(height: 2),
+                  Text(
+                    turnLabel.toUpperCase(),
+                    style: TextStyle(
+                      color: active ? Colors.white : Colors.white70,
+                      fontSize: 10,
+                      fontWeight: FontWeight.w900,
+                      letterSpacing: .25,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            if (active) ...[
+              const SizedBox(width: 8),
+              Semantics(
+                button: canRoll,
+                label: canRoll
+                    ? appTranslate(context, 'Toca los dados para lanzar.')
+                    : null,
+                child: InkWell(
+                  onTap: canRoll ? onRoll : null,
+                  borderRadius: BorderRadius.circular(16),
+                  child: Padding(padding: const EdgeInsets.all(3), child: dice),
+                ),
+              ),
+            ],
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _PassAndPlayCpuSeatClaims extends StatelessWidget {
+  const _PassAndPlayCpuSeatClaims({
+    required this.boardSize,
+    required this.compactPhone,
+    required this.players,
+    required this.onClaim,
+  });
+
+  final double boardSize;
+  final bool compactPhone;
+  final List<PlayerState> players;
+  final ValueChanged<PlayerColor> onClaim;
+
+  Offset _claimLocation(PlayerColor color) => switch (color) {
+    PlayerColor.blue => const Offset(3.5, 5.55),
+    PlayerColor.yellow => const Offset(16.5, 5.55),
+    PlayerColor.red => const Offset(3.5, 14.45),
+    PlayerColor.green => const Offset(16.5, 14.45),
+  };
+
+  @override
+  Widget build(BuildContext context) {
+    final geometry = _BoardGeometry(boardSize, compactPhone: compactPhone);
+    return Stack(
+      fit: StackFit.expand,
+      children: [
+        for (final player in players.where((player) => !player.isHuman))
+          Builder(
+            builder: (context) {
+              final center = geometry.toPixel(_claimLocation(player.color));
+              final topSide =
+                  player.color == PlayerColor.blue ||
+                  player.color == PlayerColor.yellow;
+              return Positioned(
+                left: center.dx - 54,
+                top: center.dy - 17,
+                child: Transform.rotate(
+                  angle: topSide ? math.pi : 0,
+                  child: Semantics(
+                    button: true,
+                    label: 'Jugar en lugar de ${player.name}',
+                    child: Material(
+                      color: Colors.transparent,
+                      child: InkWell(
+                        key: ValueKey(
+                          'pass-play-claim-seat-${player.color.name}',
+                        ),
+                        onTap: () => onClaim(player.color),
+                        borderRadius: BorderRadius.circular(17),
+                        child: Ink(
+                          width: 108,
+                          height: 34,
+                          decoration: BoxDecoration(
+                            gradient: LinearGradient(
+                              begin: Alignment.topLeft,
+                              end: Alignment.bottomRight,
+                              colors: [
+                                Color.lerp(
+                                  _playerUiColor(player.color),
+                                  Colors.white,
+                                  .24,
+                                )!,
+                                _playerUiColor(player.color),
+                                Color.lerp(
+                                  _playerUiColor(player.color),
+                                  PopColors.navy,
+                                  .34,
+                                )!,
+                              ],
+                            ),
+                            borderRadius: BorderRadius.circular(17),
+                            border: Border.all(
+                              color: Colors.white.withValues(alpha: .92),
+                              width: 1.4,
+                            ),
+                            boxShadow: [
+                              BoxShadow(
+                                color: _playerUiColor(
+                                  player.color,
+                                ).withValues(alpha: .48),
+                                blurRadius: 10,
+                                offset: const Offset(0, 4),
+                              ),
+                            ],
+                          ),
+                          child: const Row(
+                            mainAxisAlignment: MainAxisAlignment.center,
+                            children: [
+                              Icon(
+                                Icons.play_arrow_rounded,
+                                color: Colors.white,
+                                size: 18,
+                              ),
+                              SizedBox(width: 2),
+                              Text(
+                                'JUGAR AQUÍ',
+                                style: TextStyle(
+                                  color: Colors.white,
+                                  fontSize: 9.5,
+                                  fontWeight: FontWeight.w900,
+                                  letterSpacing: .2,
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+              );
+            },
+          ),
+      ],
+    );
+  }
+}
+
+/// Phones keep the dice inside the active base. Tablet Pass & Play uses the
+/// dedicated team panels above and below the board instead.
+class _PassAndPlayBaseDice extends StatelessWidget {
+  const _PassAndPlayBaseDice({
+    required this.boardSize,
+    required this.compactPhone,
+    required this.useLargeTabletLayout,
+    required this.playerColor,
+    required this.engine,
+    required this.selectedToken,
+    required this.diceStyle,
+    required this.canRoll,
+    required this.onRoll,
+    required this.onDieSelected,
+  });
+
+  final double boardSize;
+  final bool compactPhone;
+  final bool useLargeTabletLayout;
+  final PlayerColor playerColor;
+  final GameEngine engine;
+  final GameToken? selectedToken;
+  final DiceVisualSpec diceStyle;
+  final bool canRoll;
+  final VoidCallback onRoll;
+  final ValueChanged<int> onDieSelected;
+
+  Offset get _baseCenter => switch (playerColor) {
+    PlayerColor.blue => const Offset(3.5, 3.5),
+    PlayerColor.yellow => const Offset(16.5, 3.5),
+    PlayerColor.red => const Offset(3.5, 16.5),
+    PlayerColor.green => const Offset(16.5, 16.5),
+  };
+
+  @override
+  Widget build(BuildContext context) {
+    final geometry = _BoardGeometry(boardSize, compactPhone: compactPhone);
+    final center = geometry.toPixel(_baseCenter);
+    final diameter = (geometry.cell * (useLargeTabletLayout ? 5.25 : 4.35))
+        .clamp(68.0, 206.0)
+        .toDouble();
+    final dieDimension = useLargeTabletLayout ? 56.0 : 48.0;
+    final remaining = <int>[...engine.remainingDice];
+    final available = [
+      for (final value in engine.dice)
+        !engine.hasRolled || remaining.remove(value),
+    ];
+    final moveChoices = selectedToken == null || engine.effectResolving
+        ? const <int>[]
+        : engine.legalDieValuesFor(selectedToken!);
+    final dicePair = FittedBox(
+      fit: BoxFit.scaleDown,
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          _DieSlot(
+            key: const ValueKey('pass-and-play-die-slot-0'),
+            slotIndex: 0,
+            value: engine.dice[0],
+            style: diceStyle,
+            animationId: engine.rollSerial,
+            emphasizeResult: engine.hasRolled,
+            available: available[0],
+            selectable: !canRoll && moveChoices.contains(engine.dice[0]),
+            dimension: dieDimension,
+            onTap: onDieSelected,
+          ),
+          SizedBox(width: useLargeTabletLayout ? 7 : 5),
+          _DieSlot(
+            key: const ValueKey('pass-and-play-die-slot-1'),
+            slotIndex: 1,
+            value: engine.dice[1],
+            style: diceStyle,
+            animationId: engine.rollSerial,
+            emphasizeResult: engine.hasRolled,
+            available: available[1],
+            selectable: !canRoll && moveChoices.contains(engine.dice[1]),
+            dimension: dieDimension,
+            onTap: onDieSelected,
+          ),
+        ],
+      ),
+    );
+    return Positioned(
+      key: ValueKey('pass-and-play-base-dice-${playerColor.name}'),
+      left: center.dx - diameter / 2,
+      top: center.dy - diameter / 2,
+      width: diameter,
+      height: diameter,
+      child: Semantics(
+        container: true,
+        button: canRoll,
+        label: canRoll
+            ? appTranslate(context, 'Toca los dados para lanzar.')
+            : null,
+        child: Material(
+          color: Colors.transparent,
+          shape: const CircleBorder(),
+          clipBehavior: Clip.antiAlias,
+          child: InkWell(
+            onTap: canRoll ? onRoll : null,
+            customBorder: const CircleBorder(),
+            child: Center(child: dicePair),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
 class _DieSlot extends StatelessWidget {
   const _DieSlot({
     super.key,
@@ -24296,6 +26524,7 @@ class _DieSlot extends StatelessWidget {
     required this.emphasizeResult,
     required this.available,
     required this.selectable,
+    this.dimension = 48,
     this.onTap,
   });
 
@@ -24306,6 +26535,7 @@ class _DieSlot extends StatelessWidget {
   final bool emphasizeResult;
   final bool available;
   final bool selectable;
+  final double dimension;
   final ValueChanged<int>? onTap;
 
   @override
@@ -24335,7 +26565,7 @@ class _DieSlot extends StatelessWidget {
             ),
           ),
           child: SizedBox.square(
-            dimension: 48,
+            dimension: dimension,
             child: Center(
               child: _DieFace(
                 key: ValueKey('die-face-$slotIndex'),
@@ -25299,8 +27529,10 @@ class ShopScreen extends StatefulWidget {
 }
 
 class _ShopScreenState extends State<ShopScreen> {
+  static const sharedTableCategory = 'MESA COMPARTIDA';
   static const categories = [
     'Destacados',
+    sharedTableCategory,
     'Avatares',
     'Temas',
     'Dados',
@@ -25333,6 +27565,7 @@ class _ShopScreenState extends State<ShopScreen> {
   void didChangeDependencies() {
     super.didChangeDependencies();
     final ads = MobileAdsScope.maybeOf(context);
+    ads?.preloadRewarded();
     if (!shopRewardedCoinsEnabled ||
         rewardedOfferAnalyticsLogged ||
         ads == null ||
@@ -25867,13 +28100,29 @@ class _ShopScreenState extends State<ShopScreen> {
   @override
   Widget build(BuildContext context) {
     final ads = MobileAdsScope.maybeOf(context);
-    final visibleItems = selectedCategory == categories.first
-        ? shopCatalog.where((item) => item.featured).toList(growable: false)
-        : shopCatalog
-              .where(
-                (item) => _shopCategoryLabel(item.category) == selectedCategory,
-              )
-              .toList();
+    final visibleItems = switch (selectedCategory) {
+      'Destacados' =>
+        shopCatalog
+            .where((item) => item.featured && !item.sharedTableExclusive)
+            .toList(growable: false),
+      sharedTableCategory =>
+        shopCatalog
+            .where(
+              (item) =>
+                  item.category == CosmeticCategory.theme ||
+                  item.category == CosmeticCategory.dice ||
+                  item.category == CosmeticCategory.tokens,
+            )
+            .toList(growable: false),
+      _ =>
+        shopCatalog
+            .where(
+              (item) =>
+                  _shopCategoryLabel(item.category) == selectedCategory &&
+                  !item.sharedTableExclusive,
+            )
+            .toList(growable: false),
+    };
     return AnimatedBuilder(
       animation: wallet,
       builder: (context, _) => _PopRouteScaffold(
@@ -26023,6 +28272,10 @@ class _ShopScreenState extends State<ShopScreen> {
                 ),
               ),
               const SizedBox(height: 12),
+              if (selectedCategory == sharedTableCategory) ...[
+                const _SharedTableShopBanner(),
+                const SizedBox(height: 12),
+              ],
               LayoutBuilder(
                 builder: (context, box) {
                   final count = box.maxWidth >= 940
@@ -26060,6 +28313,90 @@ class _ShopScreenState extends State<ShopScreen> {
             ],
           ),
         ),
+      ),
+    );
+  }
+}
+
+class _SharedTableShopBanner extends StatelessWidget {
+  const _SharedTableShopBanner();
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      key: const ValueKey('shop-shared-table-banner'),
+      padding: const EdgeInsets.symmetric(horizontal: 13, vertical: 11),
+      decoration: BoxDecoration(
+        gradient: const LinearGradient(
+          colors: [Color(0xFF101B36), Color(0xFF176B57), Color(0xFF34B979)],
+          begin: Alignment.centerLeft,
+          end: Alignment.centerRight,
+          stops: [.0, .58, 1],
+        ),
+        borderRadius: BorderRadius.circular(20),
+        border: Border.all(color: PopColors.yellow, width: 1.5),
+        boxShadow: const [
+          BoxShadow(
+            color: Color(0x2417284D),
+            blurRadius: 12,
+            offset: Offset(0, 6),
+          ),
+        ],
+      ),
+      child: Row(
+        children: [
+          const SizedBox(
+            width: 56,
+            height: 56,
+            child: _PassAndPlayModeArtwork(),
+          ),
+          const SizedBox(width: 12),
+          const Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                PopText(
+                  'MESA COMPARTIDA',
+                  style: TextStyle(
+                    color: Colors.white,
+                    fontSize: 16,
+                    fontWeight: FontWeight.w900,
+                    letterSpacing: .2,
+                  ),
+                ),
+                SizedBox(height: 3),
+                PopText(
+                  'Diseños para jugar hasta 4 en un dispositivo.',
+                  maxLines: 2,
+                  style: TextStyle(
+                    color: Color(0xFFD7F9E9),
+                    fontSize: 11,
+                    height: 1.16,
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+              ],
+            ),
+          ),
+          SizedBox(width: 7),
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 5),
+            decoration: BoxDecoration(
+              color: Colors.white.withValues(alpha: .16),
+              borderRadius: BorderRadius.circular(11),
+              border: Border.all(color: Colors.white.withValues(alpha: .32)),
+            ),
+            child: const PopText(
+              'LOCAL',
+              style: TextStyle(
+                color: Colors.white,
+                fontSize: 9,
+                fontWeight: FontWeight.w900,
+                letterSpacing: .4,
+              ),
+            ),
+          ),
+        ],
       ),
     );
   }
@@ -26184,6 +28521,33 @@ class _ShopItemCard extends StatelessWidget {
                       ),
                     ),
                   ),
+                  if (item.sharedTableExclusive)
+                    Positioned(
+                      top: 9,
+                      left: 9,
+                      child: Container(
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 7,
+                          vertical: 4,
+                        ),
+                        decoration: BoxDecoration(
+                          color: PopColors.navy.withValues(alpha: .88),
+                          borderRadius: BorderRadius.circular(12),
+                          border: Border.all(
+                            color: PopColors.yellow.withValues(alpha: .9),
+                          ),
+                        ),
+                        child: const PopText(
+                          'MESA LOCAL',
+                          style: TextStyle(
+                            color: Colors.white,
+                            fontSize: 8.5,
+                            fontWeight: FontWeight.w900,
+                            letterSpacing: .3,
+                          ),
+                        ),
+                      ),
+                    ),
                 ],
               ),
             ),
@@ -26547,7 +28911,7 @@ ThemeVisualSpec boardCenterThemeForPlayerThemeIds(
 ThemeVisualSpec shopThemePreviewThemeForPlayer(
   String themeId,
   PlayerColor color,
-) => color == PlayerColor.red
+) => isSharedTableExclusiveThemeId(themeId) || color == PlayerColor.red
     ? themeVisualSpecFor(themeId)
     : defaultThemeVisualSpec;
 
@@ -26585,7 +28949,10 @@ CustomPainter shopThemeBoardPreviewPainter({
     pulse: .24,
     cubeSpin: progress,
     effectProgress: 0,
-    playerThemeIds: {PlayerColor.red: themeId},
+    playerThemeIds: isSharedTableExclusiveThemeId(themeId)
+        ? {for (final color in PlayerColor.values) color: themeId}
+        : {PlayerColor.red: themeId},
+    sharedTableThemeId: isSharedTableExclusiveThemeId(themeId) ? themeId : null,
     revealAllTraps: false,
     robotTokens: false,
     robotTokenColors: const <PlayerColor>{},
@@ -26659,7 +29026,7 @@ class _ShopThemePreviewState extends State<_ShopThemePreview>
                 CustomPaint(
                   key: ValueKey('shop-theme-scene-${widget.themeId}'),
                   painter: ThemeScenePainter(
-                    theme: defaultThemeVisualSpec,
+                    theme: theme,
                     progress: controller.value,
                   ),
                 ),
@@ -28409,10 +30776,12 @@ class SettingsScreen extends StatefulWidget {
     super.key,
     this.themeId,
     this.analytics = const NoopGameAnalytics(),
+    this.hideDiceHandControls = false,
   });
 
   final String? themeId;
   final GameAnalytics analytics;
+  final bool hideDiceHandControls;
 
   @override
   State<SettingsScreen> createState() => _SettingsScreenState();
@@ -28422,11 +30791,11 @@ class _SettingsScreenState extends State<SettingsScreen> {
   bool sound = true;
   bool music = true;
   bool vibration = true;
-  bool rollGuide = true;
+  bool rollGuide = false;
   bool minimap = true;
   bool diceHandEffect = true;
-  bool moveCallouts = true;
-  bool moveChoicePanel = true;
+  bool moveCallouts = false;
+  bool moveChoicePanel = false;
   bool anonymousAnalytics = false;
   DiceHandPreference diceHand = DiceHandPreference.right;
   final AppLanguageController localLanguage = AppLanguageController();
@@ -28460,15 +30829,15 @@ class _SettingsScreenState extends State<SettingsScreen> {
       sound = store.getBool('settings_sound') ?? true;
       music = store.getBool('settings_music') ?? true;
       vibration = store.getBool('settings_vibration') ?? true;
-      rollGuide = store.getBool(settingsRollGuideKey) ?? true;
+      rollGuide = store.getBool(settingsRollGuideKey) ?? false;
       minimap = store.containsKey(settingsMinimapKey)
           ? store.getBool(settingsMinimapKey) ?? !tabletViewport
           : !tabletViewport;
       diceHandEffect = store.containsKey(settingsDiceHandEffectKey)
           ? store.getBool(settingsDiceHandEffectKey) ?? !tabletViewport
           : !tabletViewport;
-      moveCallouts = store.getBool(settingsMoveCalloutsKey) ?? true;
-      moveChoicePanel = store.getBool(settingsMoveChoicePanelKey) ?? true;
+      moveCallouts = store.getBool(settingsMoveCalloutsKey) ?? false;
+      moveChoicePanel = store.getBool(settingsMoveChoicePanelKey) ?? false;
       diceHand = diceHandPreferenceFromStorage(
         store.getString(settingsDiceHandKey),
       );
@@ -28778,113 +31147,129 @@ class _SettingsScreenState extends State<SettingsScreen> {
                             ),
                             secondary: const Icon(Icons.view_agenda_rounded),
                           ),
-                          AnimatedOpacity(
-                            duration: const Duration(milliseconds: 180),
-                            opacity: rollGuide ? 1 : .48,
-                            child: Padding(
-                              padding: const EdgeInsets.fromLTRB(16, 6, 16, 14),
-                              child: Column(
-                                crossAxisAlignment: CrossAxisAlignment.start,
-                                children: [
-                                  const Row(
-                                    children: [
-                                      Icon(Icons.back_hand_rounded, size: 24),
-                                      SizedBox(width: 16),
-                                      Expanded(
-                                        child: Column(
-                                          crossAxisAlignment:
-                                              CrossAxisAlignment.start,
-                                          children: [
-                                            PopText(
-                                              'Mano para los dados',
-                                              style: TextStyle(
-                                                fontWeight: FontWeight.w700,
+                          if (!widget.hideDiceHandControls)
+                            AnimatedOpacity(
+                              duration: const Duration(milliseconds: 180),
+                              opacity: rollGuide ? 1 : .48,
+                              child: Padding(
+                                padding: const EdgeInsets.fromLTRB(
+                                  16,
+                                  6,
+                                  16,
+                                  14,
+                                ),
+                                child: Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    const Row(
+                                      children: [
+                                        Icon(Icons.back_hand_rounded, size: 24),
+                                        SizedBox(width: 16),
+                                        Expanded(
+                                          child: Column(
+                                            crossAxisAlignment:
+                                                CrossAxisAlignment.start,
+                                            children: [
+                                              PopText(
+                                                'Mano para los dados',
+                                                style: TextStyle(
+                                                  fontWeight: FontWeight.w700,
+                                                ),
                                               ),
-                                            ),
-                                            SizedBox(height: 2),
-                                            PopText(
-                                              'Elige cómo aparece la guía de lanzamiento',
-                                              style: TextStyle(
-                                                color: Color(0xFF667085),
-                                                fontSize: 12,
+                                              SizedBox(height: 2),
+                                              PopText(
+                                                'Elige cómo aparece la guía de lanzamiento',
+                                                style: TextStyle(
+                                                  color: Color(0xFF667085),
+                                                  fontSize: 12,
+                                                ),
                                               ),
-                                            ),
-                                          ],
-                                        ),
-                                      ),
-                                    ],
-                                  ),
-                                  const SizedBox(height: 10),
-                                  SwitchListTile(
-                                    key: const ValueKey(
-                                      'settings-dice-hand-effect',
-                                    ),
-                                    contentPadding: EdgeInsets.zero,
-                                    value: diceHandEffect,
-                                    onChanged: rollGuide
-                                        ? (value) {
-                                            setState(
-                                              () => diceHandEffect = value,
-                                            );
-                                            _setPreference(
-                                              settingsDiceHandEffectKey,
-                                              value,
-                                            );
-                                          }
-                                        : null,
-                                    title: const PopText('Efecto de mano'),
-                                    subtitle: const PopText(
-                                      'Muestra la mano animada al lanzar los dados',
-                                    ),
-                                    secondary: const Icon(
-                                      Icons.back_hand_rounded,
-                                    ),
-                                  ),
-                                  const SizedBox(height: 4),
-                                  SizedBox(
-                                    width: double.infinity,
-                                    child: SegmentedButton<DiceHandPreference>(
-                                      key: const ValueKey('settings-dice-hand'),
-                                      showSelectedIcon: false,
-                                      segments: const [
-                                        ButtonSegment(
-                                          value: DiceHandPreference.left,
-                                          icon: Icon(Icons.back_hand_rounded),
-                                          label: PopText(
-                                            'IZQUIERDA',
-                                            key: ValueKey(
-                                              'settings-dice-hand-left',
-                                            ),
-                                          ),
-                                        ),
-                                        ButtonSegment(
-                                          value: DiceHandPreference.right,
-                                          icon: Icon(Icons.front_hand_rounded),
-                                          label: PopText(
-                                            'DERECHA',
-                                            key: ValueKey(
-                                              'settings-dice-hand-right',
-                                            ),
+                                            ],
                                           ),
                                         ),
                                       ],
-                                      selected: {diceHand},
-                                      onSelectionChanged: rollGuide
-                                          ? (selection) {
-                                              final value = selection.single;
-                                              setState(() => diceHand = value);
-                                              _setStringPreference(
-                                                settingsDiceHandKey,
-                                                value.name,
+                                    ),
+                                    const SizedBox(height: 10),
+                                    SwitchListTile(
+                                      key: const ValueKey(
+                                        'settings-dice-hand-effect',
+                                      ),
+                                      contentPadding: EdgeInsets.zero,
+                                      value: diceHandEffect,
+                                      onChanged: rollGuide
+                                          ? (value) {
+                                              setState(
+                                                () => diceHandEffect = value,
+                                              );
+                                              _setPreference(
+                                                settingsDiceHandEffectKey,
+                                                value,
                                               );
                                             }
                                           : null,
+                                      title: const PopText('Efecto de mano'),
+                                      subtitle: const PopText(
+                                        'Muestra la mano animada al lanzar los dados',
+                                      ),
+                                      secondary: const Icon(
+                                        Icons.back_hand_rounded,
+                                      ),
                                     ),
-                                  ),
-                                ],
+                                    const SizedBox(height: 4),
+                                    SizedBox(
+                                      width: double.infinity,
+                                      child:
+                                          SegmentedButton<DiceHandPreference>(
+                                            key: const ValueKey(
+                                              'settings-dice-hand',
+                                            ),
+                                            showSelectedIcon: false,
+                                            segments: const [
+                                              ButtonSegment(
+                                                value: DiceHandPreference.left,
+                                                icon: Icon(
+                                                  Icons.back_hand_rounded,
+                                                ),
+                                                label: PopText(
+                                                  'IZQUIERDA',
+                                                  key: ValueKey(
+                                                    'settings-dice-hand-left',
+                                                  ),
+                                                ),
+                                              ),
+                                              ButtonSegment(
+                                                value: DiceHandPreference.right,
+                                                icon: Icon(
+                                                  Icons.front_hand_rounded,
+                                                ),
+                                                label: PopText(
+                                                  'DERECHA',
+                                                  key: ValueKey(
+                                                    'settings-dice-hand-right',
+                                                  ),
+                                                ),
+                                              ),
+                                            ],
+                                            selected: {diceHand},
+                                            onSelectionChanged: rollGuide
+                                                ? (selection) {
+                                                    final value =
+                                                        selection.single;
+                                                    setState(
+                                                      () => diceHand = value,
+                                                    );
+                                                    _setStringPreference(
+                                                      settingsDiceHandKey,
+                                                      value.name,
+                                                    );
+                                                  }
+                                                : null,
+                                          ),
+                                    ),
+                                  ],
+                                ),
                               ),
                             ),
-                          ),
                           const Divider(height: 1),
                           ListTile(
                             key: const ValueKey('settings-language'),

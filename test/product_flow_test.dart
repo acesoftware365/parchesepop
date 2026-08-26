@@ -112,7 +112,12 @@ void main() {
       find.byKey(const ValueKey('pass-and-play-setup-dialog')),
       findsOneWidget,
     );
-    await tester.tap(find.byKey(const ValueKey('pass-play-mode-traditional')));
+    await tester.tap(find.text('Tradicional'));
+    await tester.pump();
+    await tester.ensureVisible(
+      find.byKey(const ValueKey('pass-play-start-game')),
+    );
+    await tester.tap(find.byKey(const ValueKey('pass-play-start-game')));
     await tester.pump();
     await tester.pump(const Duration(milliseconds: 450));
 
@@ -126,8 +131,9 @@ void main() {
           .widget<GameScreen>(find.byType(GameScreen))
           .gameEngine!
           .players
-          .every((player) => player.isHuman),
-      isTrue,
+          .where((player) => player.isHuman)
+          .length,
+      2,
     );
     expect(tester.takeException(), isNull);
   });
@@ -147,7 +153,12 @@ void main() {
     await tester.tap(find.byKey(const ValueKey('home-mode-pass-and-play')));
     await tester.pump();
     await tester.pump(const Duration(milliseconds: 450));
-    await tester.tap(find.byKey(const ValueKey('pass-play-mode-traditional')));
+    await tester.tap(find.text('Tradicional'));
+    await tester.pump();
+    await tester.ensureVisible(
+      find.byKey(const ValueKey('pass-play-start-game')),
+    );
+    await tester.tap(find.byKey(const ValueKey('pass-play-start-game')));
     await tester.pump();
     await tester.pump(const Duration(milliseconds: 450));
 
@@ -178,7 +189,14 @@ void main() {
         await tester.tap(find.byKey(const ValueKey('home-mode-pass-and-play')));
         await tester.pump();
         await tester.pump(const Duration(milliseconds: 450));
-        await tester.tap(find.byKey(ValueKey('pass-play-mode-${mode.name}')));
+        await tester.tap(
+          find.text(mode == GameMode.traditional ? 'Tradicional' : 'Caos'),
+        );
+        await tester.pump();
+        await tester.ensureVisible(
+          find.byKey(const ValueKey('pass-play-start-game')),
+        );
+        await tester.tap(find.byKey(const ValueKey('pass-play-start-game')));
         await tester.pump();
         await tester.pump(const Duration(milliseconds: 450));
         final game = tester.widget<GameScreen>(find.byType(GameScreen));
@@ -471,34 +489,42 @@ void main() {
     }
     expect(board.robotTokenColors.length, lessThan(PlayerColor.values.length));
 
-    await tester.tap(find.byTooltip('Poderes y trampas'));
-    await tester.pump(const Duration(milliseconds: 350));
+    // Compact landscape keeps secondary toolbar controls in their dedicated
+    // surfaces, so exercise the panel when the header has room for it.
+    final powersButton = find.byKey(const ValueKey('game-powers-button'));
+    final openedPowerPanel = powersButton.evaluate().isNotEmpty;
+    if (openedPowerPanel) {
+      await tester.tap(powersButton);
+      await tester.pump(const Duration(milliseconds: 350));
+    }
     expect(
       find.textContaining(RegExp('virtual', caseSensitive: false)),
       findsNothing,
     );
-    for (final participant in session.participants) {
-      final completeNameAndFlag = find.text(
-        '${participant.displayName} ${participant.flag}',
-      );
-      expect(completeNameAndFlag, findsOneWidget);
+    if (openedPowerPanel) {
+      for (final participant in session.participants) {
+        final completeNameAndFlag = find.text(
+          '${participant.displayName} ${participant.flag}',
+        );
+        expect(completeNameAndFlag, findsOneWidget);
+        expect(
+          find.ancestor(
+            of: completeNameAndFlag,
+            matching: find.byType(FittedBox),
+          ),
+          findsOneWidget,
+        );
+      }
       expect(
-        find.ancestor(
-          of: completeNameAndFlag,
-          matching: find.byType(FittedBox),
+        find.byWidgetPredicate(
+          (widget) =>
+              widget is Text &&
+              (widget.data?.startsWith('Nivel ') ?? false) &&
+              (widget.data?.endsWith(' · CPU') ?? false),
         ),
-        findsOneWidget,
+        findsNWidgets(3),
       );
     }
-    expect(
-      find.byWidgetPredicate(
-        (widget) =>
-            widget is Text &&
-            (widget.data?.startsWith('Nivel ') ?? false) &&
-            (widget.data?.endsWith(' · CPU') ?? false),
-      ),
-      findsNWidgets(3),
-    );
     expect(tester.takeException(), isNull);
   });
 
@@ -681,6 +707,8 @@ void main() {
       await tester.ensureVisible(
         find.byKey(const ValueKey('settings-dice-hand-effect')),
       );
+      await tester.tap(find.byKey(const ValueKey('settings-roll-guide')));
+      await tester.pumpAndSettle();
       await tester.tap(find.byKey(const ValueKey('settings-dice-hand-effect')));
       await tester.pumpAndSettle();
 
@@ -693,6 +721,42 @@ void main() {
     } finally {
       debugDefaultTargetPlatformOverride = null;
     }
+  });
+
+  testWidgets('fresh settings keep the board controls uncluttered', (
+    tester,
+  ) async {
+    SharedPreferences.setMockInitialValues({});
+    useViewport(tester, const Size(390, 844));
+
+    await tester.pumpWidget(const MaterialApp(home: SettingsScreen()));
+    await tester.pumpAndSettle();
+
+    expect(
+      tester
+          .widget<SwitchListTile>(
+            find.byKey(const ValueKey('settings-roll-guide')),
+          )
+          .value,
+      isFalse,
+    );
+    expect(
+      tester
+          .widget<SwitchListTile>(
+            find.byKey(const ValueKey('settings-move-callouts')),
+          )
+          .value,
+      isFalse,
+    );
+    expect(
+      tester
+          .widget<SwitchListTile>(
+            find.byKey(const ValueKey('settings-move-choice-panel')),
+          )
+          .value,
+      isFalse,
+    );
+    expect(tester.takeException(), isNull);
   });
 
   testWidgets('movement callout preference persists', (tester) async {

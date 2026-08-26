@@ -15,7 +15,7 @@ import 'support/in_memory_online_realtime_store.dart';
 
 void main() {
   testWidgets(
-    'host departure switches the remaining player to local CPU mode',
+    'host departure shows a nonblocking wait band before guest takeover',
     (tester) async {
       SharedPreferences.setMockInitialValues({});
       await tester.binding.setSurfaceSize(const Size(390, 844));
@@ -39,7 +39,7 @@ void main() {
         session: guestSession,
         engine: guestEngine,
         isHost: false,
-        hostReconnectGrace: const Duration(milliseconds: 40),
+        hostReconnectGrace: const Duration(milliseconds: 400),
       );
 
       await _seedInGameRoom(store, hostSession);
@@ -58,34 +58,42 @@ void main() {
       await tester.pump();
 
       host.dispose();
-      for (var index = 0; index < 20; index++) {
-        await tester.pump(const Duration(milliseconds: 10));
-        if (guest.hostAvailability == OnlineHostAvailability.unavailable) {
-          break;
-        }
-      }
-      await tester.pump(const Duration(milliseconds: 10));
-
-      expect(guest.hostAvailability, OnlineHostAvailability.unavailable);
-      expect(
-        find.byKey(const ValueKey('online-host-recovery-overlay')),
-        findsNothing,
-      );
+      await tester.pump(const Duration(milliseconds: 40));
       expect(
         find.byKey(const ValueKey('online-host-recovery-banner')),
         findsOneWidget,
       );
-      expect(find.text('CPU JUGANDO POR EL ANFITRIÓN'), findsOneWidget);
+      expect(find.text('ESPERANDO AL ANFITRIÓN'), findsOneWidget);
       expect(
-        find.text('El anfitrión salió. El CPU continúa la partida.'),
+        find.text('El CPU mantiene la partida mientras vuelve el anfitrión.'),
         findsOneWidget,
       );
+      expect(
+        find.byKey(const ValueKey('online-host-recovery-overlay')),
+        findsNothing,
+      );
 
-      await tester.pump(const Duration(seconds: 2));
+      // The takeover includes several asynchronous store operations. Pump in
+      // short slices so the widget test observes the completed promotion rather
+      // than asserting while the lease is acquired but the match snapshot is
+      // still being published.
+      await tester.pump(const Duration(seconds: 1));
+      await tester.runAsync(() async {
+        for (var attempt = 0; attempt < 100 && !guest.hasAuthority; attempt++) {
+          await Future<void>.delayed(const Duration(milliseconds: 20));
+        }
+      });
+      await tester.pump();
+      expect(guest.hasAuthority, isTrue);
+      expect(
+        find.byKey(const ValueKey('online-host-recovery-banner')),
+        findsNothing,
+      );
       guest.dispose();
       hostEngine.dispose();
       guestEngine.dispose();
       await tester.pumpWidget(const SizedBox.shrink());
+      await tester.pump(const Duration(seconds: 1));
     },
   );
 }

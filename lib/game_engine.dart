@@ -175,7 +175,7 @@ class PlayerState {
 
   final PlayerColor color;
   String name;
-  final bool isHuman;
+  bool isHuman;
   final List<GameToken> tokens;
   bool initialStackIntact;
   PowerUp? inventory;
@@ -206,6 +206,15 @@ String _resolvedPlayerName({
   return _resolvedCpuName(cpuNames, opponentIndex, 'CPU ${opponentIndex + 1}');
 }
 
+bool _isHumanSeat({
+  required PlayerColor color,
+  required PlayerColor localViewerColor,
+  required bool allPlayersHuman,
+  required Set<PlayerColor>? humanPlayerColors,
+}) =>
+    humanPlayerColors?.contains(color) ??
+    (allPlayersHuman || localViewerColor == color);
+
 class GameEngine extends ChangeNotifier {
   GameEngine({
     this.cpuLevel = 'Normal',
@@ -214,6 +223,7 @@ class GameEngine extends ChangeNotifier {
     this.localViewerColor = PlayerColor.red,
     this.initialPlayerColor = PlayerColor.red,
     bool allPlayersHuman = false,
+    Set<PlayerColor>? humanPlayerColors,
     Random? random,
     String humanName = 'Tú',
     List<String>? cpuNames,
@@ -230,7 +240,12 @@ class GameEngine extends ChangeNotifier {
              cpuNames: cpuNames,
              playerNames: playerNames,
            ),
-           isHuman: allPlayersHuman || localViewerColor == PlayerColor.red,
+           isHuman: _isHumanSeat(
+             color: PlayerColor.red,
+             localViewerColor: localViewerColor,
+             allPlayersHuman: allPlayersHuman,
+             humanPlayerColors: humanPlayerColors,
+           ),
            tokenCount: MatchRules.forFormat(matchFormat).tokenCount,
            initialTokenProgress: MatchRules.forFormat(
              matchFormat,
@@ -248,7 +263,12 @@ class GameEngine extends ChangeNotifier {
              cpuNames: cpuNames,
              playerNames: playerNames,
            ),
-           isHuman: allPlayersHuman || localViewerColor == PlayerColor.green,
+           isHuman: _isHumanSeat(
+             color: PlayerColor.green,
+             localViewerColor: localViewerColor,
+             allPlayersHuman: allPlayersHuman,
+             humanPlayerColors: humanPlayerColors,
+           ),
            tokenCount: MatchRules.forFormat(matchFormat).tokenCount,
            initialTokenProgress: MatchRules.forFormat(
              matchFormat,
@@ -264,7 +284,12 @@ class GameEngine extends ChangeNotifier {
              cpuNames: cpuNames,
              playerNames: playerNames,
            ),
-           isHuman: allPlayersHuman || localViewerColor == PlayerColor.yellow,
+           isHuman: _isHumanSeat(
+             color: PlayerColor.yellow,
+             localViewerColor: localViewerColor,
+             allPlayersHuman: allPlayersHuman,
+             humanPlayerColors: humanPlayerColors,
+           ),
            tokenCount: MatchRules.forFormat(matchFormat).tokenCount,
            initialTokenProgress: MatchRules.forFormat(
              matchFormat,
@@ -280,7 +305,12 @@ class GameEngine extends ChangeNotifier {
              cpuNames: cpuNames,
              playerNames: playerNames,
            ),
-           isHuman: allPlayersHuman || localViewerColor == PlayerColor.blue,
+           isHuman: _isHumanSeat(
+             color: PlayerColor.blue,
+             localViewerColor: localViewerColor,
+             allPlayersHuman: allPlayersHuman,
+             humanPlayerColors: humanPlayerColors,
+           ),
            tokenCount: MatchRules.forFormat(matchFormat).tokenCount,
            initialTokenProgress: MatchRules.forFormat(
              matchFormat,
@@ -288,6 +318,7 @@ class GameEngine extends ChangeNotifier {
            initialStackIntact: false,
          ),
        ] {
+    _usesExplicitHumanSeats = humanPlayerColors != null;
     currentPlayerIndex = initialPlayerColor.index;
     message = currentPlayer.isHuman
         ? '¡Tu turno! Lanza los dados.'
@@ -308,6 +339,25 @@ class GameEngine extends ChangeNotifier {
     );
   }
 
+  /// Converts an in-progress local CPU seat into a human seat without
+  /// touching its tokens, dice, position, powers, or turn order.
+  bool claimCpuSeat(PlayerColor color, {required String name}) {
+    final player = players.firstWhere((candidate) => candidate.color == color);
+    if (player.isHuman) return false;
+    final resolvedName = name.trim();
+    player
+      ..isHuman = true
+      ..name = resolvedName.isEmpty
+          ? 'Jugador ${color.index + 1}'
+          : resolvedName;
+    _usesExplicitHumanSeats = true;
+    message = currentPlayer.isHuman
+        ? 'Turno de ${currentPlayer.name}.'
+        : 'Turno de ${currentPlayer.name}.';
+    notifyListeners();
+    return true;
+  }
+
   /// Restores an interrupted local match from the lifecycle checkpoint.
   /// Effects are intentionally not resumed half-way through an animation; the
   /// board resumes in the exact stable state immediately before backgrounding.
@@ -318,6 +368,17 @@ class GameEngine extends ChangeNotifier {
     final rawPlayers = (checkpoint['players'] as List<dynamic>? ?? const [])
         .whereType<Map>()
         .toList(growable: false);
+    final hasSavedSeatControl =
+        checkpoint['usesExplicitHumanSeats'] == true &&
+        rawPlayers.any((player) => player['isHuman'] is bool);
+    final savedHumanSeats = <PlayerColor>{
+      for (final player in rawPlayers)
+        if (player['isHuman'] == true)
+          PlayerColor.values.firstWhere(
+            (color) => color.name == player['color'],
+            orElse: () => PlayerColor.red,
+          ),
+    };
     String playerName(PlayerColor color, String fallback) {
       final entry = rawPlayers.cast<Map?>().firstWhere(
         (player) => player?['color'] == color.name,
@@ -366,6 +427,8 @@ class GameEngine extends ChangeNotifier {
       matchFormat: matchFormat,
       localViewerColor: localViewerColor,
       initialPlayerColor: initialPlayerColor,
+      allPlayersHuman: checkpoint['allPlayersHuman'] == true,
+      humanPlayerColors: hasSavedSeatControl ? savedHumanSeats : null,
       humanName: playerName(localViewerColor, 'Tú'),
       playerNames: <PlayerColor, String>{
         for (final color in PlayerColor.values)
@@ -528,6 +591,7 @@ class GameEngine extends ChangeNotifier {
   final MatchRules rules;
   final List<PlayerState> players;
   final Random _random;
+  bool _usesExplicitHumanSeats = false;
   final List<BoardTrap> traps = [];
   final Set<int> _itemLoopIndices = <int>{};
   int _chaosItemsPerSide = 1;
@@ -604,6 +668,7 @@ class GameEngine extends ChangeNotifier {
     ...checkpointRuleMetadata,
     'mode': mode.name,
     'cpuLevel': cpuLevel,
+    'usesExplicitHumanSeats': _usesExplicitHumanSeats,
     'turn': turnNumber,
     'currentPlayer': currentPlayer.color.name,
     'dice': List<int>.of(dice),
@@ -620,6 +685,7 @@ class GameEngine extends ChangeNotifier {
         <String, Object?>{
           'color': player.color.name,
           'name': player.name,
+          'isHuman': player.isHuman,
           'tokens': <int>[for (final token in player.tokens) token.progress],
           'inventory': player.inventory?.name,
           'shielded': player.shielded,
@@ -876,6 +942,7 @@ class GameEngine extends ChangeNotifier {
       final incoming = source.players[color.index];
       target
         ..name = incoming.name
+        ..isHuman = incoming.isHuman
         ..initialStackIntact = incoming.initialStackIntact
         ..inventory = incoming.inventory
         ..shielded = incoming.shielded

@@ -288,6 +288,59 @@ void main() {
     expect(progression.dailyMissions.releaseRewardClaimed, isTrue);
   });
 
+  test(
+    'shared table missions reward human turns and one local match daily',
+    () async {
+      final clock = _MutableClock(DateTime(2026, 8, 8, 10));
+      final progression = await PlayerProgressionController.create(
+        clock: clock.call,
+      );
+      addTearDown(progression.dispose);
+
+      for (
+        var turn = 1;
+        turn < progression.policy.sharedTableTurnsTarget;
+        turn++
+      ) {
+        final update = await progression.recordSharedTableTurn(
+          eventId: 'shared_turn_$turn',
+        );
+        expect(update.coinsAwarded, 0);
+      }
+      final turnCompletion = await progression.recordSharedTableTurn(
+        eventId: 'shared_turn_${progression.policy.sharedTableTurnsTarget}',
+      );
+      expect(
+        turnCompletion.coinsAwarded,
+        progression.policy.sharedTableTurnsCoins,
+      );
+      expect(progression.sharedTableMissions.turnsPlayed, 8);
+      expect(progression.sharedTableMissions.turnRewardClaimed, isTrue);
+
+      final matchCompletion = await progression.recordSharedTableMatchCompleted(
+        matchId: 'shared_match_one',
+      );
+      expect(
+        matchCompletion.coinsAwarded,
+        progression.policy.sharedTableMatchCoins,
+      );
+      expect(progression.sharedTableMissions.matchCompleted, isTrue);
+      expect(progression.sharedTableMissions.matchRewardClaimed, isTrue);
+      expect(
+        (await progression.recordSharedTableMatchCompleted(
+          matchId: 'shared_match_two',
+        )).coinsAwarded,
+        0,
+      );
+
+      clock.value = DateTime(2026, 8, 9, 0, 1);
+      await progression.recordSharedTableTurn(eventId: 'next_day_turn');
+      expect(progression.sharedTableMissions.dayKey, '2026-08-09');
+      expect(progression.sharedTableMissions.turnsPlayed, 1);
+      expect(progression.sharedTableMissions.matchCompleted, isFalse);
+    },
+  );
+
   test('daily mission progress resets and can reward again next day', () async {
     final clock = _MutableClock(DateTime(2026, 8, 8, 23, 59));
     final progression = await PlayerProgressionController.create(

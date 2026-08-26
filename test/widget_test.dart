@@ -2,6 +2,7 @@ import 'dart:math';
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:parchesepop/game_engine.dart';
 import 'package:parchesepop/main.dart';
@@ -172,6 +173,63 @@ void main() {
     await tester.binding.setSurfaceSize(null);
     engine.dispose();
   });
+
+  testWidgets(
+    'online game exposes the QA troubleshooting button and copy dialog',
+    (tester) async {
+      final engine = GameEngine();
+      await tester.binding.setSurfaceSize(const Size(390, 844));
+      await tester.pumpWidget(
+        MaterialApp(
+          home: GameScreen(
+            opponent: 'Online',
+            gameEngine: engine,
+            onlineSession: onlineTestSession(),
+          ),
+        ),
+      );
+      await tester.pump();
+
+      final diagnosticsButton = find.byKey(
+        const ValueKey('game-diagnostics-button'),
+      );
+      expect(diagnosticsButton, findsOneWidget);
+      final diagnosticsSize = tester.getSize(diagnosticsButton);
+      expect(diagnosticsSize.width, greaterThanOrEqualTo(44));
+      expect(diagnosticsSize.height, greaterThanOrEqualTo(44));
+
+      await tester.tap(diagnosticsButton);
+      await tester.pump();
+      expect(find.text('DIAGNÓSTICO DE PARTIDA'), findsOneWidget);
+      expect(
+        find.byKey(const ValueKey('copy-game-diagnostics')),
+        findsOneWidget,
+      );
+
+      final copyButton = find.byKey(const ValueKey('copy-game-diagnostics'));
+      tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(
+        SystemChannels.platform,
+        (call) async => null,
+      );
+      await tester.ensureVisible(copyButton);
+      await tester.tap(copyButton);
+      await tester.pump();
+      expect(tester.takeException(), isNull);
+      expect(find.text('COPIADO'), findsOneWidget);
+      tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(
+        SystemChannels.platform,
+        null,
+      );
+
+      await tester.tap(find.byTooltip('Cerrar'));
+      await tester.pump();
+      expect(find.text('DIAGNÓSTICO DE PARTIDA'), findsNothing);
+
+      await tester.pumpWidget(const SizedBox.shrink());
+      await tester.binding.setSurfaceSize(null);
+      engine.dispose();
+    },
+  );
 
   testWidgets('portrait game toolbar keeps 44 point touch targets', (
     tester,

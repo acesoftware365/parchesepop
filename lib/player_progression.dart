@@ -19,6 +19,9 @@ class ProgressionRewardPolicy {
     this.dailyMoveMissionTarget = 20,
     this.dailyMoveMissionCoins = 40,
     this.dailyReleaseMissionCoins = 35,
+    this.sharedTableTurnsTarget = 8,
+    this.sharedTableTurnsCoins = 45,
+    this.sharedTableMatchCoins = 60,
     this.weeklyMatchesTarget = 7,
     this.weeklyMatchesCoins = 150,
   }) : assert(matchCompletionCoins > 0),
@@ -26,6 +29,9 @@ class ProgressionRewardPolicy {
        assert(dailyMoveMissionTarget > 0),
        assert(dailyMoveMissionCoins > 0),
        assert(dailyReleaseMissionCoins > 0),
+       assert(sharedTableTurnsTarget > 0),
+       assert(sharedTableTurnsCoins > 0),
+       assert(sharedTableMatchCoins > 0),
        assert(weeklyMatchesTarget > 0),
        assert(weeklyMatchesCoins > 0);
 
@@ -35,6 +41,9 @@ class ProgressionRewardPolicy {
   final int dailyMoveMissionTarget;
   final int dailyMoveMissionCoins;
   final int dailyReleaseMissionCoins;
+  final int sharedTableTurnsTarget;
+  final int sharedTableTurnsCoins;
+  final int sharedTableMatchCoins;
   final int weeklyMatchesTarget;
   final int weeklyMatchesCoins;
 
@@ -53,6 +62,8 @@ enum ProgressionTransactionSource {
   firstMatchOfDay,
   dailyMoveMission,
   dailyReleaseMission,
+  sharedTableTurnsMission,
+  sharedTableMatchMission,
   weeklyMatchesMission,
   rewardedDouble,
 }
@@ -207,6 +218,27 @@ class WeeklyMissionSnapshot {
   bool get complete => matchesCompleted >= target;
 }
 
+@immutable
+class SharedTableMissionSnapshot {
+  const SharedTableMissionSnapshot({
+    required this.dayKey,
+    required this.turnsPlayed,
+    required this.turnTarget,
+    required this.turnRewardClaimed,
+    required this.matchCompleted,
+    required this.matchRewardClaimed,
+  });
+
+  final String dayKey;
+  final int turnsPlayed;
+  final int turnTarget;
+  final bool turnRewardClaimed;
+  final bool matchCompleted;
+  final bool matchRewardClaimed;
+
+  bool get turnsMissionComplete => turnsPlayed >= turnTarget;
+}
+
 class PlayerProgressionController extends ChangeNotifier {
   PlayerProgressionController({
     SharedPreferences? preferences,
@@ -237,6 +269,8 @@ class PlayerProgressionController extends ChangeNotifier {
   int _dailyCellsMoved = 0;
   bool _dailyTokenReleased = false;
   final Set<String> _dailyProcessedEventIds = <String>{};
+  int _sharedTableTurnsPlayed = 0;
+  final Set<String> _sharedTableProcessedEventIds = <String>{};
 
   String _weeklyKey = '';
   int _weeklyMatchesCompleted = 0;
@@ -281,6 +315,22 @@ class PlayerProgressionController extends ChangeNotifier {
     target: policy.weeklyMatchesTarget,
     rewardClaimed: _hasTransaction(_weeklyTransactionId(_weeklyKey)),
   );
+
+  SharedTableMissionSnapshot get sharedTableMissions =>
+      SharedTableMissionSnapshot(
+        dayKey: _dailyKey,
+        turnsPlayed: _sharedTableTurnsPlayed,
+        turnTarget: policy.sharedTableTurnsTarget,
+        turnRewardClaimed: _hasTransaction(
+          _sharedTableTurnsTransactionId(_dailyKey),
+        ),
+        matchCompleted: _hasTransaction(
+          _sharedTableMatchTransactionId(_dailyKey),
+        ),
+        matchRewardClaimed: _hasTransaction(
+          _sharedTableMatchTransactionId(_dailyKey),
+        ),
+      );
 
   Future<void> initialize() => _enqueue<void>(() async {
     if (_initialized) return;
@@ -487,6 +537,63 @@ class PlayerProgressionController extends ChangeNotifier {
     });
   }
 
+  /// Adds a human turn from Pass & Play to its daily local-table mission.
+  ///
+  /// The event ID is stable for the engine event, so reopening a checkpoint
+  /// cannot count the same turn more than once.
+  Future<ProgressionUpdate> recordSharedTableTurn({required String eventId}) {
+    _validateExternalId(eventId, 'eventId');
+    return _enqueue<ProgressionUpdate>(() async {
+      await _initializeUnlocked();
+      final now = _clock();
+      var changed = _rollPeriods(now);
+      if (!_sharedTableProcessedEventIds.add(eventId)) {
+        if (changed) await _commit();
+        return ProgressionUpdate.none;
+      }
+      changed = true;
+      _sharedTableTurnsPlayed = math.min(
+        policy.sharedTableTurnsTarget,
+        _sharedTableTurnsPlayed + 1,
+      );
+      final transaction =
+          _sharedTableTurnsPlayed >= policy.sharedTableTurnsTarget
+          ? _applyTransaction(
+              id: _sharedTableTurnsTransactionId(_dailyKey),
+              source: ProgressionTransactionSource.sharedTableTurnsMission,
+              amount: policy.sharedTableTurnsCoins,
+              now: now,
+            )
+          : null;
+      await _commit();
+      return transaction == null
+          ? ProgressionUpdate.none
+          : ProgressionUpdate(<ProgressionTransaction>[transaction]);
+    });
+  }
+
+  /// Completes the daily Pass & Play mission after a local table finishes.
+  Future<ProgressionUpdate> recordSharedTableMatchCompleted({
+    required String matchId,
+  }) {
+    _validateExternalId(matchId, 'matchId');
+    return _enqueue<ProgressionUpdate>(() async {
+      await _initializeUnlocked();
+      final now = _clock();
+      _rollPeriods(now);
+      final transaction = _applyTransaction(
+        id: _sharedTableMatchTransactionId(_dailyKey),
+        source: ProgressionTransactionSource.sharedTableMatchMission,
+        amount: policy.sharedTableMatchCoins,
+        now: now,
+        matchId: matchId,
+      );
+      if (transaction == null) return ProgressionUpdate.none;
+      await _commit();
+      return ProgressionUpdate(<ProgressionTransaction>[transaction]);
+    });
+  }
+
   /// Grants the voluntary rewarded-ad x2 bonus after the ad SDK reports that
   /// the reward was earned.
   ///
@@ -551,6 +658,8 @@ class PlayerProgressionController extends ChangeNotifier {
     _dailyCellsMoved = 0;
     _dailyTokenReleased = false;
     _dailyProcessedEventIds.clear();
+    _sharedTableTurnsPlayed = 0;
+    _sharedTableProcessedEventIds.clear();
     _weeklyKey = '';
     _weeklyMatchesCompleted = 0;
     _rollPeriods(_clock());
@@ -677,6 +786,18 @@ class PlayerProgressionController extends ChangeNotifier {
             processedEventIds.whereType<String>().where(_isSafeExternalId),
           );
         }
+        final sharedTableTurns = daily['sharedTableTurns'];
+        _sharedTableTurnsPlayed =
+            sharedTableTurns is int && sharedTableTurns >= 0
+            ? math.min(sharedTableTurns, policy.sharedTableTurnsTarget)
+            : 0;
+        _sharedTableProcessedEventIds.clear();
+        final sharedTableEventIds = daily['sharedTableProcessedEventIds'];
+        if (sharedTableEventIds is List) {
+          _sharedTableProcessedEventIds.addAll(
+            sharedTableEventIds.whereType<String>().where(_isSafeExternalId),
+          );
+        }
       }
 
       final weekly = decoded['weekly'];
@@ -702,6 +823,8 @@ class PlayerProgressionController extends ChangeNotifier {
       _dailyCellsMoved = 0;
       _dailyTokenReleased = false;
       _dailyProcessedEventIds.clear();
+      _sharedTableTurnsPlayed = 0;
+      _sharedTableProcessedEventIds.clear();
       changed = true;
     }
     final nextWeeklyKey = _weekKey(now);
@@ -822,6 +945,9 @@ class PlayerProgressionController extends ChangeNotifier {
         'cellsMoved': _dailyCellsMoved,
         'tokenReleased': _dailyTokenReleased,
         'processedEventIds': _dailyProcessedEventIds.toList()..sort(),
+        'sharedTableTurns': _sharedTableTurnsPlayed,
+        'sharedTableProcessedEventIds': _sharedTableProcessedEventIds.toList()
+          ..sort(),
       },
       'weekly': <String, Object>{
         'key': _weeklyKey,
@@ -858,6 +984,10 @@ class PlayerProgressionController extends ChangeNotifier {
       'daily:$dayKey:mission_move_20';
   static String _dailyReleaseTransactionId(String dayKey) =>
       'daily:$dayKey:mission_release_token';
+  static String _sharedTableTurnsTransactionId(String dayKey) =>
+      'daily:$dayKey:shared_table_turns';
+  static String _sharedTableMatchTransactionId(String dayKey) =>
+      'daily:$dayKey:shared_table_match';
   static String _weeklyTransactionId(String weekKey) =>
       'weekly:$weekKey:finish_7';
   static String _rewardedDoubleTransactionId(String matchId) =>

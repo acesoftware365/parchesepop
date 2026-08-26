@@ -48,6 +48,55 @@ void main() {
     game.dispose();
   });
 
+  test('Pass & Play can mix named human seats with CPU seats', () {
+    final game = GameEngine(
+      humanPlayerColors: const {PlayerColor.red, PlayerColor.green},
+      playerNames: const {PlayerColor.red: 'Mari', PlayerColor.green: 'Juan'},
+    );
+
+    expect(game.players[PlayerColor.red.index].name, 'Mari');
+    expect(game.players[PlayerColor.green.index].name, 'Juan');
+    expect(game.players[PlayerColor.red.index].isHuman, isTrue);
+    expect(game.players[PlayerColor.green.index].isHuman, isTrue);
+    expect(game.players[PlayerColor.yellow.index].isHuman, isFalse);
+    expect(game.players[PlayerColor.blue.index].isHuman, isFalse);
+    game.dispose();
+  });
+
+  test('a CPU seat can be claimed without resetting its board state', () {
+    final game = GameEngine(
+      humanPlayerColors: const {PlayerColor.red},
+      playerNames: const {PlayerColor.red: 'Mari'},
+    );
+    final cpu = game.players[PlayerColor.yellow.index];
+    cpu.tokens.first.progress = 18;
+    game.currentPlayerIndex = PlayerColor.yellow.index;
+
+    expect(game.claimCpuSeat(PlayerColor.yellow, name: 'Juan'), isTrue);
+    expect(cpu.isHuman, isTrue);
+    expect(cpu.name, 'Juan');
+    expect(cpu.tokens.first.progress, 18);
+    expect(game.currentPlayer.color, PlayerColor.yellow);
+    game.dispose();
+  });
+
+  test('a claimed CPU seat remains human after restoring a checkpoint', () {
+    final game = GameEngine(
+      humanPlayerColors: const {PlayerColor.red},
+      playerNames: const {PlayerColor.red: 'Mari'},
+    );
+    game.claimCpuSeat(PlayerColor.green, name: 'Juan');
+    game.players[PlayerColor.green.index].tokens.first.progress = 11;
+
+    final restored = GameEngine.fromCheckpoint(game.createCheckpoint());
+    final green = restored.players[PlayerColor.green.index];
+    expect(green.isHuman, isTrue);
+    expect(green.name, 'Juan');
+    expect(green.tokens.first.progress, 11);
+    game.dispose();
+    restored.dispose();
+  });
+
   test('each accepted roll receives a new animation serial', () {
     final game = GameEngine(random: _SequenceRandom([2, 3, 2, 3]));
     game.currentPlayer.tokens.first.progress = 0;

@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'dart:math';
 
 import 'package:crypto/crypto.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 import 'online_lobby.dart';
 import 'online_transport_models.dart';
@@ -87,6 +88,22 @@ abstract interface class OnlineRealtimeQueryStore {
     required String orderByChild,
     required num startAt,
     required int limitToFirst,
+  });
+}
+
+/// Optional tail-query capability used by the production Quick Pop queue.
+///
+/// Queue entries that have finished are retained for lifecycle/account
+/// recovery and therefore sort before active tickets (`activeUntil == 0`).
+/// A first-page query can be filled entirely by those historical entries and
+/// hide the players who are searching now. Firebase adapters implement this
+/// capability so the resolver can ask for the last bounded page instead.
+abstract interface class OnlineRealtimeTailQueryStore {
+  Future<Object?> readOrderedChildrenTail(
+    String path, {
+    required String orderByChild,
+    required num startAt,
+    required int limitToLast,
   });
 }
 
@@ -272,6 +289,70 @@ final class OnlineHostRoomLease {
   }
 }
 
+/// Fenced authority lease for an in-game match.
+///
+/// A room host is not guaranteed to keep its process alive while the app is in
+/// the background.  The lease lives beside the room and is acquired with a
+/// Realtime Database transaction, so two connected clients cannot both become
+/// the active match authority for the same epoch.  Match writes carry the
+/// same uid/epoch and the rules verify that pair before accepting them.
+final class OnlineMatchHostLease {
+  const OnlineMatchHostLease({
+    required this.uid,
+    required this.epoch,
+    required this.acquiredAtMs,
+    required this.expiresAtMs,
+    required this.reason,
+  });
+
+  final String uid;
+  final int epoch;
+  final int acquiredAtMs;
+  final int expiresAtMs;
+  final String reason;
+
+  factory OnlineMatchHostLease.fromJson(Object? raw) {
+    final map = onlineMap(raw);
+    final uid = map['uid'];
+    final epoch = map['epoch'];
+    final acquiredAt = map['acquiredAt'];
+    final expiresAt = map['expiresAt'];
+    final reason = map['reason'];
+    if (uid is! String ||
+        uid.isEmpty ||
+        epoch is! num ||
+        epoch < 1 ||
+        acquiredAt is! num ||
+        expiresAt is! num ||
+        reason is! String ||
+        reason.isEmpty) {
+      throw const FormatException('Invalid online match host lease.');
+    }
+    return OnlineMatchHostLease(
+      uid: uid,
+      epoch: epoch.toInt(),
+      acquiredAtMs: acquiredAt.toInt(),
+      expiresAtMs: expiresAt.toInt(),
+      reason: reason,
+    );
+  }
+
+  Map<String, Object?> toJson() => <String, Object?>{
+    'uid': uid,
+    'epoch': epoch,
+    'acquiredAt': acquiredAtMs,
+    'expiresAt': expiresAtMs,
+    'reason': reason,
+  };
+
+  bool isExpired(int nowMs) => expiresAtMs <= nowMs;
+
+  bool matches(OnlineMatchHostLease other) =>
+      uid == other.uid && epoch == other.epoch;
+}
+
+const Duration onlineMatchHostLeaseDuration = Duration(seconds: 45);
+
 /// Auditable summary of the client-owned realtime data removed before an
 /// anonymous Firebase identity is deleted.
 final class OnlineAccountCleanupReport {
@@ -328,6 +409,12 @@ final class OnlineTransportClient {
   static const Duration _roomReservationLifetime = Duration(minutes: 2);
   static const Duration _quickClaimHandshakeGrace = Duration(milliseconds: 250);
   static const Duration _quickServerDeadlineRetry = Duration(milliseconds: 250);
+  // Account-resource locator writes are an optimization, not part of the
+  // matchmaking authority.  A stale deployed ruleset or a brief offline
+  // period must never hold the group resolver past its deadline.
+  static const Duration _quickGroupLocatorWriteTimeout = Duration(
+    milliseconds: 750,
+  );
   // A group resolution is committed by its deterministic leader at the
   // shared deadline.  A follower can cross that deadline while its last
   // group read is still in flight, so give the resolution write a bounded
@@ -336,7 +423,6 @@ final class OnlineTransportClient {
   // without keeping a disconnected leader alive forever.
   static const Duration _quickGroupResolutionGrace = Duration(seconds: 2);
   static const int _quickQueueReadLimit = 64;
-
   final OnlineRealtimeStore store;
   final OnlineTransportIdentity identity;
   final Random _random;
@@ -347,11 +433,15 @@ final class OnlineTransportClient {
   final Map<String, OnlinePresenceLease> _presenceLeases = {};
   final Map<String, OnlineRoomJoinRequestRecord> _pendingJoinRequests = {};
   final Map<String, QuickPopQueueTicket> _ownedQuickTickets = {};
+  Future<SharedPreferences?>? _quickPopPreferencesFuture;
 
   /// The last deterministic group seen by this client. Keeping this small
   /// locator lets a ticket finish its launch at the exact deadline even when
   /// the Firebase active-queue query has just rolled past that deadline.
   final Map<String, String> _ownedQuickGroupIds = {};
+
+  static const String _quickPopLocatorPreferencePrefix =
+      'parchesepop.quick_pop_group_locator.v2';
 
   static const Set<String> _knownQuickQueueKeys = <String>{
     'traditional_quickPop',
@@ -1420,6 +1510,131 @@ final class OnlineTransportClient {
     return lease;
   }
 
+  String matchHostLeasePath(String roomId) {
+    final cleanRoomId = _validatedSegment(roomId, 'roomId');
+    return '$_roomsPath/$cleanRoomId/hostLease';
+  }
+
+  Future<OnlineMatchHostLease?> readMatchHostLease(String roomId) async {
+    final raw = await store.read(matchHostLeasePath(roomId));
+    if (raw == null) return null;
+    try {
+      return OnlineMatchHostLease.fromJson(raw);
+    } on FormatException {
+      return null;
+    }
+  }
+
+  /// Atomically acquire or renew the match authority lease.
+  ///
+  /// An unexpired lease owned by another uid is never replaced.  Once it has
+  /// expired, the transaction increments the fence epoch so a stale client
+  /// cannot publish a match checkpoint accepted by the rules.
+  Future<OnlineMatchHostLease?> acquireMatchHostLease(
+    String roomId, {
+    String reason = 'takeover',
+  }) async {
+    final cleanRoomId = _validatedSegment(roomId, 'roomId');
+    final room = await readRoom(cleanRoomId);
+    if (room == null || !room.members.containsKey(identity.uid)) {
+      throw const OnlineTransportException(
+        OnlineTransportErrorCode.unknownParticipant,
+        'Match authority requires room membership.',
+      );
+    }
+    final path = matchHostLeasePath(cleanRoomId);
+    final now = await store.serverNowMs();
+    final result = await store.transaction(path, (raw) {
+      final currentMap = onlineMap(raw);
+      OnlineMatchHostLease? current;
+      if (currentMap.isNotEmpty) {
+        try {
+          current = OnlineMatchHostLease.fromJson(currentMap);
+        } on FormatException {
+          // A malformed lease must not be overwritten by an ordinary client.
+          return const OnlineStoreTransactionDecision.abort();
+        }
+      }
+      if (current != null &&
+          !current.isExpired(now) &&
+          current.uid != identity.uid) {
+        return const OnlineStoreTransactionDecision.abort();
+      }
+      final lease = OnlineMatchHostLease(
+        uid: identity.uid,
+        epoch: current == null ? 1 : current.epoch + 1,
+        acquiredAtMs: current?.acquiredAtMs ?? now,
+        expiresAtMs: now + onlineMatchHostLeaseDuration.inMilliseconds,
+        reason: reason,
+      );
+      return OnlineStoreTransactionDecision.commit(lease.toJson());
+    });
+    if (!result.committed) return readMatchHostLease(cleanRoomId);
+    final lease = OnlineMatchHostLease.fromJson(result.value);
+    await store.setOnDisconnect(path, null);
+    return lease;
+  }
+
+  /// Extends a lease only when its uid and fence epoch still match.
+  Future<OnlineMatchHostLease?> renewMatchHostLease(
+    String roomId,
+    OnlineMatchHostLease lease,
+  ) async {
+    final path = matchHostLeasePath(roomId);
+    final now = await store.serverNowMs();
+    final result = await store.transaction(path, (raw) {
+      final currentMap = onlineMap(raw);
+      if (currentMap.isEmpty) {
+        return const OnlineStoreTransactionDecision.abort();
+      }
+      late final OnlineMatchHostLease current;
+      try {
+        current = OnlineMatchHostLease.fromJson(currentMap);
+      } on FormatException {
+        return const OnlineStoreTransactionDecision.abort();
+      }
+      if (!current.matches(lease) || current.isExpired(now)) {
+        return const OnlineStoreTransactionDecision.abort();
+      }
+      return OnlineStoreTransactionDecision.commit(
+        OnlineMatchHostLease(
+          uid: current.uid,
+          epoch: current.epoch,
+          acquiredAtMs: current.acquiredAtMs,
+          expiresAtMs: now + onlineMatchHostLeaseDuration.inMilliseconds,
+          reason: 'renew',
+        ).toJson(),
+      );
+    });
+    if (!result.committed) return null;
+    final refreshed = OnlineMatchHostLease.fromJson(result.value);
+    await store.setOnDisconnect(path, null);
+    return refreshed;
+  }
+
+  Future<void> releaseMatchHostLease(
+    String roomId,
+    OnlineMatchHostLease lease,
+  ) async {
+    final path = matchHostLeasePath(roomId);
+    await store.transaction(path, (raw) {
+      final currentMap = onlineMap(raw);
+      if (currentMap.isEmpty) {
+        return const OnlineStoreTransactionDecision.abort();
+      }
+      try {
+        final current = OnlineMatchHostLease.fromJson(currentMap);
+        if (!current.matches(lease)) {
+          return const OnlineStoreTransactionDecision.abort();
+        }
+      } on FormatException {
+        return const OnlineStoreTransactionDecision.abort();
+      }
+      return const OnlineStoreTransactionDecision.commit(null);
+    });
+    await store.cancelOnDisconnect(path);
+  }
+
   Future<QuickPopQueueTicket> enqueueQuickPop({
     required String mode,
     String matchFormat = 'quickPop',
@@ -1547,7 +1762,10 @@ final class OnlineTransportClient {
       );
       // The ticket is already visible to the matchmaking query. Preserve it
       // so a short-lived account-resource hiccup can be retried on resume.
-      rethrow;
+      // This index is only a lifecycle convenience; it is not used to
+      // authorize queue reads or to select a match. Older deployed rulesets
+      // intentionally reject optional account-resource children, so a
+      // permission error here must never abort an otherwise valid search.
     }
     _ownedQuickTickets[queueKey] = ticket;
     return ticket;
@@ -1694,9 +1912,19 @@ final class OnlineTransportClient {
     String queueKey, {
     int startAtActiveUntilMs = 0,
     int limit = _quickQueueReadLimit,
+    bool preferTail = false,
   }) {
     final path = '$_quickQueuesPath/$queueKey';
     final currentStore = store;
+    if (preferTail && currentStore is OnlineRealtimeTailQueryStore) {
+      return (currentStore as OnlineRealtimeTailQueryStore)
+          .readOrderedChildrenTail(
+            path,
+            orderByChild: 'activeUntil',
+            startAt: startAtActiveUntilMs,
+            limitToLast: limit,
+          );
+    }
     if (currentStore is OnlineRealtimeQueryStore) {
       return (currentStore as OnlineRealtimeQueryStore).readOrderedChildren(
         path,
@@ -1706,6 +1934,168 @@ final class OnlineTransportClient {
       );
     }
     return currentStore.read(path);
+  }
+
+  String _quickPopLocatorPreferenceKey(String queueKey) =>
+      '$_quickPopLocatorPreferencePrefix.${identity.uid}.$queueKey';
+
+  Future<SharedPreferences?> _quickPopPreferences() async {
+    final existing = _quickPopPreferencesFuture;
+    if (existing != null) return existing;
+    final future = () async {
+      try {
+        return await SharedPreferences.getInstance();
+      } catch (_) {
+        // Test stores and some desktop launch paths do not provide the
+        // platform preferences plugin. The Firebase locator remains the
+        // source of truth there; this cache is only a lifecycle bridge.
+        return null;
+      }
+    }();
+    _quickPopPreferencesFuture = future;
+    return future;
+  }
+
+  Future<String?> _readLocalQuickPopGroupLocator(
+    QuickPopQueueTicket current,
+  ) async {
+    final preferences = await _quickPopPreferences();
+    final raw = preferences?.getString(
+      _quickPopLocatorPreferenceKey(current.queueKey),
+    );
+    if (raw == null || raw.isEmpty) return null;
+    try {
+      final map = onlineMap(jsonDecode(raw));
+      final ticketId = map['ticketId'];
+      final groupId = map['groupId'];
+      if (ticketId == current.ticketId &&
+          groupId is String &&
+          groupId.isNotEmpty) {
+        _emitQuickPopDebug(
+          'GROUP_LOCATOR_LOCAL_READ',
+          success: true,
+          detail:
+              'queueKey=${current.queueKey} ticketId=${current.ticketId} groupId=$groupId',
+        );
+        return groupId;
+      }
+    } catch (_) {
+      // Treat malformed or stale preferences as a cache miss.
+    }
+    return null;
+  }
+
+  Future<void> _persistLocalQuickPopGroupLocator(
+    QuickPopQueueTicket current,
+    String groupId,
+  ) async {
+    final preferences = await _quickPopPreferences();
+    if (preferences == null) return;
+    await preferences.setString(
+      _quickPopLocatorPreferenceKey(current.queueKey),
+      jsonEncode(<String, Object?>{
+        'ticketId': current.ticketId,
+        'groupId': groupId,
+      }),
+    );
+    _emitQuickPopDebug(
+      'GROUP_LOCATOR_LOCAL_WRITE',
+      success: true,
+      detail:
+          'queueKey=${current.queueKey} ticketId=${current.ticketId} groupId=$groupId',
+    );
+  }
+
+  /// Reads the last verified group id for this player's current queue ticket.
+  ///
+  /// The active queue query is intentionally denied by Firebase as soon as a
+  /// player's own search deadline expires.  A client can therefore have a
+  /// valid four-player group on the server while its in-memory group locator
+  /// is empty (for example after Home/resume or a suspended poll).  The
+  /// account resource is owner-readable and is not used as an authority: the
+  /// group root and its member ticket validations remain authoritative.
+  Future<String?> _readQuickPopGroupLocator(QuickPopQueueTicket current) async {
+    final path = '$_accountResourcesPath/quickQueues/${current.queueKey}';
+    // Prefer the local lifecycle cache. It survives Home/process recreation
+    // and still works when the installed Firebase ruleset predates the
+    // optional account-resource groupId fields.
+    final localGroupId = await _readLocalQuickPopGroupLocator(current);
+    if (localGroupId != null) return localGroupId;
+    try {
+      final record = onlineMap(await store.read(path));
+      final groupId = record['groupId'];
+      final queueKey = record['queueKey'];
+      final ticketId = record['ticketId'];
+      final valid =
+          groupId is String &&
+          groupId.isNotEmpty &&
+          queueKey == current.queueKey &&
+          ticketId == current.ticketId;
+      _emitQuickPopDebug(
+        'GROUP_LOCATOR_READ',
+        success: valid,
+        detail:
+            'queueKey=${current.queueKey} ticketId=${current.ticketId} groupId=${valid ? groupId : 'none'}',
+        path: path,
+      );
+      return valid ? groupId : null;
+    } catch (error) {
+      _emitQuickPopDebug(
+        'GROUP_LOCATOR_READ',
+        error: true,
+        detail:
+            'queueKey=${current.queueKey} ticketId=${current.ticketId} error=$error',
+        path: path,
+      );
+      return null;
+    }
+  }
+
+  /// Persists a verified group id without making matching depend on this
+  /// best-effort index write.  The group root is still read and validated
+  /// before it can influence a resolution.
+  Future<void> _persistQuickPopGroupLocator(
+    QuickPopQueueTicket current,
+    String groupId, {
+    required int nowMs,
+  }) async {
+    final path = '$_accountResourcesPath/quickQueues/${current.queueKey}';
+    // Persist locally before touching Firebase. This is the reliable
+    // lifecycle bridge; the account resource is only a server-side index.
+    try {
+      await _persistLocalQuickPopGroupLocator(current, groupId);
+    } catch (error) {
+      _emitQuickPopDebug(
+        'GROUP_LOCATOR_LOCAL_WRITE',
+        error: true,
+        detail:
+            'queueKey=${current.queueKey} ticketId=${current.ticketId} groupId=$groupId error=$error',
+      );
+    }
+    try {
+      await _updateAccountResources(<String, Object?>{
+        'quickQueues/${current.queueKey}/groupId': groupId,
+        'quickQueues/${current.queueKey}/groupIndexedAt': nowMs,
+      }, nowMs: nowMs).timeout(_quickGroupLocatorWriteTimeout);
+      _emitQuickPopDebug(
+        'GROUP_LOCATOR_WRITE',
+        success: true,
+        detail:
+            'queueKey=${current.queueKey} ticketId=${current.ticketId} groupId=$groupId',
+        path: path,
+      );
+    } catch (error) {
+      // Matching remains safe and can continue from the group root. A
+      // transient account-resource write must not turn a real human match
+      // into a CPU fallback or a permission error.
+      _emitQuickPopDebug(
+        'GROUP_LOCATOR_WRITE',
+        error: true,
+        detail:
+            'queueKey=${current.queueKey} ticketId=${current.ticketId} groupId=$groupId error=$error',
+        path: path,
+      );
+    }
   }
 
   Future<QuickPopQueueTicket> _readOwnedTicket(
@@ -1762,7 +2152,16 @@ final class OnlineTransportClient {
       return _resolutionFor(current, now);
     }
 
-    final rememberedGroupId = _ownedQuickGroupIds[current.queueKey];
+    var rememberedGroupId = _ownedQuickGroupIds[current.queueKey];
+    if (rememberedGroupId == null) {
+      // Recover the locator after a lifecycle restart before deciding that a
+      // deadline means CPU. This is the missing bridge when the group was
+      // created by another device while this client was backgrounded.
+      rememberedGroupId = await _readQuickPopGroupLocator(current);
+      if (rememberedGroupId != null) {
+        _ownedQuickGroupIds[current.queueKey] = rememberedGroupId;
+      }
+    }
     Map<String, Object?>? groupRaw;
     if (rememberedGroupId != null) {
       _emitQuickPopDebug(
@@ -1798,14 +2197,13 @@ final class OnlineTransportClient {
       try {
         queue = await _readActiveQuickQueue(
           current.queueKey,
-          // Start at this client's join time instead of zero. This keeps
-          // historical waiting records out of the Firebase result before the
-          // local expiry filter runs, while still including every player who
-          // joined during this overlapping search window. It also matches the
-          // deployed parent-read rule, which permits the caller's own
-          // `joinedAt` lower bound.
-          startAtActiveUntilMs: current.joinedAtMs,
+          // Use the same recent server-time window for every client. Reading
+          // from zero lets historical cancelled tickets fill the first page;
+          // anchoring at a bounded lookback excludes those records while
+          // still including players who joined moments before this client.
+          startAtActiveUntilMs: 0,
           limit: 64,
+          preferTail: true,
         );
       } catch (error) {
         // The Firebase parent query is intentionally denied once this
@@ -1868,6 +2266,7 @@ final class OnlineTransportClient {
 
     final groupId = _sharedQuickGroupId(group);
     _ownedQuickGroupIds[current.queueKey] = groupId;
+    await _persistQuickPopGroupLocator(current, groupId, nowMs: now);
     final groupPath = '$_quickGroupsPath/${current.queueKey}/$groupId';
     _emitQuickPopDebug(
       'GROUP_DERIVED',
@@ -1875,21 +2274,27 @@ final class OnlineTransportClient {
           'queueKey=${current.queueKey} groupId=$groupId leader=${group.leader.uid} members=${group.members.map((member) => member.uid).join(',')} count=${group.members.length}',
       path: groupPath,
     );
-    if (group.leader.uid == identity.uid) {
+    // Do not make the deterministic leader a single point of failure. Any
+    // verified member may race to create the same immutable group root. The
+    // leader field remains deterministic for display/ordering, while the
+    // database rule only permits a member whose ticket is present in this
+    // candidate group to win the create transaction.
+    if (group.members.any((member) => member.uid == identity.uid)) {
       try {
         final rootWrite = await _ensureQuickPopGroupRoot(group, groupId, now);
         _emitQuickPopDebug(
           'GROUP_ROOT_WRITE',
           success: true,
           detail:
-              'leader=${identity.uid} committed=${rootWrite.committed} groupId=$groupId',
+              'writer=${identity.uid} leader=${group.leader.uid} committed=${rootWrite.committed} groupId=$groupId',
           path: groupPath,
         );
       } catch (error) {
         _emitQuickPopDebug(
           'GROUP_ROOT_WRITE',
           error: true,
-          detail: 'leader=${identity.uid} error=$error groupId=$groupId',
+          detail:
+              'writer=${identity.uid} leader=${group.leader.uid} error=$error groupId=$groupId',
           path: groupPath,
         );
         rethrow;
@@ -1966,7 +2371,14 @@ final class OnlineTransportClient {
     if (!shouldResolve) return null;
 
     final resolutionRaw = onlineMap(groupRaw['resolution']);
-    if (resolutionRaw.isEmpty && group.leader.uid == identity.uid) {
+    // Any verified group member may publish the one-time resolution. The
+    // deterministic leader still wins the normal race, but requiring that
+    // single device is unsafe: it can be backgrounded or suspended while the
+    // other players are ready. Firebase authorizes this write only for a UID
+    // already present in the verified group membership, and the transaction
+    // keeps the resolution single-writer once one member commits it.
+    if (resolutionRaw.isEmpty &&
+        members.any((member) => member.uid == identity.uid)) {
       final roomId = _sharedQuickGroupRoomId(members);
       final resolution = <String, Object?>{
         'kind': QuickPopResolutionKind.human.name,
@@ -2076,8 +2488,13 @@ final class OnlineTransportClient {
       'queueKey': leader.queueKey,
       'leaderUid': leader.uid,
       'createdAt': nowMs,
+      // Include the complete deterministic cohort in the first write. This
+      // lets a follower create the root when the leader is backgrounded,
+      // while each member is still independently verified against its own
+      // waiting queue ticket by Realtime Database Rules.
       'members': <String, Object?>{
-        leader.uid: _quickPopGroupMemberJson(leader),
+        for (final member in group.members)
+          member.uid: _quickPopGroupMemberJson(member),
       },
     };
     return store.transaction(path, (raw) {
@@ -2280,15 +2697,14 @@ final class OnlineTransportClient {
     }
     if (tickets.length < 2) return null;
 
-    // The queue query is anchored at this ticket's joinedAt, so records whose
-    // search window ended before this player arrived are not returned. The
-    // old selector then anchored the cohort at the newest ticket in the whole
-    // snapshot. A stale record arriving late could move that anchor past every
-    // valid peer deadline and make two live devices fall back to CPU even
-    // though their windows overlapped. First keep tickets whose windows
-    // overlap this caller, then derive their common intersection. Every member
-    // of a valid cohort has that same intersection, so all clients choose the
-    // same group deterministically.
+    // The group path reads the full active queue (the Firebase rule permits
+    // the shared lower bound of zero), then filters locally. A per-device
+    // lower bound based on joinedAt would hide earlier players from later
+    // readers, causing each client to derive a different group id and fall
+    // back to CPU. First keep tickets whose windows overlap this caller, then
+    // derive their common intersection. Every member of a valid cohort has
+    // that same intersection, so all clients choose the same group
+    // deterministically.
     tickets.sort((left, right) {
       final byTime = left.joinedAtMs.compareTo(right.joinedAtMs);
       return byTime != 0 ? byTime : left.uid.compareTo(right.uid);
@@ -2588,14 +3004,17 @@ final class OnlineTransportClient {
       );
     }
     if (room.status == RoomStatus.inGame) return true;
-    if (room.status != RoomStatus.starting || room.hostUid != identity.uid) {
+    if (room.status != RoomStatus.starting || !members.contains(identity.uid)) {
       return false;
     }
-    if (members.any(
-      (uid) => room.presenceFor(uid) != LobbyPresence.connected,
-    )) {
-      return false;
-    }
+    // For a group launch, launchReady is the authoritative barrier. Firebase
+    // rules validate every marker against the member's verified ticket before
+    // allowing any verified group member to commit `starting -> inGame`.
+    // Presence can lag one listener update while four clients prepare their
+    // engines (and can briefly be disconnected while an app is backgrounded),
+    // so requiring the deterministic host here could split one group into
+    // independent CPU matches. The room presence/lease remains authoritative
+    // for the live match after this transition.
     await store.transaction('$_roomsPath/${resolution.roomId}/status', (raw) {
       if (raw == RoomStatus.inGame.name) {
         return const OnlineStoreTransactionDecision.abort();
