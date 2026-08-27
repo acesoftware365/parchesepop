@@ -22,6 +22,10 @@ class ProgressionRewardPolicy {
     this.sharedTableTurnsTarget = 8,
     this.sharedTableTurnsCoins = 45,
     this.sharedTableMatchCoins = 60,
+    this.quickPopMatchesTarget = 2,
+    this.quickPopMatchesCoins = 55,
+    this.chaosMatchesTarget = 1,
+    this.chaosMatchesCoins = 60,
     this.weeklyMatchesTarget = 7,
     this.weeklyMatchesCoins = 150,
   }) : assert(matchCompletionCoins > 0),
@@ -32,6 +36,10 @@ class ProgressionRewardPolicy {
        assert(sharedTableTurnsTarget > 0),
        assert(sharedTableTurnsCoins > 0),
        assert(sharedTableMatchCoins > 0),
+       assert(quickPopMatchesTarget > 0),
+       assert(quickPopMatchesCoins > 0),
+       assert(chaosMatchesTarget > 0),
+       assert(chaosMatchesCoins > 0),
        assert(weeklyMatchesTarget > 0),
        assert(weeklyMatchesCoins > 0);
 
@@ -44,6 +52,10 @@ class ProgressionRewardPolicy {
   final int sharedTableTurnsTarget;
   final int sharedTableTurnsCoins;
   final int sharedTableMatchCoins;
+  final int quickPopMatchesTarget;
+  final int quickPopMatchesCoins;
+  final int chaosMatchesTarget;
+  final int chaosMatchesCoins;
   final int weeklyMatchesTarget;
   final int weeklyMatchesCoins;
 
@@ -64,9 +76,16 @@ enum ProgressionTransactionSource {
   dailyReleaseMission,
   sharedTableTurnsMission,
   sharedTableMatchMission,
+  quickPopMatchesMission,
+  chaosMatchesMission,
   weeklyMatchesMission,
   rewardedDouble,
 }
+
+/// Game-specific missions that complete by finishing a match.  A match can
+/// belong to exactly one of these tracks, so a Quick Pop match never advances
+/// the Caos mission and vice versa.
+enum GameModeMissionTrack { quickPop, chaos }
 
 @immutable
 class ProgressionTransaction {
@@ -186,6 +205,12 @@ class DailyMissionSnapshot {
     required this.releaseRewardClaimed,
     required this.matchCompleted,
     required this.finishRewardClaimed,
+    required this.quickPopMatches,
+    required this.quickPopTarget,
+    required this.quickPopRewardClaimed,
+    required this.chaosMatches,
+    required this.chaosTarget,
+    required this.chaosRewardClaimed,
   });
 
   final String dayKey;
@@ -196,9 +221,17 @@ class DailyMissionSnapshot {
   final bool releaseRewardClaimed;
   final bool matchCompleted;
   final bool finishRewardClaimed;
+  final int quickPopMatches;
+  final int quickPopTarget;
+  final bool quickPopRewardClaimed;
+  final int chaosMatches;
+  final int chaosTarget;
+  final bool chaosRewardClaimed;
 
   bool get moveMissionComplete => cellsMoved >= moveTarget;
   bool get releaseMissionComplete => tokenReleased;
+  bool get quickPopMissionComplete => quickPopMatches >= quickPopTarget;
+  bool get chaosMissionComplete => chaosMatches >= chaosTarget;
 }
 
 @immutable
@@ -269,6 +302,10 @@ class PlayerProgressionController extends ChangeNotifier {
   int _dailyCellsMoved = 0;
   bool _dailyTokenReleased = false;
   final Set<String> _dailyProcessedEventIds = <String>{};
+  int _dailyQuickPopMatches = 0;
+  final Set<String> _dailyQuickPopMatchIds = <String>{};
+  int _dailyChaosMatches = 0;
+  final Set<String> _dailyChaosMatchIds = <String>{};
   int _sharedTableTurnsPlayed = 0;
   final Set<String> _sharedTableProcessedEventIds = <String>{};
 
@@ -307,6 +344,14 @@ class PlayerProgressionController extends ChangeNotifier {
     ),
     matchCompleted: _hasTransaction(_firstDailyTransactionId(_dailyKey)),
     finishRewardClaimed: _hasTransaction(_firstDailyTransactionId(_dailyKey)),
+    quickPopMatches: _dailyQuickPopMatches,
+    quickPopTarget: policy.quickPopMatchesTarget,
+    quickPopRewardClaimed: _hasTransaction(
+      _quickPopMatchesTransactionId(_dailyKey),
+    ),
+    chaosMatches: _dailyChaosMatches,
+    chaosTarget: policy.chaosMatchesTarget,
+    chaosRewardClaimed: _hasTransaction(_chaosMatchesTransactionId(_dailyKey)),
   );
 
   WeeklyMissionSnapshot get weeklyMission => WeeklyMissionSnapshot(
@@ -594,6 +639,72 @@ class PlayerProgressionController extends ChangeNotifier {
     });
   }
 
+  /// Records a completed Quick Pop or Caos match for its daily mission.
+  ///
+  /// [matchId] is persisted after the first record, so result-screen rebuilds
+  /// and restored matches cannot increase progress or grant coins twice.
+  Future<ProgressionUpdate> recordGameModeMatchCompleted({
+    required String matchId,
+    required GameModeMissionTrack track,
+  }) {
+    _validateExternalId(matchId, 'matchId');
+    return _enqueue<ProgressionUpdate>(() async {
+      await _initializeUnlocked();
+      final now = _clock();
+      final periodsChanged = _rollPeriods(now);
+      final (
+        processedMatches,
+        target,
+        reward,
+        source,
+        transactionId,
+      ) = switch (track) {
+        GameModeMissionTrack.quickPop => (
+          _dailyQuickPopMatchIds,
+          policy.quickPopMatchesTarget,
+          policy.quickPopMatchesCoins,
+          ProgressionTransactionSource.quickPopMatchesMission,
+          _quickPopMatchesTransactionId(_dailyKey),
+        ),
+        GameModeMissionTrack.chaos => (
+          _dailyChaosMatchIds,
+          policy.chaosMatchesTarget,
+          policy.chaosMatchesCoins,
+          ProgressionTransactionSource.chaosMatchesMission,
+          _chaosMatchesTransactionId(_dailyKey),
+        ),
+      };
+      if (!processedMatches.add(matchId)) {
+        if (periodsChanged) await _commit();
+        return ProgressionUpdate.none;
+      }
+
+      switch (track) {
+        case GameModeMissionTrack.quickPop:
+          _dailyQuickPopMatches = math.min(target, _dailyQuickPopMatches + 1);
+        case GameModeMissionTrack.chaos:
+          _dailyChaosMatches = math.min(target, _dailyChaosMatches + 1);
+      }
+      final progress = switch (track) {
+        GameModeMissionTrack.quickPop => _dailyQuickPopMatches,
+        GameModeMissionTrack.chaos => _dailyChaosMatches,
+      };
+      final transaction = progress >= target
+          ? _applyTransaction(
+              id: transactionId,
+              source: source,
+              amount: reward,
+              now: now,
+              matchId: matchId,
+            )
+          : null;
+      await _commit();
+      return transaction == null
+          ? ProgressionUpdate.none
+          : ProgressionUpdate(<ProgressionTransaction>[transaction]);
+    });
+  }
+
   /// Grants the voluntary rewarded-ad x2 bonus after the ad SDK reports that
   /// the reward was earned.
   ///
@@ -658,6 +769,10 @@ class PlayerProgressionController extends ChangeNotifier {
     _dailyCellsMoved = 0;
     _dailyTokenReleased = false;
     _dailyProcessedEventIds.clear();
+    _dailyQuickPopMatches = 0;
+    _dailyQuickPopMatchIds.clear();
+    _dailyChaosMatches = 0;
+    _dailyChaosMatchIds.clear();
     _sharedTableTurnsPlayed = 0;
     _sharedTableProcessedEventIds.clear();
     _weeklyKey = '';
@@ -786,6 +901,28 @@ class PlayerProgressionController extends ChangeNotifier {
             processedEventIds.whereType<String>().where(_isSafeExternalId),
           );
         }
+        final quickPopMatches = daily['quickPopMatches'];
+        _dailyQuickPopMatches = quickPopMatches is int && quickPopMatches >= 0
+            ? math.min(quickPopMatches, policy.quickPopMatchesTarget)
+            : 0;
+        _dailyQuickPopMatchIds.clear();
+        final quickPopMatchIds = daily['quickPopMatchIds'];
+        if (quickPopMatchIds is List) {
+          _dailyQuickPopMatchIds.addAll(
+            quickPopMatchIds.whereType<String>().where(_isSafeExternalId),
+          );
+        }
+        final chaosMatches = daily['chaosMatches'];
+        _dailyChaosMatches = chaosMatches is int && chaosMatches >= 0
+            ? math.min(chaosMatches, policy.chaosMatchesTarget)
+            : 0;
+        _dailyChaosMatchIds.clear();
+        final chaosMatchIds = daily['chaosMatchIds'];
+        if (chaosMatchIds is List) {
+          _dailyChaosMatchIds.addAll(
+            chaosMatchIds.whereType<String>().where(_isSafeExternalId),
+          );
+        }
         final sharedTableTurns = daily['sharedTableTurns'];
         _sharedTableTurnsPlayed =
             sharedTableTurns is int && sharedTableTurns >= 0
@@ -823,6 +960,10 @@ class PlayerProgressionController extends ChangeNotifier {
       _dailyCellsMoved = 0;
       _dailyTokenReleased = false;
       _dailyProcessedEventIds.clear();
+      _dailyQuickPopMatches = 0;
+      _dailyQuickPopMatchIds.clear();
+      _dailyChaosMatches = 0;
+      _dailyChaosMatchIds.clear();
       _sharedTableTurnsPlayed = 0;
       _sharedTableProcessedEventIds.clear();
       changed = true;
@@ -945,6 +1086,10 @@ class PlayerProgressionController extends ChangeNotifier {
         'cellsMoved': _dailyCellsMoved,
         'tokenReleased': _dailyTokenReleased,
         'processedEventIds': _dailyProcessedEventIds.toList()..sort(),
+        'quickPopMatches': _dailyQuickPopMatches,
+        'quickPopMatchIds': _dailyQuickPopMatchIds.toList()..sort(),
+        'chaosMatches': _dailyChaosMatches,
+        'chaosMatchIds': _dailyChaosMatchIds.toList()..sort(),
         'sharedTableTurns': _sharedTableTurnsPlayed,
         'sharedTableProcessedEventIds': _sharedTableProcessedEventIds.toList()
           ..sort(),
@@ -988,6 +1133,10 @@ class PlayerProgressionController extends ChangeNotifier {
       'daily:$dayKey:shared_table_turns';
   static String _sharedTableMatchTransactionId(String dayKey) =>
       'daily:$dayKey:shared_table_match';
+  static String _quickPopMatchesTransactionId(String dayKey) =>
+      'daily:$dayKey:quick_pop_matches';
+  static String _chaosMatchesTransactionId(String dayKey) =>
+      'daily:$dayKey:chaos_matches';
   static String _weeklyTransactionId(String weekKey) =>
       'weekly:$weekKey:finish_7';
   static String _rewardedDoubleTransactionId(String matchId) =>

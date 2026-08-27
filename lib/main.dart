@@ -11858,6 +11858,8 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
         ProgressionTransactionSource.dailyReleaseMission ||
         ProgressionTransactionSource.sharedTableTurnsMission ||
         ProgressionTransactionSource.sharedTableMatchMission ||
+        ProgressionTransactionSource.quickPopMatchesMission ||
+        ProgressionTransactionSource.chaosMatchesMission ||
         ProgressionTransactionSource.weeklyMatchesMission =>
           CurrencySource.mission,
         ProgressionTransactionSource.rewardedDouble =>
@@ -11904,6 +11906,16 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
             progression.sharedTableMissions.matchCompleted ? 1 : 0,
             1,
           ),
+          ProgressionTransactionSource.quickPopMatchesMission => (
+            MissionKind.quickPopMatches,
+            progression.dailyMissions.quickPopMatches,
+            progression.dailyMissions.quickPopTarget,
+          ),
+          ProgressionTransactionSource.chaosMatchesMission => (
+            MissionKind.chaosMatch,
+            progression.dailyMissions.chaosMatches,
+            progression.dailyMissions.chaosTarget,
+          ),
           ProgressionTransactionSource.weeklyMatchesMission => (
             MissionKind.finish7Matches,
             progression.weeklyMission.matchesCompleted,
@@ -11941,6 +11953,18 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
     final matchId =
         analyticsMatch.correlation.anonymousMatchId ??
         'local_${engine.hashCode}';
+    final modeMissionTrack = engine.matchFormat == MatchFormat.quickPop
+        ? GameModeMissionTrack.quickPop
+        : engine.mode == GameMode.chaos
+        ? GameModeMissionTrack.chaos
+        : null;
+    if (modeMissionTrack != null) {
+      final modeMissionUpdate = await progression.recordGameModeMatchCompleted(
+        matchId: matchId,
+        track: modeMissionTrack,
+      );
+      await _creditProgression(modeMissionUpdate.transactions);
+    }
     if (widget.passAndPlay) {
       final sharedTableUpdate = await progression
           .recordSharedTableMatchCompleted(matchId: matchId);

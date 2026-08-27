@@ -107,6 +107,73 @@ void main() {
     await tester.pumpWidget(const SizedBox.shrink());
   });
 
+  testWidgets('Quick Pop and Caos results advance only their own missions', (
+    tester,
+  ) async {
+    await tester.binding.setSurfaceSize(const Size(390, 844));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+
+    final wallet = await WalletController.create();
+    final progression = await PlayerProgressionController.create();
+    addTearDown(wallet.dispose);
+    addTearDown(progression.dispose);
+
+    Future<void> finishMatch({
+      required MatchFormat format,
+      required GameMode mode,
+      required String matchRef,
+    }) async {
+      final engine = _oneMoveFromFirstPlace(matchFormat: format, mode: mode);
+      addTearDown(engine.dispose);
+      await tester.pumpWidget(
+        MaterialApp(
+          home: GameScreen(
+            opponent: 'CPU • Normal',
+            gameEngine: engine,
+            matchFormat: format,
+            wallet: wallet,
+            progression: progression,
+            analyticsMatchRef: matchRef,
+          ),
+        ),
+      );
+      await tester.pump();
+      expect(
+        engine.moveToken(engine.currentPlayer.tokens.last, die: 1),
+        isTrue,
+      );
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 120));
+      await tester.pumpWidget(const SizedBox.shrink());
+      await tester.pump();
+    }
+
+    await finishMatch(
+      format: MatchFormat.quickPop,
+      mode: GameMode.traditional,
+      matchRef: 'quick_pop_mission_one',
+    );
+    expect(progression.dailyMissions.quickPopMatches, 1);
+    expect(progression.dailyMissions.quickPopRewardClaimed, isFalse);
+    expect(progression.dailyMissions.chaosMatches, 0);
+
+    await finishMatch(
+      format: MatchFormat.quickPop,
+      mode: GameMode.traditional,
+      matchRef: 'quick_pop_mission_two',
+    );
+    expect(progression.dailyMissions.quickPopMatches, 2);
+    expect(progression.dailyMissions.quickPopRewardClaimed, isTrue);
+
+    await finishMatch(
+      format: MatchFormat.classic,
+      mode: GameMode.chaos,
+      matchRef: 'chaos_mission_one',
+    );
+    expect(progression.dailyMissions.chaosMatches, 1);
+    expect(progression.dailyMissions.chaosRewardClaimed, isTrue);
+  });
+
   testWidgets('the first Quick Pop move completes the release mission', (
     tester,
   ) async {
@@ -244,8 +311,11 @@ void main() {
   });
 }
 
-GameEngine _oneMoveFromFirstPlace() {
-  final engine = GameEngine();
+GameEngine _oneMoveFromFirstPlace({
+  MatchFormat matchFormat = MatchFormat.classic,
+  GameMode mode = GameMode.traditional,
+}) {
+  final engine = GameEngine(matchFormat: matchFormat, mode: mode);
   final player = engine.currentPlayer;
   for (var index = 0; index < player.tokens.length - 1; index++) {
     player.tokens[index].progress = GameEngine.finishProgress;

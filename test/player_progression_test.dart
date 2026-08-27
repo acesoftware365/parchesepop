@@ -341,6 +341,62 @@ void main() {
     },
   );
 
+  test(
+    'Quick Pop and Caos daily missions are separate and idempotent',
+    () async {
+      final clock = _MutableClock(DateTime(2026, 8, 8, 10));
+      final progression = await PlayerProgressionController.create(
+        clock: clock.call,
+      );
+      addTearDown(progression.dispose);
+
+      final firstQuickPop = await progression.recordGameModeMatchCompleted(
+        matchId: 'quick_pop_one',
+        track: GameModeMissionTrack.quickPop,
+      );
+      expect(firstQuickPop.coinsAwarded, 0);
+      expect(progression.dailyMissions.quickPopMatches, 1);
+      expect(progression.dailyMissions.chaosMatches, 0);
+
+      final quickPopCompletion = await progression.recordGameModeMatchCompleted(
+        matchId: 'quick_pop_two',
+        track: GameModeMissionTrack.quickPop,
+      );
+      expect(
+        quickPopCompletion.coinsAwarded,
+        progression.policy.quickPopMatchesCoins,
+      );
+      expect(progression.dailyMissions.quickPopRewardClaimed, isTrue);
+      expect(
+        (await progression.recordGameModeMatchCompleted(
+          matchId: 'quick_pop_two',
+          track: GameModeMissionTrack.quickPop,
+        )).coinsAwarded,
+        0,
+      );
+
+      final chaosCompletion = await progression.recordGameModeMatchCompleted(
+        matchId: 'chaos_one',
+        track: GameModeMissionTrack.chaos,
+      );
+      expect(
+        chaosCompletion.coinsAwarded,
+        progression.policy.chaosMatchesCoins,
+      );
+      expect(progression.dailyMissions.chaosMatches, 1);
+      expect(progression.dailyMissions.chaosRewardClaimed, isTrue);
+
+      clock.value = DateTime(2026, 8, 9, 0, 1);
+      await progression.recordGameModeMatchCompleted(
+        matchId: 'quick_pop_next_day',
+        track: GameModeMissionTrack.quickPop,
+      );
+      expect(progression.dailyMissions.quickPopMatches, 1);
+      expect(progression.dailyMissions.quickPopRewardClaimed, isFalse);
+      expect(progression.dailyMissions.chaosMatches, 0);
+    },
+  );
+
   test('daily mission progress resets and can reward again next day', () async {
     final clock = _MutableClock(DateTime(2026, 8, 8, 23, 59));
     final progression = await PlayerProgressionController.create(

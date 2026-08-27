@@ -162,10 +162,10 @@ void main() {
     );
     expect(find.text('QUICK POP'), findsOneWidget);
     expect(find.text('Partida rápida online'), findsOneWidget);
-    expect(find.text('MESA RÁPIDA'), findsOneWidget);
-    expect(find.text('Amigos online · crea una sala'), findsOneWidget);
-    expect(find.text('CONTRA CPU'), findsOneWidget);
-    expect(find.text('Juega contra el CPU'), findsOneWidget);
+    expect(find.text('CLÁSICO'), findsOneWidget);
+    expect(find.text('La partida principal de 4 fichas'), findsOneWidget);
+    expect(find.text('CAOS'), findsOneWidget);
+    expect(find.text('Eventos, poderes y reglas especiales'), findsOneWidget);
     expect(find.text('PASS & PLAY'), findsNothing);
 
     for (final card in [quickPop, quickTable, cpu]) {
@@ -187,13 +187,13 @@ void main() {
             'Mode cards should be centered and use the whole card as the tap target.',
       );
     }
-    for (final title in ['QUICK POP', 'MESA RÁPIDA', 'CONTRA CPU']) {
+    for (final title in ['QUICK POP', 'CLÁSICO', 'CAOS']) {
       final titleFinder = find.text(title);
       final titleCenter = tester.getCenter(titleFinder);
       final card = switch (title) {
         'QUICK POP' => quickPop,
-        'MESA RÁPIDA' => quickTable,
-        'CONTRA CPU' => cpu,
+        'CLÁSICO' => quickTable,
+        'CAOS' => cpu,
         _ => cpu,
       };
       expect(
@@ -404,11 +404,31 @@ void main() {
     expect(find.byKey(const ValueKey('mission-move-20')), findsOneWidget);
     expect(find.byKey(const ValueKey('mission-release-token')), findsOneWidget);
     expect(find.byKey(const ValueKey('mission-finish-match')), findsOneWidget);
+    expect(find.text('LISTO'), findsNWidgets(3));
+    await tester.scrollUntilVisible(
+      find.byKey(const ValueKey('mission-quick-pop-matches')),
+      180,
+      scrollable: find.byType(Scrollable).first,
+    );
+    expect(
+      find.byKey(const ValueKey('mission-quick-pop-matches')),
+      findsOneWidget,
+    );
+    await tester.scrollUntilVisible(
+      find.byKey(const ValueKey('mission-chaos-match')),
+      180,
+      scrollable: find.byType(Scrollable).first,
+    );
+    expect(find.byKey(const ValueKey('mission-chaos-match')), findsOneWidget);
+    await tester.scrollUntilVisible(
+      find.byKey(const ValueKey('mission-shared-table-turns')),
+      180,
+      scrollable: find.byType(Scrollable).first,
+    );
     expect(
       find.byKey(const ValueKey('mission-shared-table-turns')),
       findsOneWidget,
     );
-    expect(find.text('LISTO'), findsNWidgets(3));
     await tester.scrollUntilVisible(
       find.byKey(const ValueKey('mission-shared-table-match')),
       180,

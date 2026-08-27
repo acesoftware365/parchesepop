@@ -648,6 +648,8 @@ enum MissionKind {
   finishOneMatch,
   sharedTableTurns,
   sharedTableMatch,
+  quickPopMatches,
+  chaosMatch,
   finish7Matches,
 }
 
