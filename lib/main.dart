@@ -2728,29 +2728,33 @@ class PlayHome extends StatelessWidget {
                   expanded: !compactModeTiles && !compactLandscape,
                   onTap: () => _showQuickPopEntry(context),
                 );
-                final quickTableCard = _ModeCard(
+                final classicCard = _ModeCard(
                   key: const ValueKey('home-mode-quick-table'),
                   color: PopColors.blue,
-                  icon: Icons.groups_rounded,
-                  title: 'MESA RÁPIDA',
-                  subtitle: 'Amigos online · crea una sala',
+                  icon: Icons.casino_rounded,
+                  title: 'CLÁSICO',
+                  subtitle: 'La partida principal de 4 fichas',
                   tile: compactModeTiles,
                   dense: denseHome,
                   ultraCompact: ultraCompactPortrait,
                   expanded: !compactModeTiles && !compactLandscape,
-                  onTap: () => _startOnline(context),
+                  onTap: () => _showModeDestinationDialog(
+                    context,
+                    mode: GameMode.traditional,
+                  ),
                 );
-                final cpuCard = _ModeCard(
+                final chaosCard = _ModeCard(
                   key: const ValueKey('home-mode-cpu'),
                   color: PopColors.red,
-                  icon: Icons.smart_toy_rounded,
-                  title: 'CONTRA CPU',
-                  subtitle: 'Juega contra el CPU',
+                  icon: Icons.auto_awesome_rounded,
+                  title: 'CAOS',
+                  subtitle: 'Eventos, poderes y reglas especiales',
                   tile: compactModeTiles,
                   dense: denseHome,
                   ultraCompact: ultraCompactPortrait,
                   expanded: !compactModeTiles && !compactLandscape,
-                  onTap: () => _showCpuDialog(context),
+                  onTap: () =>
+                      _showModeDestinationDialog(context, mode: GameMode.chaos),
                 );
                 final passAndPlayCard = _ModeCard(
                   key: const ValueKey('home-mode-pass-and-play'),
@@ -2769,8 +2773,8 @@ class PlayHome extends StatelessWidget {
                 );
                 final modeCards = <Widget>[
                   quickPopCard,
-                  quickTableCard,
-                  cpuCard,
+                  classicCard,
+                  chaosCard,
                   if (showPassAndPlay) passAndPlayCard,
                 ];
                 return ConstrainedBox(
@@ -2855,25 +2859,6 @@ class PlayHome extends StatelessWidget {
                                             ? 7
                                             : 13,
                                       ),
-                                    if (!ultraCompactPortrait)
-                                      _HomeModeGroupLabel(
-                                        label: start == 0 ? 'ONLINE' : 'LOCAL',
-                                        color: start == 0
-                                            ? PopColors.blue
-                                            : PopColors.green,
-                                        icon: start == 0
-                                            ? Icons.public_rounded
-                                            : Icons.home_rounded,
-                                        compact: compactLandscape || narrow,
-                                      ),
-                                    if (!ultraCompactPortrait)
-                                      SizedBox(
-                                        height: compactLandscape
-                                            ? 0
-                                            : densePortrait
-                                            ? 5
-                                            : 7,
-                                      ),
                                     Row(
                                       crossAxisAlignment:
                                           CrossAxisAlignment.start,
@@ -2904,19 +2889,6 @@ class PlayHome extends StatelessWidget {
                                   ],
                                 ],
                               ),
-                            if (!compactLandscape) ...[
-                              SizedBox(height: densePortrait ? 9 : 13),
-                              _HomeFlowPreviewButton(
-                                onTap: () => Navigator.push<void>(
-                                  context,
-                                  MaterialPageRoute(
-                                    builder: (_) => _HomeFlowPreviewScreen(
-                                      showSharedTable: showPassAndPlay,
-                                    ),
-                                  ),
-                                ),
-                              ),
-                            ],
                           ],
                         ),
                       ),
@@ -3114,10 +3086,13 @@ class PlayHome extends StatelessWidget {
     );
   }
 
-  Future<void> _showCpuDialog(BuildContext context) async {
+  Future<void> _showCpuDialog(
+    BuildContext context, {
+    GameMode? fixedMode,
+  }) async {
     final setup = await showDialog<({GameMode mode, String level})>(
       context: context,
-      builder: (_) => const _CpuSetupDialog(),
+      builder: (_) => _CpuSetupDialog(initialMode: fixedMode),
     );
     if (!context.mounted || setup == null) return;
     Navigator.push(
@@ -3134,6 +3109,23 @@ class PlayHome extends StatelessWidget {
         ),
       ),
     );
+  }
+
+  Future<void> _showModeDestinationDialog(
+    BuildContext context, {
+    required GameMode mode,
+  }) async {
+    final destination = await showDialog<_HomeFlowPreviewDestination>(
+      context: context,
+      builder: (_) => _ModeDestinationDialog(mode: mode),
+    );
+    if (!context.mounted || destination == null) return;
+    switch (destination) {
+      case _HomeFlowPreviewDestination.online:
+        await _startOnline(context);
+      case _HomeFlowPreviewDestination.cpu:
+        await _showCpuDialog(context, fixedMode: mode);
+    }
   }
 
   Future<void> _showPassAndPlayDialog(BuildContext context) async {
@@ -3369,8 +3361,8 @@ class PlayHome extends StatelessWidget {
 /// A safe, standalone preview of the proposed home hierarchy. It deliberately
 /// does not replace or invoke any match flow so the current Quick Pop V3,
 /// rooms, and CPU routes remain untouched while the organization is reviewed.
-class _HomeFlowPreviewButton extends StatelessWidget {
-  const _HomeFlowPreviewButton({required this.onTap});
+class HomeFlowPreviewButton extends StatelessWidget {
+  const HomeFlowPreviewButton({super.key, required this.onTap});
 
   final VoidCallback onTap;
 
@@ -3393,6 +3385,67 @@ class _HomeFlowPreviewButton extends StatelessWidget {
 enum _HomeFlowPreviewMode { quickPop, classic, chaos }
 
 enum _HomeFlowPreviewDestination { online, cpu }
+
+/// The official second step after choosing Clásico or Caos. The destination
+/// delegates to the existing room and CPU flows; it owns no game state.
+class _ModeDestinationDialog extends StatelessWidget {
+  const _ModeDestinationDialog({required this.mode});
+
+  final GameMode mode;
+
+  @override
+  Widget build(BuildContext context) {
+    final chaos = mode == GameMode.chaos;
+    final color = chaos ? const Color(0xFF7B61FF) : PopColors.blue;
+    return _PopSetupDialogShell(
+      key: ValueKey('mode-destination-${mode.name}'),
+      maxWidth: 520,
+      padding: const EdgeInsets.fromLTRB(22, 22, 22, 18),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          _PopSetupHeader(
+            icon: chaos ? Icons.auto_awesome_rounded : Icons.casino_rounded,
+            title: chaos ? 'CAOS' : 'CLÁSICO',
+            subtitle: '¿Cómo quieres jugar?',
+            color: color,
+            trailing: const _PopSetupCloseButton(),
+          ),
+          const SizedBox(height: 18),
+          FilledButton.icon(
+            key: const ValueKey('mode-destination-online'),
+            onPressed: () =>
+                Navigator.pop(context, _HomeFlowPreviewDestination.online),
+            icon: const Icon(Icons.public_rounded),
+            label: const _FitButtonLabel('ONLINE · SALA CON AMIGOS'),
+            style: FilledButton.styleFrom(
+              backgroundColor: PopColors.blue,
+              foregroundColor: Colors.white,
+              minimumSize: const Size.fromHeight(54),
+            ),
+          ),
+          const SizedBox(height: 9),
+          OutlinedButton.icon(
+            key: const ValueKey('mode-destination-cpu'),
+            onPressed: () =>
+                Navigator.pop(context, _HomeFlowPreviewDestination.cpu),
+            icon: const Icon(Icons.smart_toy_rounded),
+            label: const _FitButtonLabel('CPU · JUGAR SIN CONEXIÓN'),
+            style: OutlinedButton.styleFrom(
+              foregroundColor: Colors.white,
+              side: BorderSide(
+                color: Colors.white.withValues(alpha: .72),
+                width: 1.5,
+              ),
+              minimumSize: const Size.fromHeight(50),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
 
 class _HomeFlowPreviewScreen extends StatefulWidget {
   const _HomeFlowPreviewScreen({required this.showSharedTable});
@@ -6853,7 +6906,11 @@ class _OnlineModeDialog extends StatelessWidget {
 }
 
 class _CpuSetupDialog extends StatefulWidget {
-  const _CpuSetupDialog();
+  const _CpuSetupDialog({this.initialMode});
+
+  /// When Clásico or Caos was already selected on Home, keep that choice and
+  /// take the player directly to difficulty instead of asking twice.
+  final GameMode? initialMode;
 
   @override
   State<_CpuSetupDialog> createState() => _CpuSetupDialogState();
@@ -6861,6 +6918,12 @@ class _CpuSetupDialog extends StatefulWidget {
 
 class _CpuSetupDialogState extends State<_CpuSetupDialog> {
   GameMode? selectedMode;
+
+  @override
+  void initState() {
+    super.initState();
+    selectedMode = widget.initialMode;
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -6887,20 +6950,22 @@ class _CpuSetupDialogState extends State<_CpuSetupDialog> {
               else
                 Row(
                   children: [
-                    IconButton(
-                      key: const ValueKey('cpu-setup-back'),
-                      tooltip: 'Volver a modos',
-                      onPressed: () => setState(() => selectedMode = null),
-                      icon: const Icon(
-                        Icons.arrow_back_rounded,
-                        color: Colors.white,
+                    if (widget.initialMode == null) ...[
+                      IconButton(
+                        key: const ValueKey('cpu-setup-back'),
+                        tooltip: 'Volver a modos',
+                        onPressed: () => setState(() => selectedMode = null),
+                        icon: const Icon(
+                          Icons.arrow_back_rounded,
+                          color: Colors.white,
+                        ),
+                        style: IconButton.styleFrom(
+                          backgroundColor: Colors.white.withValues(alpha: .16),
+                          foregroundColor: Colors.white,
+                        ),
                       ),
-                      style: IconButton.styleFrom(
-                        backgroundColor: Colors.white.withValues(alpha: .16),
-                        foregroundColor: Colors.white,
-                      ),
-                    ),
-                    const SizedBox(width: 11),
+                      const SizedBox(width: 11),
+                    ],
                     const Expanded(
                       child: Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
@@ -7700,8 +7765,9 @@ class _HomeSectionTitle extends StatelessWidget {
   }
 }
 
-class _HomeModeGroupLabel extends StatelessWidget {
-  const _HomeModeGroupLabel({
+class HomeModeGroupLabel extends StatelessWidget {
+  const HomeModeGroupLabel({
+    super.key,
     required this.label,
     required this.color,
     required this.icon,

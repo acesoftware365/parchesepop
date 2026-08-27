@@ -154,19 +154,25 @@ void main() {
     await tester.tap(find.byKey(const ValueKey('home-mode-cpu')));
     await tester.pumpAndSettle();
 
-    expect(find.byKey(const ValueKey('cpu-mode-step')), findsOneWidget);
-    expect(find.byKey(const ValueKey('cpu-mode-traditional')), findsOneWidget);
-    expect(find.byKey(const ValueKey('cpu-mode-chaos')), findsOneWidget);
+    expect(
+      find.byKey(const ValueKey('mode-destination-chaos')),
+      findsOneWidget,
+    );
+    expect(
+      find.byKey(const ValueKey('mode-destination-online')),
+      findsOneWidget,
+    );
+    expect(find.byKey(const ValueKey('mode-destination-cpu')), findsOneWidget);
     final dialog = tester.getRect(
-      find.byKey(const ValueKey('cpu-mode-step')).first,
+      find.byKey(const ValueKey('mode-destination-chaos')).first,
     );
     expect(dialog.left, greaterThanOrEqualTo(0));
     expect(dialog.right, lessThanOrEqualTo(360));
     expect(dialog.top, greaterThanOrEqualTo(0));
     expect(dialog.bottom, lessThanOrEqualTo(800));
     for (final key in const [
-      ValueKey<String>('cpu-mode-traditional'),
-      ValueKey<String>('cpu-mode-chaos'),
+      ValueKey<String>('mode-destination-online'),
+      ValueKey<String>('mode-destination-cpu'),
     ]) {
       final card = tester.getRect(find.byKey(key));
       expect(card.left, greaterThanOrEqualTo(0));
@@ -194,8 +200,8 @@ void main() {
 
         final expectedModeCopy = <String, String>{
           'home-mode-quick-pop': 'Partida rápida online',
-          'home-mode-quick-table': 'Amigos online · crea una sala',
-          'home-mode-cpu': 'Juega contra el CPU',
+          'home-mode-quick-table': 'La partida principal de 4 fichas',
+          'home-mode-cpu': 'Eventos, poderes y reglas especiales',
           if (viewport.value.width >= 620 && viewport.value.height >= 520)
             'home-mode-pass-and-play': 'Hasta 4 en un dispositivo',
         };
@@ -234,8 +240,8 @@ void main() {
 
     for (final label in const [
       'QUICK POP',
-      'MESA RÁPIDA',
-      'CONTRA CPU',
+      'CLÁSICO',
+      'CAOS',
       'Tienda',
       'Misiones',
       'Cómo jugar',
@@ -262,8 +268,8 @@ void main() {
 
       for (final label in const [
         'QUICK POP',
-        'MESA RÁPIDA',
-        'CONTRA CPU',
+        'CLÁSICO',
+        'CAOS',
         'Tienda',
         'Misiones',
         'Cómo jugar',
@@ -293,8 +299,8 @@ void main() {
 
         for (final label in const [
           'QUICK POP',
-          'MESA RÁPIDA',
-          'CONTRA CPU',
+          'CLÁSICO',
+          'CAOS',
           'Tienda',
           'Misiones',
           'Cómo jugar',
@@ -413,8 +419,8 @@ void main() {
       await _pumpLoadedHome(tester);
       for (final label in const [
         'QUICK POP',
-        'MESA RÁPIDA',
-        'CONTRA CPU',
+        'CLÁSICO',
+        'CAOS',
         'Tienda',
         'Misiones',
         'Cómo jugar',
@@ -464,13 +470,10 @@ void main() {
           findsAtLeastNWidgets(1),
         );
         expect(
-          find.bySemanticsLabel(RegExp('MESA RÁPIDA')),
+          find.bySemanticsLabel(RegExp('CLÁSICO')),
           findsAtLeastNWidgets(1),
         );
-        expect(
-          find.bySemanticsLabel(RegExp('CONTRA CPU')),
-          findsAtLeastNWidgets(1),
-        );
+        expect(find.bySemanticsLabel(RegExp('CAOS')), findsAtLeastNWidgets(1));
         expect(tester.binding.transientCallbackCount, 0);
         expect(tester.takeException(), isNull);
       } finally {
@@ -495,12 +498,36 @@ void main() {
     expect(find.byKey(const ValueKey('home-quick-pop')), findsNothing);
     expect(find.text('QUICK POP'), findsOneWidget);
     expect(find.text('Partida rápida online'), findsOneWidget);
-    expect(find.text('MESA RÁPIDA'), findsOneWidget);
-    expect(find.text('Amigos online · crea una sala'), findsOneWidget);
-    expect(find.text('CONTRA CPU'), findsOneWidget);
-    expect(find.text('Juega contra el CPU'), findsOneWidget);
+    expect(find.text('CLÁSICO'), findsOneWidget);
+    expect(find.text('La partida principal de 4 fichas'), findsOneWidget);
+    expect(find.text('CAOS'), findsOneWidget);
+    expect(find.text('Eventos, poderes y reglas especiales'), findsOneWidget);
     expect(find.text('PASS & PLAY'), findsNothing);
     expect(find.text('Hasta 4 en un dispositivo'), findsNothing);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('classic and chaos choose a destination before CPU difficulty', (
+    tester,
+  ) async {
+    _useSpanish();
+    _useViewport(tester, const Size(390, 844));
+    SharedPreferences.setMockInitialValues({});
+
+    await _pumpLoadedHome(tester);
+    await tester.tap(find.byKey(const ValueKey('home-mode-quick-table')));
+    await tester.pumpAndSettle();
+    expect(
+      find.byKey(const ValueKey('mode-destination-traditional')),
+      findsOne,
+    );
+    expect(find.byKey(const ValueKey('mode-destination-online')), findsOne);
+    expect(find.byKey(const ValueKey('mode-destination-cpu')), findsOne);
+
+    await tester.tap(find.byKey(const ValueKey('mode-destination-cpu')));
+    await tester.pumpAndSettle();
+    expect(find.byKey(const ValueKey('cpu-level-step')), findsOne);
+    expect(find.byKey(const ValueKey('cpu-mode-step')), findsNothing);
     expect(tester.takeException(), isNull);
   });
 
@@ -549,7 +576,7 @@ void main() {
     await tester.pump(const Duration(milliseconds: 450));
     expect(find.byKey(const ValueKey('home-profile-dialog')), findsNothing);
     expect(find.byType(HomeScreen), findsOneWidget);
-    expect(find.text('MESA RÁPIDA'), findsOneWidget);
+    expect(find.text('CLÁSICO'), findsOneWidget);
     expect(tester.takeException(), isNull);
   });
 
@@ -671,7 +698,7 @@ void main() {
     );
     expect(find.byKey(const ValueKey('home-profile-dialog')), findsNothing);
     expect(find.byType(HomeScreen), findsOneWidget);
-    expect(find.text('MESA RÁPIDA').hitTestable(), findsOneWidget);
+    expect(find.text('CLÁSICO').hitTestable(), findsOneWidget);
     expect(tester.takeException(), isNull);
   });
 
@@ -703,7 +730,7 @@ void main() {
     );
     expect(find.byKey(const ValueKey('home-profile-dialog')), findsNothing);
     expect(find.byType(HomeScreen), findsOneWidget);
-    expect(find.text('MESA RÁPIDA').hitTestable(), findsOneWidget);
+    expect(find.text('CLÁSICO').hitTestable(), findsOneWidget);
     expect(tester.takeException(), isNull);
   });
 
