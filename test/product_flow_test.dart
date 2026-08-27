@@ -40,7 +40,7 @@ void main() {
 
   testWidgets('main menu keeps the complete how-to-play guide', (tester) async {
     SharedPreferences.setMockInitialValues({});
-    useViewport(tester, const Size(390, 844));
+    useViewport(tester, const Size(834, 1194));
 
     await tester.pumpWidget(const ParchesePopApp());
     await tester.pumpAndSettle();
@@ -59,7 +59,7 @@ void main() {
 
   testWidgets('CPU setup is a two-step game dialog', (tester) async {
     SharedPreferences.setMockInitialValues({});
-    useViewport(tester, const Size(390, 844));
+    useViewport(tester, const Size(834, 1194));
 
     await tester.pumpWidget(const ParchesePopApp());
     await tester.pumpAndSettle();
@@ -101,7 +101,7 @@ void main() {
       'player_auth_digest': 'fixture-digest',
       'player_auth_signed_in': true,
     });
-    useViewport(tester, const Size(390, 844));
+    useViewport(tester, const Size(834, 1194));
 
     await tester.pumpWidget(const ParchesePopApp());
     await tester.pumpAndSettle();
@@ -146,7 +146,7 @@ void main() {
       'profile_email': 'juan@example.com',
       'profile_flag': '🇩🇴',
     });
-    useViewport(tester, const Size(390, 844));
+    useViewport(tester, const Size(834, 1194));
 
     await tester.pumpWidget(const ParchesePopApp());
     await tester.pumpAndSettle();
@@ -182,7 +182,7 @@ void main() {
           'player_auth_digest': 'fixture-digest',
           'player_auth_signed_in': true,
         });
-        useViewport(tester, const Size(390, 844));
+        useViewport(tester, const Size(834, 1194));
 
         await tester.pumpWidget(const ParchesePopApp());
         await tester.pumpAndSettle();

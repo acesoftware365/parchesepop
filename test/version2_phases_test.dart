@@ -154,7 +154,7 @@ void main() {
     expect(quickPop, findsOneWidget);
     expect(quickTable, findsOneWidget);
     expect(cpu, findsOneWidget);
-    expect(passAndPlay, findsOneWidget);
+    expect(passAndPlay, findsNothing);
     expect(
       find.byKey(const ValueKey('home-quick-pop')),
       findsNothing,
@@ -166,9 +166,9 @@ void main() {
     expect(find.text('Amigos online · crea una sala'), findsOneWidget);
     expect(find.text('CONTRA CPU'), findsOneWidget);
     expect(find.text('Juega contra el CPU'), findsOneWidget);
-    expect(find.text('PASS & PLAY'), findsOneWidget);
+    expect(find.text('PASS & PLAY'), findsNothing);
 
-    for (final card in [quickPop, quickTable, cpu, passAndPlay]) {
+    for (final card in [quickPop, quickTable, cpu]) {
       await tester.ensureVisible(card);
       await tester.pump(const Duration(milliseconds: 50));
       expect(card.hitTestable(), findsOneWidget);
@@ -187,19 +187,14 @@ void main() {
             'Mode cards should be centered and use the whole card as the tap target.',
       );
     }
-    for (final title in [
-      'QUICK POP',
-      'MESA RÁPIDA',
-      'CONTRA CPU',
-      'PASS & PLAY',
-    ]) {
+    for (final title in ['QUICK POP', 'MESA RÁPIDA', 'CONTRA CPU']) {
       final titleFinder = find.text(title);
       final titleCenter = tester.getCenter(titleFinder);
       final card = switch (title) {
         'QUICK POP' => quickPop,
         'MESA RÁPIDA' => quickTable,
         'CONTRA CPU' => cpu,
-        _ => passAndPlay,
+        _ => cpu,
       };
       expect(
         titleCenter.dx,
@@ -212,11 +207,6 @@ void main() {
       tester.getTopLeft(quickTable).dy,
       closeTo(featuredTop, 1),
       reason: 'Quick Pop and Quick Table should share the first row.',
-    );
-    expect(
-      tester.getTopLeft(passAndPlay).dy,
-      closeTo(tester.getTopLeft(cpu).dy, 1),
-      reason: 'CPU and Pass & Play should share the second row.',
     );
     expect(tester.getTopLeft(cpu).dy, greaterThan(featuredTop));
 

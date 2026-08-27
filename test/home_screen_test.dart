@@ -192,12 +192,14 @@ void main() {
 
         await _pumpLoadedHome(tester);
 
-        for (final entry in const <String, String>{
+        final expectedModeCopy = <String, String>{
           'home-mode-quick-pop': 'Partida rápida online',
           'home-mode-quick-table': 'Amigos online · crea una sala',
           'home-mode-cpu': 'Juega contra el CPU',
-          'home-mode-pass-and-play': 'Hasta 4 en un dispositivo',
-        }.entries) {
+          if (viewport.value.width >= 620 && viewport.value.height >= 520)
+            'home-mode-pass-and-play': 'Hasta 4 en un dispositivo',
+        };
+        for (final entry in expectedModeCopy.entries) {
           final card = find.byKey(ValueKey<String>(entry.key));
           final copy = find.descendant(
             of: card,
@@ -234,7 +236,6 @@ void main() {
       'QUICK POP',
       'MESA RÁPIDA',
       'CONTRA CPU',
-      'PASS & PLAY',
       'Tienda',
       'Misiones',
       'Cómo jugar',
@@ -245,6 +246,7 @@ void main() {
       tester.getRect(find.byKey(const ValueKey('home-menu-dock'))).bottom,
       lessThanOrEqualTo(viewport.height),
     );
+    expect(find.text('PASS & PLAY'), findsNothing);
     expect(tester.takeException(), isNull);
   });
 
@@ -262,7 +264,6 @@ void main() {
         'QUICK POP',
         'MESA RÁPIDA',
         'CONTRA CPU',
-        'PASS & PLAY',
         'Tienda',
         'Misiones',
         'Cómo jugar',
@@ -490,10 +491,7 @@ void main() {
     expect(find.byKey(const ValueKey('home-mode-quick-pop')), findsOneWidget);
     expect(find.byKey(const ValueKey('home-mode-quick-table')), findsOneWidget);
     expect(find.byKey(const ValueKey('home-mode-cpu')), findsOneWidget);
-    expect(
-      find.byKey(const ValueKey('home-mode-pass-and-play')),
-      findsOneWidget,
-    );
+    expect(find.byKey(const ValueKey('home-mode-pass-and-play')), findsNothing);
     expect(find.byKey(const ValueKey('home-quick-pop')), findsNothing);
     expect(find.text('QUICK POP'), findsOneWidget);
     expect(find.text('Partida rápida online'), findsOneWidget);
@@ -501,8 +499,8 @@ void main() {
     expect(find.text('Amigos online · crea una sala'), findsOneWidget);
     expect(find.text('CONTRA CPU'), findsOneWidget);
     expect(find.text('Juega contra el CPU'), findsOneWidget);
-    expect(find.text('PASS & PLAY'), findsOneWidget);
-    expect(find.text('Hasta 4 en un dispositivo'), findsOneWidget);
+    expect(find.text('PASS & PLAY'), findsNothing);
+    expect(find.text('Hasta 4 en un dispositivo'), findsNothing);
     expect(tester.takeException(), isNull);
   });
 

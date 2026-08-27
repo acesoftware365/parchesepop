@@ -2707,6 +2707,10 @@ class PlayHome extends StatelessWidget {
                     compactLandscape || contentBox.maxWidth < 620;
                 final twoColumnModes =
                     compactModeTiles && contentBox.maxWidth >= 300;
+                // Mesa Compartida uses the larger tablet board. On a phone
+                // the shared-device experience is too cramped, so keep the
+                // home focused on the three modes that fit comfortably.
+                final showPassAndPlay = !narrow && !compactLandscape;
                 final quickPopCard = _ModeCard(
                   key: const ValueKey('home-mode-quick-pop'),
                   color: const Color(0xFF7257E9),
@@ -2764,7 +2768,7 @@ class PlayHome extends StatelessWidget {
                   quickPopCard,
                   quickTableCard,
                   cpuCard,
-                  passAndPlayCard,
+                  if (showPassAndPlay) passAndPlayCard,
                 ];
                 return ConstrainedBox(
                   constraints: BoxConstraints(minHeight: availableHeight),
@@ -2833,8 +2837,12 @@ class PlayHome extends StatelessWidget {
                             if (twoColumnModes)
                               Column(
                                 children: [
-                                  for (var row = 0; row < 2; row++) ...[
-                                    if (row > 0)
+                                  for (
+                                    var start = 0;
+                                    start < modeCards.length;
+                                    start += 2
+                                  ) ...[
+                                    if (start > 0)
                                       SizedBox(
                                         height: compactLandscape
                                             ? 1
@@ -2846,11 +2854,11 @@ class PlayHome extends StatelessWidget {
                                       ),
                                     if (!ultraCompactPortrait)
                                       _HomeModeGroupLabel(
-                                        label: row == 0 ? 'ONLINE' : 'LOCAL',
-                                        color: row == 0
+                                        label: start == 0 ? 'ONLINE' : 'LOCAL',
+                                        color: start == 0
                                             ? PopColors.blue
                                             : PopColors.green,
-                                        icon: row == 0
+                                        icon: start == 0
                                             ? Icons.public_rounded
                                             : Icons.home_rounded,
                                         compact: compactLandscape || narrow,
@@ -2867,9 +2875,13 @@ class PlayHome extends StatelessWidget {
                                       crossAxisAlignment:
                                           CrossAxisAlignment.start,
                                       children: [
-                                        Expanded(child: modeCards[row * 2]),
+                                        Expanded(child: modeCards[start]),
                                         SizedBox(width: densePortrait ? 9 : 12),
-                                        Expanded(child: modeCards[row * 2 + 1]),
+                                        Expanded(
+                                          child: start + 1 < modeCards.length
+                                              ? modeCards[start + 1]
+                                              : const SizedBox(),
+                                        ),
                                       ],
                                     ),
                                   ],
@@ -26371,25 +26383,28 @@ class _PassAndPlayCpuSeatClaims extends StatelessWidget {
                               ),
                             ],
                           ),
-                          child: const Row(
-                            mainAxisAlignment: MainAxisAlignment.center,
-                            children: [
-                              Icon(
-                                Icons.play_arrow_rounded,
-                                color: Colors.white,
-                                size: 18,
-                              ),
-                              SizedBox(width: 2),
-                              Text(
-                                'JUGAR AQUÍ',
-                                style: TextStyle(
+                          child: const FittedBox(
+                            fit: BoxFit.scaleDown,
+                            child: Row(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                Icon(
+                                  Icons.play_arrow_rounded,
                                   color: Colors.white,
-                                  fontSize: 9.5,
-                                  fontWeight: FontWeight.w900,
-                                  letterSpacing: .2,
+                                  size: 18,
                                 ),
-                              ),
-                            ],
+                                SizedBox(width: 2),
+                                Text(
+                                  'JUGAR AQUÍ',
+                                  style: TextStyle(
+                                    color: Colors.white,
+                                    fontSize: 9.5,
+                                    fontWeight: FontWeight.w900,
+                                    letterSpacing: .2,
+                                  ),
+                                ),
+                              ],
+                            ),
                           ),
                         ),
                       ),
