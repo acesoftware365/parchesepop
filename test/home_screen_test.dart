@@ -383,7 +383,7 @@ void main() {
 
     final dock = find.byKey(const ValueKey('home-menu-dock'));
     expect(dock, findsOneWidget);
-    expect(tester.getSize(dock).height, lessThanOrEqualTo(68));
+    expect(tester.getSize(dock).height, lessThanOrEqualTo(80));
     final centers = <double>[];
     for (final label in const ['Tienda', 'Misiones', 'Cómo jugar']) {
       final button = find

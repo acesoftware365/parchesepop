@@ -7852,12 +7852,12 @@ class _HomeMenuDock extends StatelessWidget {
     key: const ValueKey('home-menu-dock'),
     width: double.infinity,
     padding: EdgeInsets.symmetric(
-      horizontal: compact ? 6 : 12,
-      vertical: compact ? 2 : 10,
+      horizontal: compact ? 8 : 12,
+      vertical: compact ? 6 : 10,
     ),
     decoration: BoxDecoration(
       color: const Color(0xFF071B40).withValues(alpha: .68),
-      borderRadius: BorderRadius.circular(compact ? 20 : 26),
+      borderRadius: BorderRadius.circular(compact ? 22 : 26),
       border: Border.all(
         color: Colors.white.withValues(alpha: .28),
         width: 1.5,
@@ -8014,23 +8014,23 @@ class _RoundMenuButtonState extends State<_RoundMenuButton> {
           duration: const Duration(milliseconds: 120),
           curve: Curves.easeOut,
           child: SizedBox(
-            height: 52,
+            height: 62,
             child: Material(
-              color: Colors.white.withValues(alpha: .08),
-              borderRadius: BorderRadius.circular(13),
+              color: Colors.transparent,
+              borderRadius: BorderRadius.circular(16),
               clipBehavior: Clip.antiAlias,
               child: InkWell(
-                borderRadius: BorderRadius.circular(13),
+                borderRadius: BorderRadius.circular(16),
                 onHighlightChanged: (value) => setState(() => pressed = value),
                 onTap: widget.onTap,
                 child: Padding(
-                  padding: const EdgeInsets.fromLTRB(2, 4, 2, 3),
+                  padding: const EdgeInsets.fromLTRB(2, 1, 2, 2),
                   child: Column(
                     mainAxisAlignment: MainAxisAlignment.center,
                     children: [
                       Container(
-                        width: 31,
-                        height: 31,
+                        width: 42,
+                        height: 42,
                         decoration: BoxDecoration(
                           gradient: LinearGradient(
                             begin: Alignment.topLeft,
@@ -8040,26 +8040,26 @@ class _RoundMenuButtonState extends State<_RoundMenuButton> {
                               widget.color,
                             ],
                           ),
-                          borderRadius: BorderRadius.circular(10),
-                          border: Border.all(color: Colors.white, width: 1.7),
+                          borderRadius: BorderRadius.circular(14),
+                          border: Border.all(color: Colors.white, width: 2),
                           boxShadow: [
                             BoxShadow(
                               color: widget.color.withValues(alpha: .28),
-                              blurRadius: 5,
-                              offset: const Offset(0, 2),
+                              blurRadius: 8,
+                              offset: const Offset(0, 3),
                             ),
                           ],
                         ),
-                        child: Icon(widget.icon, color: foreground, size: 19),
+                        child: Icon(widget.icon, color: foreground, size: 24),
                       ),
-                      const SizedBox(height: 2),
+                      const SizedBox(height: 3),
                       Expanded(
                         child: _AutoFitSingleLineText(
                           widget.label,
                           alignment: Alignment.center,
                           textAlign: TextAlign.center,
                           style: const TextStyle(
-                            fontSize: 9,
+                            fontSize: 10,
                             fontWeight: FontWeight.w900,
                             color: Colors.white,
                             shadows: [
