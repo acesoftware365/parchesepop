@@ -13735,6 +13735,8 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
                                               child: board,
                                             ),
                                             engine: engine,
+                                            sharedTableThemeId:
+                                                sharedTableThemeId,
                                             selectedToken: selectedToken,
                                             diceStyle: diceVisualSpecFor(
                                               diceStyleId,
@@ -26057,6 +26059,7 @@ class _TabletPassAndPlayGameLayout extends StatelessWidget {
   const _TabletPassAndPlayGameLayout({
     required this.board,
     required this.engine,
+    required this.sharedTableThemeId,
     required this.selectedToken,
     required this.diceStyle,
     required this.canRoll,
@@ -26066,6 +26069,7 @@ class _TabletPassAndPlayGameLayout extends StatelessWidget {
 
   final Widget board;
   final GameEngine engine;
+  final String? sharedTableThemeId;
   final GameToken? selectedToken;
   final DiceVisualSpec diceStyle;
   final bool canRoll;
@@ -26084,6 +26088,7 @@ class _TabletPassAndPlayGameLayout extends StatelessWidget {
       Widget teamPanel(PlayerColor color) => _TabletPassAndPlayTeamPanel(
         player: _player(color),
         engine: engine,
+        sharedTableThemeId: sharedTableThemeId,
         selectedToken: selectedToken,
         diceStyle: diceStyle,
         canRoll: canRoll && engine.currentPlayer.color == color,
@@ -26125,6 +26130,7 @@ class _TabletPassAndPlayTeamPanel extends StatelessWidget {
   const _TabletPassAndPlayTeamPanel({
     required this.player,
     required this.engine,
+    required this.sharedTableThemeId,
     required this.selectedToken,
     required this.diceStyle,
     required this.canRoll,
@@ -26134,6 +26140,7 @@ class _TabletPassAndPlayTeamPanel extends StatelessWidget {
 
   final PlayerState player;
   final GameEngine engine;
+  final String? sharedTableThemeId;
   final GameToken? selectedToken;
   final DiceVisualSpec diceStyle;
   final bool canRoll;
@@ -26146,6 +26153,10 @@ class _TabletPassAndPlayTeamPanel extends StatelessWidget {
     final facesTableTop =
         player.color == PlayerColor.blue || player.color == PlayerColor.yellow;
     final color = _playerUiColor(player.color);
+    final tableTheme = themeVisualSpecFor(sharedTableThemeId);
+    final usesSharedTableTheme = isSharedTableExclusiveThemeId(
+      sharedTableThemeId,
+    );
     final completed = player.tokens.where((token) => token.finished).length;
     final required = engine.rules.tokensRequiredToWin;
     final remaining = <int>[...engine.remainingDice];
@@ -26204,15 +26215,26 @@ class _TabletPassAndPlayTeamPanel extends StatelessWidget {
           begin: Alignment.centerLeft,
           end: Alignment.centerRight,
           colors: active
-              ? [const Color(0xFF090D13), color]
+              ? [
+                  const Color(0xFF090D13),
+                  color,
+                  if (usesSharedTableTheme)
+                    Color.lerp(color, tableTheme.sceneSecondaryColor, .34)!,
+                ]
               : [
                   const Color(0xFF111827),
                   Color.lerp(const Color(0xFF111827), color, .56)!,
+                  if (usesSharedTableTheme)
+                    Color.lerp(color, tableTheme.scenePrimaryColor, .30)!,
                 ],
         ),
         borderRadius: BorderRadius.circular(18),
         border: Border.all(
-          color: active ? Colors.white : color.withValues(alpha: .80),
+          color: active
+              ? tableTheme.frameAccentColor
+              : usesSharedTableTheme
+              ? Color.lerp(color, tableTheme.frameAccentColor, .46)!
+              : color.withValues(alpha: .80),
           width: active ? 2 : 1.4,
         ),
         boxShadow: active
@@ -26256,6 +26278,17 @@ class _TabletPassAndPlayTeamPanel extends StatelessWidget {
                           ),
                         ),
                       ),
+                      if (usesSharedTableTheme) ...[
+                        const SizedBox(width: 5),
+                        Icon(
+                          Icons.chair_alt_rounded,
+                          color: tableTheme.frameAccentColor,
+                          size: 17,
+                          semanticLabel: facesTableTop
+                              ? 'Asiento al otro lado de la mesa'
+                              : 'Asiento de este lado de la mesa',
+                        ),
+                      ],
                     ],
                   ),
                   const SizedBox(height: 4),
@@ -31166,126 +31199,101 @@ class _SettingsScreenState extends State<SettingsScreen> {
                             secondary: const Icon(Icons.view_agenda_rounded),
                           ),
                           if (!widget.hideDiceHandControls)
-                            AnimatedOpacity(
-                              duration: const Duration(milliseconds: 180),
-                              opacity: rollGuide ? 1 : .48,
-                              child: Padding(
-                                padding: const EdgeInsets.fromLTRB(
-                                  16,
-                                  6,
-                                  16,
-                                  14,
-                                ),
-                                child: Column(
-                                  crossAxisAlignment: CrossAxisAlignment.start,
-                                  children: [
-                                    const Row(
-                                      children: [
-                                        Icon(Icons.back_hand_rounded, size: 24),
-                                        SizedBox(width: 16),
-                                        Expanded(
-                                          child: Column(
-                                            crossAxisAlignment:
-                                                CrossAxisAlignment.start,
-                                            children: [
-                                              PopText(
-                                                'Mano para los dados',
-                                                style: TextStyle(
-                                                  fontWeight: FontWeight.w700,
-                                                ),
+                            Padding(
+                              padding: const EdgeInsets.fromLTRB(16, 6, 16, 14),
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  const Row(
+                                    children: [
+                                      Icon(Icons.back_hand_rounded, size: 24),
+                                      SizedBox(width: 16),
+                                      Expanded(
+                                        child: Column(
+                                          crossAxisAlignment:
+                                              CrossAxisAlignment.start,
+                                          children: [
+                                            PopText(
+                                              'Mano para los dados',
+                                              style: TextStyle(
+                                                fontWeight: FontWeight.w700,
                                               ),
-                                              SizedBox(height: 2),
-                                              PopText(
-                                                'Elige cómo aparece la guía de lanzamiento',
-                                                style: TextStyle(
-                                                  color: Color(0xFF667085),
-                                                  fontSize: 12,
-                                                ),
+                                            ),
+                                            SizedBox(height: 2),
+                                            PopText(
+                                              'Elige en qué lado aparece la mano al lanzar',
+                                              style: TextStyle(
+                                                color: Color(0xFF667085),
+                                                fontSize: 12,
                                               ),
-                                            ],
+                                            ),
+                                          ],
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                  const SizedBox(height: 10),
+                                  SwitchListTile(
+                                    key: const ValueKey(
+                                      'settings-dice-hand-effect',
+                                    ),
+                                    contentPadding: EdgeInsets.zero,
+                                    value: diceHandEffect,
+                                    onChanged: (value) {
+                                      setState(() => diceHandEffect = value);
+                                      _setPreference(
+                                        settingsDiceHandEffectKey,
+                                        value,
+                                      );
+                                    },
+                                    title: const PopText('Efecto de mano'),
+                                    subtitle: const PopText(
+                                      'Muestra la mano animada al lanzar los dados',
+                                    ),
+                                    secondary: const Icon(
+                                      Icons.back_hand_rounded,
+                                    ),
+                                  ),
+                                  const SizedBox(height: 4),
+                                  SizedBox(
+                                    width: double.infinity,
+                                    child: SegmentedButton<DiceHandPreference>(
+                                      key: const ValueKey('settings-dice-hand'),
+                                      showSelectedIcon: false,
+                                      segments: const [
+                                        ButtonSegment(
+                                          value: DiceHandPreference.left,
+                                          icon: Icon(Icons.back_hand_rounded),
+                                          label: PopText(
+                                            'IZQUIERDA',
+                                            key: ValueKey(
+                                              'settings-dice-hand-left',
+                                            ),
+                                          ),
+                                        ),
+                                        ButtonSegment(
+                                          value: DiceHandPreference.right,
+                                          icon: Icon(Icons.front_hand_rounded),
+                                          label: PopText(
+                                            'DERECHA',
+                                            key: ValueKey(
+                                              'settings-dice-hand-right',
+                                            ),
                                           ),
                                         ),
                                       ],
+                                      selected: {diceHand},
+                                      onSelectionChanged: (selection) {
+                                        final value = selection.single;
+                                        setState(() => diceHand = value);
+                                        _setStringPreference(
+                                          settingsDiceHandKey,
+                                          value.name,
+                                        );
+                                      },
                                     ),
-                                    const SizedBox(height: 10),
-                                    SwitchListTile(
-                                      key: const ValueKey(
-                                        'settings-dice-hand-effect',
-                                      ),
-                                      contentPadding: EdgeInsets.zero,
-                                      value: diceHandEffect,
-                                      onChanged: rollGuide
-                                          ? (value) {
-                                              setState(
-                                                () => diceHandEffect = value,
-                                              );
-                                              _setPreference(
-                                                settingsDiceHandEffectKey,
-                                                value,
-                                              );
-                                            }
-                                          : null,
-                                      title: const PopText('Efecto de mano'),
-                                      subtitle: const PopText(
-                                        'Muestra la mano animada al lanzar los dados',
-                                      ),
-                                      secondary: const Icon(
-                                        Icons.back_hand_rounded,
-                                      ),
-                                    ),
-                                    const SizedBox(height: 4),
-                                    SizedBox(
-                                      width: double.infinity,
-                                      child:
-                                          SegmentedButton<DiceHandPreference>(
-                                            key: const ValueKey(
-                                              'settings-dice-hand',
-                                            ),
-                                            showSelectedIcon: false,
-                                            segments: const [
-                                              ButtonSegment(
-                                                value: DiceHandPreference.left,
-                                                icon: Icon(
-                                                  Icons.back_hand_rounded,
-                                                ),
-                                                label: PopText(
-                                                  'IZQUIERDA',
-                                                  key: ValueKey(
-                                                    'settings-dice-hand-left',
-                                                  ),
-                                                ),
-                                              ),
-                                              ButtonSegment(
-                                                value: DiceHandPreference.right,
-                                                icon: Icon(
-                                                  Icons.front_hand_rounded,
-                                                ),
-                                                label: PopText(
-                                                  'DERECHA',
-                                                  key: ValueKey(
-                                                    'settings-dice-hand-right',
-                                                  ),
-                                                ),
-                                              ),
-                                            ],
-                                            selected: {diceHand},
-                                            onSelectionChanged: rollGuide
-                                                ? (selection) {
-                                                    final value =
-                                                        selection.single;
-                                                    setState(
-                                                      () => diceHand = value,
-                                                    );
-                                                    _setStringPreference(
-                                                      settingsDiceHandKey,
-                                                      value.name,
-                                                    );
-                                                  }
-                                                : null,
-                                          ),
-                                    ),
-                                  ],
-                                ),
+                                  ),
+                                ],
                               ),
                             ),
                           const Divider(height: 1),
