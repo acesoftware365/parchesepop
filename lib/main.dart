@@ -21025,7 +21025,14 @@ class _ParcheseBoardPainter extends CustomPainter {
           ],
         ).createShader(baseRect),
     );
-    _baseThemeMotif(canvas, baseRect, theme, baseCell, progress);
+    _baseThemeMotif(
+      canvas,
+      baseRect,
+      theme,
+      baseCell,
+      progress,
+      flipForTopSeat: rotateTopPlayerLabels && row == 0,
+    );
     final nestCenter = baseRect.center;
     final nestScale = enlargeNestsForPassAndPlay ? 1.15 : 1.0;
     final nestShadowRadius = 2.38 * nestScale;
@@ -21122,11 +21129,17 @@ class _ParcheseBoardPainter extends CustomPainter {
     Rect base,
     ThemeVisualSpec theme,
     double cell,
-    double progress,
-  ) {
+    double progress, {
+    bool flipForTopSeat = false,
+  }) {
     if (theme.motif == ThemeMotif.classic) return;
     canvas.save();
     canvas.clipRect(base);
+    if (flipForTopSeat) {
+      canvas.translate(base.center.dx, base.center.dy);
+      canvas.rotate(math.pi);
+      canvas.translate(-base.center.dx, -base.center.dy);
+    }
     canvas.drawRect(
       base,
       Paint()
