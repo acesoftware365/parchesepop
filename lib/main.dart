@@ -2904,6 +2904,19 @@ class PlayHome extends StatelessWidget {
                                   ],
                                 ],
                               ),
+                            if (!compactLandscape) ...[
+                              SizedBox(height: densePortrait ? 9 : 13),
+                              _HomeFlowPreviewButton(
+                                onTap: () => Navigator.push<void>(
+                                  context,
+                                  MaterialPageRoute(
+                                    builder: (_) => _HomeFlowPreviewScreen(
+                                      showSharedTable: showPassAndPlay,
+                                    ),
+                                  ),
+                                ),
+                              ),
+                            ],
                           ],
                         ),
                       ),
@@ -3351,6 +3364,479 @@ class PlayHome extends StatelessWidget {
       ),
     );
   }
+}
+
+/// A safe, standalone preview of the proposed home hierarchy. It deliberately
+/// does not replace or invoke any match flow so the current Quick Pop V3,
+/// rooms, and CPU routes remain untouched while the organization is reviewed.
+class _HomeFlowPreviewButton extends StatelessWidget {
+  const _HomeFlowPreviewButton({required this.onTap});
+
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) => OutlinedButton.icon(
+    key: const ValueKey('home-preview-new-flow'),
+    onPressed: onTap,
+    icon: const Icon(Icons.account_tree_rounded),
+    label: const PopText('PROBAR NUEVO MENÚ'),
+    style: OutlinedButton.styleFrom(
+      foregroundColor: Colors.white,
+      backgroundColor: PopColors.navy.withValues(alpha: .72),
+      side: BorderSide(color: PopColors.yellow.withValues(alpha: .9), width: 2),
+      minimumSize: const Size.fromHeight(44),
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+    ),
+  );
+}
+
+enum _HomeFlowPreviewMode { quickPop, classic, chaos }
+
+enum _HomeFlowPreviewDestination { online, cpu }
+
+class _HomeFlowPreviewScreen extends StatefulWidget {
+  const _HomeFlowPreviewScreen({required this.showSharedTable});
+
+  final bool showSharedTable;
+
+  @override
+  State<_HomeFlowPreviewScreen> createState() => _HomeFlowPreviewScreenState();
+}
+
+class _HomeFlowPreviewScreenState extends State<_HomeFlowPreviewScreen> {
+  _HomeFlowPreviewMode? selectedMode;
+  _HomeFlowPreviewDestination? selectedDestination;
+
+  void _chooseMode(_HomeFlowPreviewMode mode) {
+    setState(() {
+      selectedMode = mode;
+      selectedDestination = null;
+    });
+  }
+
+  void _reset() => setState(() {
+    selectedMode = null;
+    selectedDestination = null;
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final mode = selectedMode;
+    final destination = selectedDestination;
+    return Scaffold(
+      backgroundColor: PopColors.cloud,
+      body: PopBackground(
+        child: SafeArea(
+          child: PageShell(
+            child: ConstrainedBox(
+              constraints: const BoxConstraints(maxWidth: 560),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  Row(
+                    children: [
+                      IconButton.filled(
+                        key: const ValueKey('home-preview-back'),
+                        onPressed: () => Navigator.maybePop(context),
+                        style: IconButton.styleFrom(
+                          backgroundColor: PopColors.yellow,
+                          foregroundColor: PopColors.navy,
+                        ),
+                        icon: const Icon(Icons.arrow_back_rounded),
+                      ),
+                      const SizedBox(width: 12),
+                      const Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            PopText(
+                              'PROBAR NUEVO MENÚ',
+                              style: TextStyle(
+                                color: Colors.white,
+                                fontSize: 24,
+                                fontWeight: FontWeight.w900,
+                              ),
+                            ),
+                            PopText(
+                              'Vista de prueba: no cambia los juegos actuales.',
+                              style: TextStyle(color: Color(0xFFD7E6FF)),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 28),
+                  if (mode == null)
+                    _HomeFlowModePicker(
+                      showSharedTable: widget.showSharedTable,
+                      onModeSelected: _chooseMode,
+                    )
+                  else if (mode == _HomeFlowPreviewMode.quickPop)
+                    _HomeFlowQuickPopPreview(onReset: _reset)
+                  else if (destination == null)
+                    _HomeFlowDestinationPicker(
+                      mode: mode,
+                      onDestinationSelected: (value) =>
+                          setState(() => selectedDestination = value),
+                      onReset: _reset,
+                    )
+                  else
+                    _HomeFlowDestinationPreview(
+                      mode: mode,
+                      destination: destination,
+                      onReset: _reset,
+                    ),
+                ],
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _HomeFlowModePicker extends StatelessWidget {
+  const _HomeFlowModePicker({
+    required this.showSharedTable,
+    required this.onModeSelected,
+  });
+
+  final bool showSharedTable;
+  final ValueChanged<_HomeFlowPreviewMode> onModeSelected;
+
+  @override
+  Widget build(BuildContext context) => Column(
+    crossAxisAlignment: CrossAxisAlignment.stretch,
+    children: [
+      const PopText(
+        'ELIGE TU MODO',
+        textAlign: TextAlign.center,
+        style: TextStyle(
+          color: Colors.white,
+          fontSize: 25,
+          fontWeight: FontWeight.w900,
+        ),
+      ),
+      const SizedBox(height: 8),
+      const PopText(
+        'Primero eliges la experiencia. Después eliges Online o CPU.',
+        textAlign: TextAlign.center,
+        style: TextStyle(color: Color(0xFFD7E6FF)),
+      ),
+      const SizedBox(height: 20),
+      _HomeFlowChoice(
+        key: const ValueKey('home-preview-quick-pop'),
+        color: const Color(0xFF7257E9),
+        icon: Icons.bolt_rounded,
+        title: 'QUICK POP',
+        subtitle: 'Partida rápida online · comienza en máximo 10 s',
+        onTap: () => onModeSelected(_HomeFlowPreviewMode.quickPop),
+      ),
+      const SizedBox(height: 12),
+      _HomeFlowChoice(
+        key: const ValueKey('home-preview-classic'),
+        color: PopColors.blue,
+        icon: Icons.casino_rounded,
+        title: 'CLÁSICO',
+        subtitle: 'La partida principal de 4 fichas',
+        onTap: () => onModeSelected(_HomeFlowPreviewMode.classic),
+      ),
+      const SizedBox(height: 12),
+      _HomeFlowChoice(
+        key: const ValueKey('home-preview-chaos'),
+        color: PopColors.red,
+        icon: Icons.auto_awesome_rounded,
+        title: 'CAOS',
+        subtitle: 'Variante con eventos y reglas especiales',
+        onTap: () => onModeSelected(_HomeFlowPreviewMode.chaos),
+      ),
+      if (showSharedTable) ...[
+        const SizedBox(height: 22),
+        const PopText(
+          'EN TABLET TAMBIÉN: Mesa compartida / Pass & Play.',
+          textAlign: TextAlign.center,
+          style: TextStyle(
+            color: Color(0xFFBDFBDB),
+            fontWeight: FontWeight.w700,
+          ),
+        ),
+      ],
+    ],
+  );
+}
+
+class _HomeFlowQuickPopPreview extends StatelessWidget {
+  const _HomeFlowQuickPopPreview({required this.onReset});
+
+  final VoidCallback onReset;
+
+  @override
+  Widget build(BuildContext context) => _HomeFlowSummary(
+    icon: Icons.bolt_rounded,
+    color: const Color(0xFF7257E9),
+    title: 'QUICK POP',
+    description:
+        'Este botón abre directamente el Quick Pop V3 que ya funciona: búsqueda rápida, CPU si faltan jugadores y servidor como autoridad.',
+    nextLabel: 'JUGAR AHORA',
+    nextDescription: 'Sin una pantalla extra de Online o CPU.',
+    onReset: onReset,
+  );
+}
+
+class _HomeFlowDestinationPicker extends StatelessWidget {
+  const _HomeFlowDestinationPicker({
+    required this.mode,
+    required this.onDestinationSelected,
+    required this.onReset,
+  });
+
+  final _HomeFlowPreviewMode mode;
+  final ValueChanged<_HomeFlowPreviewDestination> onDestinationSelected;
+  final VoidCallback onReset;
+
+  String get _title =>
+      mode == _HomeFlowPreviewMode.classic ? 'CLÁSICO' : 'CAOS';
+
+  @override
+  Widget build(BuildContext context) => Column(
+    crossAxisAlignment: CrossAxisAlignment.stretch,
+    children: [
+      PopText(
+        _title,
+        textAlign: TextAlign.center,
+        style: const TextStyle(
+          color: Colors.white,
+          fontSize: 28,
+          fontWeight: FontWeight.w900,
+        ),
+      ),
+      const SizedBox(height: 7),
+      const PopText(
+        '¿CÓMO QUIERES JUGAR?',
+        textAlign: TextAlign.center,
+        style: TextStyle(
+          color: Color(0xFFD7E6FF),
+          fontWeight: FontWeight.w800,
+          letterSpacing: .4,
+        ),
+      ),
+      const SizedBox(height: 22),
+      _HomeFlowChoice(
+        key: const ValueKey('home-preview-online'),
+        color: PopColors.blue,
+        icon: Icons.public_rounded,
+        title: 'ONLINE',
+        subtitle: 'Busca jugadores o crea una sala con amigos',
+        onTap: () => onDestinationSelected(_HomeFlowPreviewDestination.online),
+      ),
+      const SizedBox(height: 12),
+      _HomeFlowChoice(
+        key: const ValueKey('home-preview-cpu'),
+        color: PopColors.green,
+        icon: Icons.smart_toy_rounded,
+        title: 'CPU',
+        subtitle: 'Juega inmediatamente sin conexión',
+        onTap: () => onDestinationSelected(_HomeFlowPreviewDestination.cpu),
+      ),
+      const SizedBox(height: 18),
+      TextButton.icon(
+        onPressed: onReset,
+        icon: const Icon(Icons.arrow_back_rounded),
+        label: const PopText('ELEGIR OTRO MODO'),
+        style: TextButton.styleFrom(foregroundColor: Colors.white),
+      ),
+    ],
+  );
+}
+
+class _HomeFlowDestinationPreview extends StatelessWidget {
+  const _HomeFlowDestinationPreview({
+    required this.mode,
+    required this.destination,
+    required this.onReset,
+  });
+
+  final _HomeFlowPreviewMode mode;
+  final _HomeFlowPreviewDestination destination;
+  final VoidCallback onReset;
+
+  @override
+  Widget build(BuildContext context) {
+    final title = mode == _HomeFlowPreviewMode.classic ? 'CLÁSICO' : 'CAOS';
+    final online = destination == _HomeFlowPreviewDestination.online;
+    return _HomeFlowSummary(
+      icon: online ? Icons.public_rounded : Icons.smart_toy_rounded,
+      color: online ? PopColors.blue : PopColors.green,
+      title: '$title · ${online ? 'ONLINE' : 'CPU'}',
+      description: online
+          ? 'Aquí aparecería Sala con amigos: pública, privada o con código. Se reutiliza el flujo de Mesa Rápida actual.'
+          : 'Aquí aparecería la selección de dificultad y se reutiliza el juego Contra CPU actual.',
+      nextLabel: online ? 'SALA CON AMIGOS' : 'JUGAR CONTRA CPU',
+      nextDescription:
+          'Es una vista de prueba: los flujos actuales no se modifican.',
+      onReset: onReset,
+    );
+  }
+}
+
+class _HomeFlowSummary extends StatelessWidget {
+  const _HomeFlowSummary({
+    required this.icon,
+    required this.color,
+    required this.title,
+    required this.description,
+    required this.nextLabel,
+    required this.nextDescription,
+    required this.onReset,
+  });
+
+  final IconData icon;
+  final Color color;
+  final String title;
+  final String description;
+  final String nextLabel;
+  final String nextDescription;
+  final VoidCallback onReset;
+
+  @override
+  Widget build(BuildContext context) => Card(
+    color: PopColors.navy.withValues(alpha: .92),
+    elevation: 12,
+    shape: RoundedRectangleBorder(
+      borderRadius: BorderRadius.circular(28),
+      side: BorderSide(color: color, width: 2.5),
+    ),
+    child: Padding(
+      padding: const EdgeInsets.all(24),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Icon(icon, color: color, size: 54),
+          const SizedBox(height: 12),
+          PopText(
+            title,
+            textAlign: TextAlign.center,
+            style: const TextStyle(
+              color: Colors.white,
+              fontSize: 25,
+              fontWeight: FontWeight.w900,
+            ),
+          ),
+          const SizedBox(height: 14),
+          PopText(
+            description,
+            textAlign: TextAlign.center,
+            style: const TextStyle(color: Color(0xFFD7E6FF), height: 1.35),
+          ),
+          const SizedBox(height: 22),
+          Container(
+            padding: const EdgeInsets.symmetric(vertical: 13, horizontal: 16),
+            decoration: BoxDecoration(
+              color: color,
+              borderRadius: BorderRadius.circular(14),
+            ),
+            child: Row(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                const Icon(Icons.arrow_forward_rounded, color: Colors.white),
+                const SizedBox(width: 8),
+                PopText(
+                  nextLabel,
+                  style: const TextStyle(
+                    color: Colors.white,
+                    fontWeight: FontWeight.w900,
+                  ),
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(height: 8),
+          PopText(
+            nextDescription,
+            textAlign: TextAlign.center,
+            style: const TextStyle(color: Color(0xFFBFD0EC), fontSize: 12),
+          ),
+          const SizedBox(height: 12),
+          TextButton(
+            onPressed: onReset,
+            child: const PopText('VOLVER A LOS MODOS'),
+          ),
+        ],
+      ),
+    ),
+  );
+}
+
+class _HomeFlowChoice extends StatelessWidget {
+  const _HomeFlowChoice({
+    super.key,
+    required this.color,
+    required this.icon,
+    required this.title,
+    required this.subtitle,
+    required this.onTap,
+  });
+
+  final Color color;
+  final IconData icon;
+  final String title;
+  final String subtitle;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) => Material(
+    color: Colors.transparent,
+    child: InkWell(
+      onTap: onTap,
+      borderRadius: BorderRadius.circular(22),
+      child: Ink(
+        padding: const EdgeInsets.all(18),
+        decoration: BoxDecoration(
+          gradient: LinearGradient(
+            colors: [color, Color.lerp(color, PopColors.navy, .40)!],
+          ),
+          borderRadius: BorderRadius.circular(22),
+          border: Border.all(color: Colors.white, width: 2),
+          boxShadow: [
+            BoxShadow(
+              color: color.withValues(alpha: .30),
+              blurRadius: 12,
+              offset: const Offset(0, 5),
+            ),
+          ],
+        ),
+        child: Row(
+          children: [
+            Icon(icon, color: Colors.white, size: 34),
+            const SizedBox(width: 14),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  PopText(
+                    title,
+                    style: const TextStyle(
+                      color: Colors.white,
+                      fontSize: 19,
+                      fontWeight: FontWeight.w900,
+                    ),
+                  ),
+                  const SizedBox(height: 3),
+                  PopText(
+                    subtitle,
+                    style: const TextStyle(color: Color(0xFFF2F6FF)),
+                  ),
+                ],
+              ),
+            ),
+            const Icon(Icons.chevron_right_rounded, color: Colors.white),
+          ],
+        ),
+      ),
+    ),
+  );
 }
 
 enum _QuickTableEntryChoice { online }
