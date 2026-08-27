@@ -261,14 +261,17 @@ const AppFeatureRollout appFeatureRollout = AppFeatureRollout(
   quickPopOnline: true,
 );
 
-/// Only enabled by the dedicated beta APK build command. Production and
-/// ordinary debug builds continue using the stable V2 Quick Pop route.
+/// Retains the dedicated V3 test harness for focused development checks.
 const bool onlineV3TestEnabled = bool.fromEnvironment('ENABLE_ONLINE_V3_TEST');
 
-/// Enables the server-authoritative V3 route in the normal Quick Pop entry
-/// for the dedicated gameplay-test build. Regular and release builds stay on
-/// the existing V2 route until this test is accepted.
-const bool onlineV3GameEnabled = bool.fromEnvironment('ENABLE_ONLINE_V3_GAME');
+/// Quick Pop normally uses the server-authoritative V3 flow.  A rollback APK
+/// can explicitly pass `--dart-define=ENABLE_ONLINE_V3_GAME=false` if needed,
+/// but ordinary debug, beta, and release builds must never silently return to
+/// the legacy host-dependent V2 protocol.
+const bool onlineV3GameEnabled = bool.fromEnvironment(
+  'ENABLE_ONLINE_V3_GAME',
+  defaultValue: true,
+);
 
 // Rewarded ads are always voluntary, but the shop coin offer remains
 // available in every build and every game mode.
