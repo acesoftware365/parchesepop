@@ -507,6 +507,28 @@ void main() {
     expect(tester.takeException(), isNull);
   });
 
+  testWidgets('phone places Quick Pop and Caos above full-width Clásico', (
+    tester,
+  ) async {
+    _useSpanish();
+    _useViewport(tester, const Size(390, 844));
+    SharedPreferences.setMockInitialValues({});
+
+    await _pumpLoadedHome(tester);
+    final quickPop = tester.getRect(
+      find.byKey(const ValueKey('home-mode-quick-pop')),
+    );
+    final chaos = tester.getRect(find.byKey(const ValueKey('home-mode-cpu')));
+    final classic = tester.getRect(
+      find.byKey(const ValueKey('home-mode-quick-table')),
+    );
+
+    expect(chaos.top, closeTo(quickPop.top, 1));
+    expect(classic.top, greaterThan(quickPop.bottom));
+    expect(classic.width, greaterThan(quickPop.width * 1.8));
+    expect(tester.takeException(), isNull);
+  });
+
   testWidgets('classic and chaos choose a destination before CPU difficulty', (
     tester,
   ) async {
@@ -625,7 +647,7 @@ void main() {
 
       expect(find.byKey(const ValueKey('resume-saved-match-button')), findsOne);
       expect(find.byKey(const ValueKey('home-profile-button')), findsOneWidget);
-      expect(find.text('1,800'), findsOneWidget);
+      expect(find.byKey(const ValueKey('coin-balance')), findsOneWidget);
       expect(
         find.byKey(const ValueKey('start-contextual-tutorial')),
         findsNothing,

@@ -397,6 +397,38 @@ void main() {
     },
   );
 
+  test('welcome missions are paid once and survive a reload', () async {
+    final first = await PlayerProgressionController.create(
+      clock: () => DateTime(2026, 8, 8, 10),
+    );
+
+    final profile = await first.recordWelcomeMission(
+      WelcomeMission.completeProfile,
+    );
+    final setting = await first.recordWelcomeMission(
+      WelcomeMission.changeSetting,
+    );
+    expect(profile.coinsAwarded, first.policy.profileCompletionCoins);
+    expect(setting.coinsAwarded, first.policy.settingsChangeCoins);
+    expect(first.welcomeMissions.profileComplete, isTrue);
+    expect(first.welcomeMissions.settingChanged, isTrue);
+    expect(
+      (await first.recordWelcomeMission(
+        WelcomeMission.changeSetting,
+      )).coinsAwarded,
+      0,
+    );
+    first.dispose();
+
+    final restored = await PlayerProgressionController.create(
+      clock: () => DateTime(2026, 8, 8, 11),
+    );
+    addTearDown(restored.dispose);
+    expect(restored.welcomeMissions.profileComplete, isTrue);
+    expect(restored.welcomeMissions.settingChanged, isTrue);
+    expect(restored.welcomeMissions.storeOpened, isFalse);
+  });
+
   test('daily mission progress resets and can reward again next day', () async {
     final clock = _MutableClock(DateTime(2026, 8, 8, 23, 59));
     final progression = await PlayerProgressionController.create(

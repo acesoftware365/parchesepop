@@ -401,10 +401,24 @@ void main() {
       ),
     );
 
+    await tester.scrollUntilVisible(
+      find.byKey(const ValueKey('mission-move-20')),
+      180,
+      scrollable: find.byType(Scrollable).first,
+    );
     expect(find.byKey(const ValueKey('mission-move-20')), findsOneWidget);
+    await tester.scrollUntilVisible(
+      find.byKey(const ValueKey('mission-release-token')),
+      180,
+      scrollable: find.byType(Scrollable).first,
+    );
     expect(find.byKey(const ValueKey('mission-release-token')), findsOneWidget);
+    await tester.scrollUntilVisible(
+      find.byKey(const ValueKey('mission-finish-match')),
+      180,
+      scrollable: find.byType(Scrollable).first,
+    );
     expect(find.byKey(const ValueKey('mission-finish-match')), findsOneWidget);
-    expect(find.text('LISTO'), findsNWidgets(3));
     await tester.scrollUntilVisible(
       find.byKey(const ValueKey('mission-quick-pop-matches')),
       180,

@@ -26,6 +26,11 @@ class ProgressionRewardPolicy {
     this.quickPopMatchesCoins = 55,
     this.chaosMatchesTarget = 1,
     this.chaosMatchesCoins = 60,
+    this.profileCompletionCoins = 20,
+    this.howToPlayCoins = 10,
+    this.storeVisitCoins = 10,
+    this.settingsChangeCoins = 10,
+    this.playableTutorialCoins = 30,
     this.weeklyMatchesTarget = 7,
     this.weeklyMatchesCoins = 150,
   }) : assert(matchCompletionCoins > 0),
@@ -40,6 +45,11 @@ class ProgressionRewardPolicy {
        assert(quickPopMatchesCoins > 0),
        assert(chaosMatchesTarget > 0),
        assert(chaosMatchesCoins > 0),
+       assert(profileCompletionCoins > 0),
+       assert(howToPlayCoins > 0),
+       assert(storeVisitCoins > 0),
+       assert(settingsChangeCoins > 0),
+       assert(playableTutorialCoins > 0),
        assert(weeklyMatchesTarget > 0),
        assert(weeklyMatchesCoins > 0);
 
@@ -56,6 +66,11 @@ class ProgressionRewardPolicy {
   final int quickPopMatchesCoins;
   final int chaosMatchesTarget;
   final int chaosMatchesCoins;
+  final int profileCompletionCoins;
+  final int howToPlayCoins;
+  final int storeVisitCoins;
+  final int settingsChangeCoins;
+  final int playableTutorialCoins;
   final int weeklyMatchesTarget;
   final int weeklyMatchesCoins;
 
@@ -66,6 +81,14 @@ class ProgressionRewardPolicy {
     }
     return coins;
   }
+
+  int welcomeMissionCoins(WelcomeMission mission) => switch (mission) {
+    WelcomeMission.completeProfile => profileCompletionCoins,
+    WelcomeMission.openHowToPlay => howToPlayCoins,
+    WelcomeMission.openStore => storeVisitCoins,
+    WelcomeMission.changeSetting => settingsChangeCoins,
+    WelcomeMission.completePlayableTutorial => playableTutorialCoins,
+  };
 }
 
 enum ProgressionTransactionSource {
@@ -78,6 +101,7 @@ enum ProgressionTransactionSource {
   sharedTableMatchMission,
   quickPopMatchesMission,
   chaosMatchesMission,
+  welcomeMission,
   weeklyMatchesMission,
   rewardedDouble,
 }
@@ -86,6 +110,16 @@ enum ProgressionTransactionSource {
 /// belong to exactly one of these tracks, so a Quick Pop match never advances
 /// the Caos mission and vice versa.
 enum GameModeMissionTrack { quickPop, chaos }
+
+/// A permanent onboarding objective. Each objective rewards once per local
+/// profile and remains complete after daily or weekly periods reset.
+enum WelcomeMission {
+  completeProfile,
+  openHowToPlay,
+  openStore,
+  changeSetting,
+  completePlayableTutorial,
+}
 
 @immutable
 class ProgressionTransaction {
@@ -272,6 +306,31 @@ class SharedTableMissionSnapshot {
   bool get turnsMissionComplete => turnsPlayed >= turnTarget;
 }
 
+@immutable
+class WelcomeMissionSnapshot {
+  const WelcomeMissionSnapshot({
+    required this.profileComplete,
+    required this.howToPlayOpened,
+    required this.storeOpened,
+    required this.settingChanged,
+    required this.playableTutorialCompleted,
+  });
+
+  final bool profileComplete;
+  final bool howToPlayOpened;
+  final bool storeOpened;
+  final bool settingChanged;
+  final bool playableTutorialCompleted;
+
+  bool completed(WelcomeMission mission) => switch (mission) {
+    WelcomeMission.completeProfile => profileComplete,
+    WelcomeMission.openHowToPlay => howToPlayOpened,
+    WelcomeMission.openStore => storeOpened,
+    WelcomeMission.changeSetting => settingChanged,
+    WelcomeMission.completePlayableTutorial => playableTutorialCompleted,
+  };
+}
+
 class PlayerProgressionController extends ChangeNotifier {
   PlayerProgressionController({
     SharedPreferences? preferences,
@@ -376,6 +435,24 @@ class PlayerProgressionController extends ChangeNotifier {
           _sharedTableMatchTransactionId(_dailyKey),
         ),
       );
+
+  WelcomeMissionSnapshot get welcomeMissions => WelcomeMissionSnapshot(
+    profileComplete: _hasTransaction(
+      _welcomeTransactionId(WelcomeMission.completeProfile),
+    ),
+    howToPlayOpened: _hasTransaction(
+      _welcomeTransactionId(WelcomeMission.openHowToPlay),
+    ),
+    storeOpened: _hasTransaction(
+      _welcomeTransactionId(WelcomeMission.openStore),
+    ),
+    settingChanged: _hasTransaction(
+      _welcomeTransactionId(WelcomeMission.changeSetting),
+    ),
+    playableTutorialCompleted: _hasTransaction(
+      _welcomeTransactionId(WelcomeMission.completePlayableTutorial),
+    ),
+  );
 
   Future<void> initialize() => _enqueue<void>(() async {
     if (_initialized) return;
@@ -702,6 +779,25 @@ class PlayerProgressionController extends ChangeNotifier {
       return transaction == null
           ? ProgressionUpdate.none
           : ProgressionUpdate(<ProgressionTransaction>[transaction]);
+    });
+  }
+
+  /// Completes one permanent "Primeros pasos" objective. Repeated taps,
+  /// startup recovery, and returns from a screen all use the same transaction
+  /// ID, so the reward can be paid at most once.
+  Future<ProgressionUpdate> recordWelcomeMission(WelcomeMission mission) {
+    return _enqueue<ProgressionUpdate>(() async {
+      await _initializeUnlocked();
+      final now = _clock();
+      final transaction = _applyTransaction(
+        id: _welcomeTransactionId(mission),
+        source: ProgressionTransactionSource.welcomeMission,
+        amount: policy.welcomeMissionCoins(mission),
+        now: now,
+      );
+      if (transaction == null) return ProgressionUpdate.none;
+      await _commit();
+      return ProgressionUpdate(<ProgressionTransaction>[transaction]);
     });
   }
 
@@ -1137,6 +1233,8 @@ class PlayerProgressionController extends ChangeNotifier {
       'daily:$dayKey:quick_pop_matches';
   static String _chaosMatchesTransactionId(String dayKey) =>
       'daily:$dayKey:chaos_matches';
+  static String _welcomeTransactionId(WelcomeMission mission) =>
+      'welcome:${mission.name}';
   static String _weeklyTransactionId(String weekKey) =>
       'weekly:$weekKey:finish_7';
   static String _rewardedDoubleTransactionId(String matchId) =>

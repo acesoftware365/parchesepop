@@ -650,6 +650,7 @@ enum MissionKind {
   sharedTableMatch,
   quickPopMatches,
   chaosMatch,
+  welcomeMission,
   finish7Matches,
 }
 

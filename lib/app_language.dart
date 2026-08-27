@@ -1058,6 +1058,14 @@ const _english = <String, String>{
   'Ya conoces la partida.': 'You now know how to play.',
   'YA SÉ JUGAR': 'I KNOW HOW TO PLAY',
   'Tu progreso': 'Your progress',
+  'PRIMEROS PASOS': 'FIRST STEPS',
+  'Premios únicos para conocer Parchís Pop.':
+      'One-time rewards to get to know Parchís Pop.',
+  'Completa tu perfil': 'Complete your profile',
+  'Abre Cómo jugar': 'Open How to play',
+  'Visita la tienda': 'Visit the shop',
+  'Personaliza un ajuste': 'Customize one setting',
+  'Completa el tutorial jugable': 'Complete the playable tutorial',
   'MISIONES DE HOY': "TODAY'S MISSIONS",
   'Juega normalmente; los premios llegan solos.':
       'Play normally; rewards arrive automatically.',

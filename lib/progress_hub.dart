@@ -39,6 +39,7 @@ class ProgressHubScreen extends StatelessWidget {
         animation: Listenable.merge([progression, wallet]),
         builder: (context, _) {
           final daily = progression.dailyMissions;
+          final welcome = progression.welcomeMissions;
           final sharedTable = progression.sharedTableMissions;
           final weekly = progression.weeklyMission;
           return ListView(
@@ -47,6 +48,67 @@ class ProgressHubScreen extends StatelessWidget {
             children: [
               _BalanceHero(balance: wallet.balance),
               const SizedBox(height: 16),
+              const _SectionTitle(
+                icon: Icons.flag_rounded,
+                title: 'PRIMEROS PASOS',
+                subtitle: 'Premios únicos para conocer Parchís Pop.',
+              ),
+              const SizedBox(height: 10),
+              _MissionCard(
+                key: const ValueKey('mission-welcome-profile'),
+                icon: Icons.person_rounded,
+                title: 'Completa tu perfil',
+                value: welcome.profileComplete ? 1 : 0,
+                target: 1,
+                reward: progression.policy.profileCompletionCoins,
+                claimed: welcome.profileComplete,
+                accent: _blue,
+              ),
+              const SizedBox(height: 10),
+              _MissionCard(
+                key: const ValueKey('mission-welcome-how-to-play'),
+                icon: Icons.menu_book_rounded,
+                title: 'Abre Cómo jugar',
+                value: welcome.howToPlayOpened ? 1 : 0,
+                target: 1,
+                reward: progression.policy.howToPlayCoins,
+                claimed: welcome.howToPlayOpened,
+                accent: const Color(0xFF8A61FF),
+              ),
+              const SizedBox(height: 10),
+              _MissionCard(
+                key: const ValueKey('mission-welcome-store'),
+                icon: Icons.storefront_rounded,
+                title: 'Visita la tienda',
+                value: welcome.storeOpened ? 1 : 0,
+                target: 1,
+                reward: progression.policy.storeVisitCoins,
+                claimed: welcome.storeOpened,
+                accent: _yellow,
+              ),
+              const SizedBox(height: 10),
+              _MissionCard(
+                key: const ValueKey('mission-welcome-settings'),
+                icon: Icons.settings_rounded,
+                title: 'Personaliza un ajuste',
+                value: welcome.settingChanged ? 1 : 0,
+                target: 1,
+                reward: progression.policy.settingsChangeCoins,
+                claimed: welcome.settingChanged,
+                accent: const Color(0xFF4F8DF7),
+              ),
+              const SizedBox(height: 10),
+              _MissionCard(
+                key: const ValueKey('mission-welcome-tutorial'),
+                icon: Icons.school_rounded,
+                title: 'Completa el tutorial jugable',
+                value: welcome.playableTutorialCompleted ? 1 : 0,
+                target: 1,
+                reward: progression.policy.playableTutorialCoins,
+                claimed: welcome.playableTutorialCompleted,
+                accent: _green,
+              ),
+              const SizedBox(height: 20),
               const _SectionTitle(
                 icon: Icons.today_rounded,
                 title: 'MISIONES DE HOY',

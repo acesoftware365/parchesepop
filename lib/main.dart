@@ -1158,6 +1158,12 @@ class _ParchesePopAppState extends State<ParchesePopApp>
         level: store.getInt('profile_level') ?? 1,
       );
     }
+    if (profile != null) {
+      await _recordWelcomeMission(WelcomeMission.completeProfile);
+    }
+    if (tutorial?.lifecycle == TutorialLifecycle.completed) {
+      await _recordWelcomeMission(WelcomeMission.completePlayableTutorial);
+    }
     // Checkpoints from the compact 60-space board use incompatible positions.
     // Migrate once to the restored complete board by safely discarding them.
     final savedBoardLayout =
@@ -1293,6 +1299,31 @@ class _ParchesePopAppState extends State<ParchesePopApp>
     await store.setString('profile_email', value.email);
     await store.setString('profile_flag', value.flag);
     await store.setInt('profile_level', value.level);
+    await _recordWelcomeMission(WelcomeMission.completeProfile);
+  }
+
+  Future<void> _recordWelcomeMission(WelcomeMission mission) async {
+    final update = await progression.recordWelcomeMission(mission);
+    for (final transaction in update.transactions) {
+      final balanceBefore = wallet.balance;
+      final result = await wallet.applyCredit(
+        transactionId: transaction.id,
+        amount: transaction.amount,
+      );
+      if (result != ApplyCreditResult.applied) continue;
+      unawaited(
+        widget.analytics.logEvent(
+          CurrencyEvent(
+            flow: CurrencyFlow.earned,
+            source: CurrencySource.mission,
+            amount: transaction.amount,
+            balanceBefore: balanceBefore,
+            balanceAfter: wallet.balance,
+            anonymousTransactionId: _newAnalyticsReference('transaction'),
+          ),
+        ),
+      );
+    }
   }
 
   Future<void> _discardDeletedLocalData() async {
@@ -1443,6 +1474,7 @@ class _ParchesePopAppState extends State<ParchesePopApp>
       wallet: wallet,
       progression: progression,
       tutorial: tutorial,
+      onWelcomeMission: _recordWelcomeMission,
       authGateway: authGateway!,
       analytics: widget.analytics,
       onlineAccountDeletion: widget.onlineAccountDeletion,
@@ -2111,6 +2143,7 @@ class HomeScreen extends StatefulWidget {
     required this.authGateway,
     this.progression,
     this.tutorial,
+    this.onWelcomeMission,
     this.analytics = const NoopGameAnalytics(),
     this.onlineAccountDeletion = _deleteCurrentOnlineAccountData,
     this.onResumeMatch,
@@ -2121,6 +2154,7 @@ class HomeScreen extends StatefulWidget {
   final WalletController wallet;
   final PlayerProgressionController? progression;
   final TutorialController? tutorial;
+  final Future<void> Function(WelcomeMission mission)? onWelcomeMission;
   final PlayerAuthGateway authGateway;
   final GameAnalytics analytics;
   final Future<void> Function() onlineAccountDeletion;
@@ -2202,6 +2236,7 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
             wallet: widget.wallet,
             progression: widget.progression,
             tutorial: widget.tutorial,
+            onWelcomeMission: widget.onWelcomeMission,
             authGateway: widget.authGateway,
             analytics: widget.analytics,
             onlineAccountDeletion: widget.onlineAccountDeletion,
@@ -2641,6 +2676,7 @@ class PlayHome extends StatelessWidget {
     required this.authGateway,
     this.progression,
     this.tutorial,
+    this.onWelcomeMission,
     this.analytics = const NoopGameAnalytics(),
     this.onlineAccountDeletion = _deleteCurrentOnlineAccountData,
     this.onResumeMatch,
@@ -2651,11 +2687,17 @@ class PlayHome extends StatelessWidget {
   final WalletController wallet;
   final PlayerProgressionController? progression;
   final TutorialController? tutorial;
+  final Future<void> Function(WelcomeMission mission)? onWelcomeMission;
   final PlayerAuthGateway authGateway;
   final GameAnalytics analytics;
   final Future<void> Function() onlineAccountDeletion;
   final void Function(BuildContext context)? onResumeMatch;
   final Future<void> Function()? onLocalDataDeleted;
+
+  void _recordWelcomeMission(WelcomeMission mission) {
+    final callback = onWelcomeMission;
+    if (callback != null) unawaited(callback(mission));
+  }
 
   @override
   Widget build(BuildContext context) => LayoutBuilder(
@@ -2799,6 +2841,9 @@ class PlayHome extends StatelessWidget {
                                 CosmeticCategory.theme,
                               ),
                               analytics: analytics,
+                              onPreferenceChanged: () => _recordWelcomeMission(
+                                WelcomeMission.changeSetting,
+                              ),
                             ),
                           ),
                         ),
@@ -2841,7 +2886,29 @@ class PlayHome extends StatelessWidget {
                                     ? 10
                                     : 12,
                               ),
-                            if (twoColumnModes)
+                            if (twoColumnModes && narrow && !compactLandscape)
+                              Column(
+                                children: [
+                                  Row(
+                                    crossAxisAlignment:
+                                        CrossAxisAlignment.start,
+                                    children: [
+                                      Expanded(child: quickPopCard),
+                                      SizedBox(width: densePortrait ? 9 : 12),
+                                      Expanded(child: chaosCard),
+                                    ],
+                                  ),
+                                  SizedBox(
+                                    height: ultraCompactPortrait
+                                        ? 5
+                                        : densePortrait
+                                        ? 7
+                                        : 13,
+                                  ),
+                                  classicCard,
+                                ],
+                              )
+                            else if (twoColumnModes)
                               Column(
                                 children: [
                                   for (
@@ -2901,15 +2968,20 @@ class PlayHome extends StatelessWidget {
                                 color: PopColors.yellow,
                                 icon: Icons.storefront_rounded,
                                 label: 'Tienda',
-                                onTap: () => Navigator.push(
-                                  context,
-                                  MaterialPageRoute(
-                                    builder: (_) => ShopScreen(
-                                      wallet: wallet,
-                                      analytics: analytics,
+                                onTap: () {
+                                  _recordWelcomeMission(
+                                    WelcomeMission.openStore,
+                                  );
+                                  Navigator.push(
+                                    context,
+                                    MaterialPageRoute(
+                                      builder: (_) => ShopScreen(
+                                        wallet: wallet,
+                                        analytics: analytics,
+                                      ),
                                     ),
-                                  ),
-                                ),
+                                  );
+                                },
                               ),
                               if (appFeatureRollout.retentionRewards)
                                 if (progression case final controller?)
@@ -2933,15 +3005,20 @@ class PlayHome extends StatelessWidget {
                                 color: const Color(0xFF8A61FF),
                                 icon: Icons.help_rounded,
                                 label: 'Cómo jugar',
-                                onTap: () => _openLearning(
-                                  context,
-                                  offerTutorial:
-                                      appFeatureRollout.contextualTutorial &&
-                                      narrow &&
-                                      !compactLandscape &&
-                                      viewport.maxHeight < 800 &&
-                                      (tutorial?.shouldOffer ?? false),
-                                ),
+                                onTap: () {
+                                  _recordWelcomeMission(
+                                    WelcomeMission.openHowToPlay,
+                                  );
+                                  _openLearning(
+                                    context,
+                                    offerTutorial:
+                                        appFeatureRollout.contextualTutorial &&
+                                        narrow &&
+                                        !compactLandscape &&
+                                        viewport.maxHeight < 800 &&
+                                        (tutorial?.shouldOffer ?? false),
+                                  );
+                                },
                               ),
                             ],
                           ),
@@ -3348,6 +3425,7 @@ class PlayHome extends StatelessWidget {
           opponent: 'Tutorial • CPU Fácil',
           mode: GameMode.traditional,
           wallet: wallet,
+          progression: appFeatureRollout.retentionRewards ? progression : null,
           tutorial: controller,
           guidedTutorial: true,
           localProfile: profile,
@@ -11779,6 +11857,15 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
     if (controller.currentStep != previousStep) {
       tutorialScenario?.prepareFor(controller.currentStep);
     }
+    if (controller.lifecycle == TutorialLifecycle.completed) {
+      final progression = widget.progression;
+      if (progression != null) {
+        final update = await progression.recordWelcomeMission(
+          WelcomeMission.completePlayableTutorial,
+        );
+        await _creditProgression(update.transactions);
+      }
+    }
     if (!mounted) return;
     setState(() {
       tutorialCompletionVisible =
@@ -11860,6 +11947,7 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
         ProgressionTransactionSource.sharedTableMatchMission ||
         ProgressionTransactionSource.quickPopMatchesMission ||
         ProgressionTransactionSource.chaosMatchesMission ||
+        ProgressionTransactionSource.welcomeMission ||
         ProgressionTransactionSource.weeklyMatchesMission =>
           CurrencySource.mission,
         ProgressionTransactionSource.rewardedDouble =>
@@ -11915,6 +12003,11 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
             MissionKind.chaosMatch,
             progression.dailyMissions.chaosMatches,
             progression.dailyMissions.chaosTarget,
+          ),
+          ProgressionTransactionSource.welcomeMission => (
+            MissionKind.welcomeMission,
+            1,
+            1,
           ),
           ProgressionTransactionSource.weeklyMatchesMission => (
             MissionKind.finish7Matches,
@@ -31417,11 +31510,13 @@ class SettingsScreen extends StatefulWidget {
     this.themeId,
     this.analytics = const NoopGameAnalytics(),
     this.hideDiceHandControls = false,
+    this.onPreferenceChanged,
   });
 
   final String? themeId;
   final GameAnalytics analytics;
   final bool hideDiceHandControls;
+  final VoidCallback? onPreferenceChanged;
 
   @override
   State<SettingsScreen> createState() => _SettingsScreenState();
@@ -31487,6 +31582,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
   Future<void> _setPreference(String key, bool value) async {
     final store = await SharedPreferences.getInstance();
     await store.setBool(key, value);
+    widget.onPreferenceChanged?.call();
   }
 
   void _updateMusicPreference(bool value) {
@@ -31500,6 +31596,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
   Future<void> _setStringPreference(String key, String value) async {
     final store = await SharedPreferences.getInstance();
     await store.setString(key, value);
+    widget.onPreferenceChanged?.call();
   }
 
   Future<void> _setAnonymousAnalytics(bool value) async {
@@ -31515,6 +31612,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
         );
       }
       if (mounted) setState(() => anonymousAnalytics = value);
+      widget.onPreferenceChanged?.call();
     } catch (_) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
@@ -31531,6 +31629,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
     AppLanguagePreference preference,
   ) async {
     await language.select(preference);
+    widget.onPreferenceChanged?.call();
     if (!mounted) return;
     if (dialogContext.mounted) Navigator.pop(dialogContext);
   }
