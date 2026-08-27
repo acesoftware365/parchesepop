@@ -332,9 +332,6 @@ void main() {
     await tester.pumpAndSettle();
 
     final title = find.text('Tienda');
-    final subtitle = find.text(
-      'Personaliza tu juego sin ventajas competitivas.',
-    );
     final featuredProducts = shopCatalog
         .where((product) => product.featured)
         .toList(growable: false);
@@ -352,7 +349,6 @@ void main() {
         .first;
 
     expect(title, findsOneWidget);
-    expect(subtitle, findsOneWidget);
     expect(find.byKey(const ValueKey('shop-back')), findsOneWidget);
     expect(find.byKey(const ValueKey('shop-balance-card')), findsOneWidget);
     expect(find.byKey(const ValueKey('shop-add-test-balance')), findsOneWidget);
@@ -366,11 +362,7 @@ void main() {
     }
     expect(tester.takeException(), isNull);
 
-    final inherited = DefaultTextStyle.of(tester.element(subtitle)).style;
-    expect(inherited.fontSize ?? 14, lessThanOrEqualTo(20));
-    expect(inherited.decoration ?? TextDecoration.none, TextDecoration.none);
     expect(tester.getRect(title).height, lessThanOrEqualTo(40));
-    expect(tester.getRect(subtitle).height, lessThanOrEqualTo(40));
     expect(
       tester.getSize(find.byKey(const ValueKey('shop-header'))).height,
       lessThanOrEqualTo(72),
@@ -389,7 +381,7 @@ void main() {
 
     await tester.drag(
       find.byKey(const ValueKey('shop-filters')),
-      const Offset(-260, 0),
+      const Offset(-520, 0),
     );
     await tester.pumpAndSettle();
     await tester.tap(

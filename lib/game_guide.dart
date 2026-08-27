@@ -3,6 +3,7 @@ import 'dart:math' as math;
 import 'package:flutter/material.dart';
 
 import 'app_language.dart';
+import 'pop_standard_app_bar.dart';
 
 /// The rule sets presented by [GameGuideScreen].
 enum GameGuideMode {
@@ -77,8 +78,35 @@ class _GameGuideScreenState extends State<GameGuideScreen> {
             key: const ValueKey('game-guide-scroll'),
             physics: const BouncingScrollPhysics(),
             slivers: [
-              SliverToBoxAdapter(
-                child: _GuideTopBar(onPowerLab: _showPowerLab),
+              SliverAppBar(
+                backgroundColor: PopStandardAppBar.navy,
+                foregroundColor: Colors.white,
+                surfaceTintColor: Colors.transparent,
+                pinned: true,
+                toolbarHeight: 72,
+                centerTitle: true,
+                leading: IconButton(
+                  key: const ValueKey('guide-back'),
+                  tooltip: appTranslate(context, 'Volver'),
+                  onPressed: () => Navigator.maybePop(context),
+                  icon: const Icon(Icons.arrow_back_rounded),
+                ),
+                title: const PopText(
+                  'Cómo jugar',
+                  style: TextStyle(
+                    color: Colors.white,
+                    fontSize: 25,
+                    fontWeight: FontWeight.w900,
+                  ),
+                ),
+                actions: [
+                  IconButton(
+                    key: const ValueKey('show-power-lab'),
+                    tooltip: appTranslate(context, 'Ver trampas'),
+                    onPressed: _showPowerLab,
+                    icon: const Icon(Icons.science_rounded),
+                  ),
+                ],
               ),
               const SliverToBoxAdapter(child: _GuideHero()),
               SliverToBoxAdapter(
@@ -159,8 +187,29 @@ class TrapPowerLabScreen extends StatelessWidget {
           child: CustomScrollView(
             key: const ValueKey('trap-power-lab-scroll'),
             physics: const BouncingScrollPhysics(),
-            slivers: const [
-              SliverToBoxAdapter(child: _TrapLabTopBar()),
+            slivers: [
+              SliverAppBar(
+                backgroundColor: PopStandardAppBar.navy,
+                foregroundColor: Colors.white,
+                surfaceTintColor: Colors.transparent,
+                pinned: true,
+                toolbarHeight: 72,
+                centerTitle: true,
+                leading: IconButton(
+                  key: const ValueKey('trap-lab-back'),
+                  tooltip: appTranslate(context, 'Volver'),
+                  onPressed: () => Navigator.maybePop(context),
+                  icon: const Icon(Icons.arrow_back_rounded),
+                ),
+                title: const PopText(
+                  'Trampas',
+                  style: TextStyle(
+                    color: Colors.white,
+                    fontSize: 25,
+                    fontWeight: FontWeight.w900,
+                  ),
+                ),
+              ),
               SliverToBoxAdapter(child: _TrapLabHero()),
               SliverToBoxAdapter(
                 child: Padding(
@@ -171,63 +220,6 @@ class TrapPowerLabScreen extends StatelessWidget {
             ],
           ),
         ),
-      ),
-    );
-  }
-}
-
-class _TrapLabTopBar extends StatelessWidget {
-  const _TrapLabTopBar();
-
-  @override
-  Widget build(BuildContext context) {
-    return Padding(
-      padding: const EdgeInsets.fromLTRB(12, 8, 12, 4),
-      child: Row(
-        children: [
-          _RoundButton(
-            key: const ValueKey('trap-lab-back'),
-            tooltip: 'Volver',
-            icon: Icons.arrow_back_rounded,
-            onPressed: () => Navigator.maybePop(context),
-          ),
-          const SizedBox(width: 10),
-          const Expanded(
-            child: PopText(
-              'Parchís Pop',
-              style: TextStyle(
-                color: Colors.white,
-                fontSize: 18,
-                fontWeight: FontWeight.w900,
-                letterSpacing: .2,
-              ),
-            ),
-          ),
-          Container(
-            padding: const EdgeInsets.symmetric(horizontal: 11, vertical: 7),
-            decoration: BoxDecoration(
-              color: GuidePalette.red,
-              borderRadius: BorderRadius.circular(20),
-              border: Border.all(color: Colors.white, width: 2),
-            ),
-            child: const Row(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Icon(Icons.auto_awesome_rounded, color: Colors.white, size: 17),
-                SizedBox(width: 5),
-                PopText(
-                  'MODO CAOS',
-                  style: TextStyle(
-                    color: Colors.white,
-                    fontSize: 10,
-                    fontWeight: FontWeight.w900,
-                    letterSpacing: .7,
-                  ),
-                ),
-              ],
-            ),
-          ),
-        ],
       ),
     );
   }
@@ -923,84 +915,6 @@ const chaosRuleSections = <GuideRuleSection>[
     ],
   ),
 ];
-
-class _GuideTopBar extends StatelessWidget {
-  const _GuideTopBar({required this.onPowerLab});
-
-  final VoidCallback onPowerLab;
-
-  @override
-  Widget build(BuildContext context) {
-    return Padding(
-      padding: const EdgeInsets.fromLTRB(12, 8, 12, 4),
-      child: Row(
-        children: [
-          _RoundButton(
-            key: const ValueKey('guide-back'),
-            tooltip: 'Volver',
-            icon: Icons.arrow_back_rounded,
-            onPressed: () => Navigator.maybePop(context),
-          ),
-          const SizedBox(width: 10),
-          const Expanded(
-            child: PopText(
-              'Parchís Pop',
-              style: TextStyle(
-                color: Colors.white,
-                fontSize: 18,
-                fontWeight: FontWeight.w900,
-                letterSpacing: .2,
-              ),
-            ),
-          ),
-          FilledButton.tonalIcon(
-            key: const ValueKey('show-power-lab'),
-            onPressed: onPowerLab,
-            icon: const Icon(Icons.science_rounded, size: 19),
-            label: const PopText('Ver trampas'),
-            style: FilledButton.styleFrom(
-              backgroundColor: Colors.white.withValues(alpha: .14),
-              foregroundColor: Colors.white,
-              visualDensity: VisualDensity.compact,
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-}
-
-class _RoundButton extends StatelessWidget {
-  const _RoundButton({
-    super.key,
-    required this.tooltip,
-    required this.icon,
-    required this.onPressed,
-  });
-
-  final String tooltip;
-  final IconData icon;
-  final VoidCallback onPressed;
-
-  @override
-  Widget build(BuildContext context) {
-    return Tooltip(
-      message: appTranslate(context, tooltip),
-      child: Material(
-        color: Colors.white.withValues(alpha: .14),
-        shape: const CircleBorder(),
-        child: InkWell(
-          customBorder: const CircleBorder(),
-          onTap: onPressed,
-          child: Padding(
-            padding: const EdgeInsets.all(10),
-            child: Icon(icon, color: Colors.white, size: 22),
-          ),
-        ),
-      ),
-    );
-  }
-}
 
 class _GuideHero extends StatelessWidget {
   const _GuideHero();

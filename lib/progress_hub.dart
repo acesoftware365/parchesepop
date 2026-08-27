@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'app_language.dart';
 import 'feature_rollout.dart';
 import 'player_progression.dart';
+import 'pop_standard_app_bar.dart';
 import 'wallet.dart';
 
 class ProgressHubScreen extends StatelessWidget {
@@ -25,14 +26,7 @@ class ProgressHubScreen extends StatelessWidget {
   @override
   Widget build(BuildContext context) => Scaffold(
     backgroundColor: const Color(0xFFF0F5FF),
-    appBar: AppBar(
-      backgroundColor: _navy,
-      foregroundColor: Colors.white,
-      title: const PopText(
-        'Tu progreso',
-        style: TextStyle(fontWeight: FontWeight.w900),
-      ),
-    ),
+    appBar: const PopStandardAppBar(title: 'Tu progreso'),
     body: SafeArea(
       top: false,
       child: AnimatedBuilder(

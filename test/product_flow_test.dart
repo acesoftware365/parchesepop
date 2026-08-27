@@ -894,8 +894,8 @@ void main() {
 
     await tester.pumpWidget(const ParchesePopApp());
     await tester.pumpAndSettle();
-    expect(find.text('QUICK TABLE'), findsOneWidget);
-    expect(find.text('PLAY CPU'), findsOneWidget);
+    expect(find.text('QUICK POP'), findsOneWidget);
+    expect(find.text('CLASSIC'), findsOneWidget);
     expect(
       Localizations.localeOf(tester.element(find.byType(HomeScreen))),
       const Locale('en'),
@@ -921,8 +921,8 @@ void main() {
     await tester.ensureVisible(find.byKey(const ValueKey('settings-back')));
     await tester.tap(find.byKey(const ValueKey('settings-back')));
     await tester.pumpAndSettle();
-    expect(find.text('MESA RÁPIDA'), findsOneWidget);
-    expect(find.text('CONTRA CPU'), findsOneWidget);
+    expect(find.text('QUICK POP'), findsOneWidget);
+    expect(find.text('CLÁSICO'), findsOneWidget);
     expect(
       Localizations.localeOf(tester.element(find.byType(HomeScreen))),
       const Locale('es'),
@@ -936,14 +936,13 @@ void main() {
 
     await tester.pumpWidget(const ParchesePopApp());
     await tester.pumpAndSettle();
-    expect(find.text('QUICK TABLE'), findsOneWidget);
-    expect(find.text('PLAY CPU'), findsOneWidget);
+    expect(find.text('QUICK POP'), findsOneWidget);
+    expect(find.text('CLASSIC'), findsOneWidget);
 
     await tester.ensureVisible(find.text('Shop'));
     await tester.tap(find.text('Shop'));
     await tester.pumpAndSettle();
     expect(find.byType(ShopScreen), findsOneWidget);
-    expect(find.text('Customize your game'), findsOneWidget);
     expect(
       find.text('Customize your game without competitive advantages.'),
       findsOneWidget,
@@ -951,9 +950,9 @@ void main() {
     await tester.tap(find.byKey(const ValueKey('shop-back')));
     await tester.pumpAndSettle();
 
-    await tester.tap(find.text('PLAY CPU'));
+    await tester.tap(find.text('CLASSIC'));
     await tester.pumpAndSettle();
-    await tester.tap(find.text('Traditional'));
+    await tester.tap(find.byKey(const ValueKey('mode-destination-cpu')));
     await tester.pumpAndSettle();
     expect(find.text('Easy'), findsOneWidget);
     final easy = find.byKey(const ValueKey('cpu-level-Fácil'));

@@ -38,6 +38,7 @@ import 'online_room_ui.dart';
 import 'online_transport.dart';
 import 'online_transport_models.dart';
 import 'online_v3_test_screen.dart';
+import 'pop_standard_app_bar.dart';
 import 'online_v3_game_controller.dart';
 import 'online_v3_models.dart';
 import 'online_v3_quick_pop.dart';
@@ -1395,6 +1396,22 @@ class _ParchesePopAppState extends State<ParchesePopApp>
                 bodyColor: PopColors.ink,
                 displayColor: PopColors.navy,
                 fontFamily: 'Arial',
+              ),
+              appBarTheme: const AppBarTheme(
+                backgroundColor: PopStandardAppBar.navy,
+                foregroundColor: Colors.white,
+                surfaceTintColor: Colors.transparent,
+                systemOverlayStyle: SystemUiOverlayStyle.light,
+                elevation: 0,
+                scrolledUnderElevation: 0,
+                centerTitle: true,
+                toolbarHeight: 72,
+                titleTextStyle: TextStyle(
+                  color: Colors.white,
+                  fontSize: 25,
+                  fontWeight: FontWeight.w900,
+                  fontFamily: 'Arial',
+                ),
               ),
               dialogTheme: DialogThemeData(
                 backgroundColor: const Color(0xFF17284D),
@@ -9141,7 +9158,10 @@ class _CoinPill extends StatelessWidget {
           PopText(
             _formatCoins(wallet.balance),
             key: const ValueKey('coin-balance'),
-            style: const TextStyle(fontWeight: FontWeight.w900),
+            style: const TextStyle(
+              color: PopColors.navy,
+              fontWeight: FontWeight.w900,
+            ),
           ),
         ],
       ),
@@ -28858,192 +28878,148 @@ class _ShopScreenState extends State<ShopScreen> {
     };
     return AnimatedBuilder(
       animation: wallet,
-      builder: (context, _) => _PopRouteScaffold(
-        child: PageShell(
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              Container(
-                key: const ValueKey('shop-header'),
-                padding: const EdgeInsets.all(6),
-                decoration: BoxDecoration(
-                  color: Colors.white.withValues(alpha: .9),
-                  borderRadius: BorderRadius.circular(22),
-                  border: Border.all(color: Colors.white, width: 2),
-                  boxShadow: const [
-                    BoxShadow(
-                      color: Color(0x1817284D),
-                      blurRadius: 14,
-                      offset: Offset(0, 6),
-                    ),
-                  ],
-                ),
-                child: Row(
-                  children: [
-                    IconButton.filledTonal(
-                      key: const ValueKey('shop-back'),
-                      tooltip: appTranslate(context, 'Volver'),
-                      onPressed: () => Navigator.maybePop(context),
-                      icon: const Icon(Icons.arrow_back_rounded),
-                    ),
-                    const SizedBox(width: 9),
-                    const Expanded(
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          PopText(
-                            'Tienda',
-                            maxLines: 1,
-                            style: TextStyle(
-                              fontSize: 25,
-                              height: 1,
-                              fontWeight: FontWeight.w900,
-                              color: PopColors.navy,
-                            ),
-                          ),
-                          SizedBox(height: 4),
-                          PopText(
-                            'Personaliza tu juego',
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                            style: TextStyle(
-                              fontSize: 11,
-                              color: Color(0xFF667085),
-                              fontWeight: FontWeight.w700,
-                            ),
-                          ),
-                        ],
-                      ),
-                    ),
-                    const SizedBox(width: 8),
-                    _CoinPill(wallet: wallet),
-                  ],
-                ),
-              ),
-              if (testCoinControlsVisible) ...[
-                const SizedBox(height: 10),
-                _ShopBalanceCard(
-                  wallet: wallet,
-                  onAdd: () => _showAddCoinsDialog(context, wallet),
-                ),
-              ],
-              if (shopRewardedCoinsEnabled && ads?.supported == true) ...[
-                const SizedBox(height: 10),
-                _ShopRewardedCoinsCard(
-                  controller: ads!,
-                  onWatch: _watchRewardedAd,
-                ),
-              ],
-              const SizedBox(height: 10),
-              Container(
-                padding: const EdgeInsets.symmetric(
-                  horizontal: 13,
-                  vertical: 7,
-                ),
-                decoration: BoxDecoration(
-                  color: PopColors.yellow.withValues(alpha: .24),
-                  borderRadius: BorderRadius.circular(16),
-                  border: Border.all(
-                    color: PopColors.yellow.withValues(alpha: .7),
+      builder: (context, _) => Scaffold(
+        backgroundColor: PopColors.cloud,
+        appBar: PopStandardAppBar(
+          key: const ValueKey('shop-header'),
+          title: 'Tienda',
+          backButtonKey: const ValueKey('shop-back'),
+          actions: [
+            Padding(
+              padding: const EdgeInsets.only(right: 12),
+              child: _CoinPill(wallet: wallet, height: 40),
+            ),
+          ],
+        ),
+        body: PopBackground(
+          child: PageShell(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                if (testCoinControlsVisible) ...[
+                  _ShopBalanceCard(
+                    wallet: wallet,
+                    onAdd: () => _showAddCoinsDialog(context, wallet),
                   ),
-                ),
-                child: const Row(
-                  children: [
-                    Icon(
-                      Icons.workspace_premium_rounded,
-                      size: 20,
-                      color: Color(0xFF8A6300),
+                ],
+                if (shopRewardedCoinsEnabled && ads?.supported == true) ...[
+                  const SizedBox(height: 10),
+                  _ShopRewardedCoinsCard(
+                    controller: ads!,
+                    onWatch: _watchRewardedAd,
+                  ),
+                ],
+                const SizedBox(height: 10),
+                Container(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 13,
+                    vertical: 7,
+                  ),
+                  decoration: BoxDecoration(
+                    color: PopColors.yellow.withValues(alpha: .24),
+                    borderRadius: BorderRadius.circular(16),
+                    border: Border.all(
+                      color: PopColors.yellow.withValues(alpha: .7),
                     ),
-                    SizedBox(width: 8),
-                    Expanded(
-                      child: PopText(
-                        'Personaliza tu juego sin ventajas competitivas.',
-                        maxLines: 2,
-                        style: TextStyle(
-                          fontSize: 12,
-                          height: 1.15,
-                          color: PopColors.ink,
-                          fontWeight: FontWeight.w800,
+                  ),
+                  child: const Row(
+                    children: [
+                      Icon(
+                        Icons.workspace_premium_rounded,
+                        size: 20,
+                        color: Color(0xFF8A6300),
+                      ),
+                      SizedBox(width: 8),
+                      Expanded(
+                        child: PopText(
+                          'Personaliza tu juego sin ventajas competitivas.',
+                          maxLines: 2,
+                          style: TextStyle(
+                            fontSize: 12,
+                            height: 1.15,
+                            color: PopColors.ink,
+                            fontWeight: FontWeight.w800,
+                          ),
                         ),
                       ),
-                    ),
-                  ],
+                    ],
+                  ),
                 ),
-              ),
-              const SizedBox(height: 12),
-              SizedBox(
-                key: const ValueKey('shop-filters'),
-                height: 44,
-                child: ListView.separated(
-                  scrollDirection: Axis.horizontal,
-                  itemCount: categories.length,
-                  separatorBuilder: (_, _) => const SizedBox(width: 8),
-                  itemBuilder: (context, index) {
-                    final category = categories[index];
-                    final selected = category == selectedCategory;
-                    return ChoiceChip(
-                      selected: selected,
-                      showCheckmark: false,
-                      label: PopText(category),
-                      labelStyle: TextStyle(
-                        color: selected ? Colors.white : PopColors.ink,
-                        fontSize: 12,
-                        fontWeight: FontWeight.w900,
+                const SizedBox(height: 12),
+                SizedBox(
+                  key: const ValueKey('shop-filters'),
+                  height: 44,
+                  child: ListView.separated(
+                    scrollDirection: Axis.horizontal,
+                    itemCount: categories.length,
+                    separatorBuilder: (_, _) => const SizedBox(width: 8),
+                    itemBuilder: (context, index) {
+                      final category = categories[index];
+                      final selected = category == selectedCategory;
+                      return ChoiceChip(
+                        selected: selected,
+                        showCheckmark: false,
+                        label: PopText(category),
+                        labelStyle: TextStyle(
+                          color: selected ? Colors.white : PopColors.ink,
+                          fontSize: 12,
+                          fontWeight: FontWeight.w900,
+                        ),
+                        selectedColor: PopColors.blue,
+                        backgroundColor: Colors.white.withValues(alpha: .88),
+                        side: BorderSide(
+                          color: selected
+                              ? PopColors.blue
+                              : const Color(0xFFDDE3EA),
+                        ),
+                        onSelected: (_) {
+                          setState(() => selectedCategory = category);
+                        },
+                      );
+                    },
+                  ),
+                ),
+                const SizedBox(height: 12),
+                if (selectedCategory == sharedTableCategory) ...[
+                  const _SharedTableShopBanner(),
+                  const SizedBox(height: 12),
+                ],
+                LayoutBuilder(
+                  builder: (context, box) {
+                    final count = box.maxWidth >= 940
+                        ? 4
+                        : box.maxWidth >= 620
+                        ? 3
+                        : box.maxWidth >= 330
+                        ? 2
+                        : 1;
+                    return GridView.builder(
+                      key: const ValueKey('shop-grid'),
+                      shrinkWrap: true,
+                      physics: const NeverScrollableScrollPhysics(),
+                      gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
+                        crossAxisCount: count,
+                        crossAxisSpacing: 12,
+                        mainAxisSpacing: 12,
+                        mainAxisExtent: count == 1 ? 270 : 282,
                       ),
-                      selectedColor: PopColors.blue,
-                      backgroundColor: Colors.white.withValues(alpha: .88),
-                      side: BorderSide(
-                        color: selected
-                            ? PopColors.blue
-                            : const Color(0xFFDDE3EA),
-                      ),
-                      onSelected: (_) {
-                        setState(() => selectedCategory = category);
+                      itemCount: visibleItems.length,
+                      itemBuilder: (context, index) {
+                        final item = visibleItems[index];
+                        return _ShopItemCard(
+                          item: item,
+                          owned: wallet.isOwned(item.id),
+                          equipped: wallet.isEquipped(item.id),
+                          onPreview: () => _showProductPreview(item),
+                          onAction: () => _handleProduct(item.id),
+                        );
                       },
                     );
                   },
                 ),
-              ),
-              const SizedBox(height: 12),
-              if (selectedCategory == sharedTableCategory) ...[
-                const _SharedTableShopBanner(),
-                const SizedBox(height: 12),
+                const SizedBox(height: 14),
               ],
-              LayoutBuilder(
-                builder: (context, box) {
-                  final count = box.maxWidth >= 940
-                      ? 4
-                      : box.maxWidth >= 620
-                      ? 3
-                      : box.maxWidth >= 330
-                      ? 2
-                      : 1;
-                  return GridView.builder(
-                    key: const ValueKey('shop-grid'),
-                    shrinkWrap: true,
-                    physics: const NeverScrollableScrollPhysics(),
-                    gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
-                      crossAxisCount: count,
-                      crossAxisSpacing: 12,
-                      mainAxisSpacing: 12,
-                      mainAxisExtent: count == 1 ? 270 : 282,
-                    ),
-                    itemCount: visibleItems.length,
-                    itemBuilder: (context, index) {
-                      final item = visibleItems[index];
-                      return _ShopItemCard(
-                        item: item,
-                        owned: wallet.isOwned(item.id),
-                        equipped: wallet.isEquipped(item.id),
-                        onPreview: () => _showProductPreview(item),
-                        onAction: () => _handleProduct(item.id),
-                      );
-                    },
-                  );
-                },
-              ),
-              const SizedBox(height: 14),
-            ],
+            ),
           ),
         ),
       ),
@@ -31715,11 +31691,16 @@ class _SettingsScreenState extends State<SettingsScreen> {
     final theme = themeVisualSpecFor(widget.themeId);
     return Scaffold(
       backgroundColor: theme.gameBackgroundColor,
+      appBar: const PopStandardAppBar(
+        title: 'Ajustes',
+        backButtonKey: ValueKey('settings-back'),
+      ),
       body: Stack(
         fit: StackFit.expand,
         children: [
           _AnimatedThemeBackdrop(themeId: widget.themeId),
           SafeArea(
+            top: false,
             child: PageShell(
               child: Container(
                 padding: const EdgeInsets.fromLTRB(12, 14, 12, 12),
@@ -31741,51 +31722,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.stretch,
                   children: [
-                    Row(
-                      children: [
-                        IconButton.filled(
-                          key: const ValueKey('settings-back'),
-                          tooltip: appTranslate(context, 'Volver'),
-                          onPressed: () => Navigator.maybePop(context),
-                          style: IconButton.styleFrom(
-                            backgroundColor: PopColors.yellow,
-                            foregroundColor: PopColors.navy,
-                          ),
-                          icon: const Icon(Icons.arrow_back_rounded),
-                        ),
-                        const SizedBox(width: 10),
-                        const Expanded(
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              PopText(
-                                'Ajustes',
-                                style: TextStyle(
-                                  fontSize: 29,
-                                  fontWeight: FontWeight.w900,
-                                  color: Colors.white,
-                                  shadows: [
-                                    Shadow(
-                                      color: Color(0x8B000000),
-                                      blurRadius: 4,
-                                      offset: Offset(0, 2),
-                                    ),
-                                  ],
-                                ),
-                              ),
-                              PopText(
-                                'Controla tu experiencia de juego',
-                                style: TextStyle(
-                                  color: Color(0xFFD7E6FF),
-                                  fontWeight: FontWeight.w600,
-                                ),
-                              ),
-                            ],
-                          ),
-                        ),
-                      ],
-                    ),
-                    const SizedBox(height: 18),
                     Card(
                       elevation: 10,
                       shadowColor: Colors.black.withValues(alpha: .32),
